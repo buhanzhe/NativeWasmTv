@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:focusable="true"
+    android:focusableInTouchMode="true">
+
+    <com.bu.cc.tv.SharpVideoView
+        android:id="@+id/video_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <LinearLayout
+        android:id="@+id/channel_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#CC000000"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/channel_name"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#FFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/status_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="16dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#DDFFFFFF"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/video_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="16dp"
+            android:background="#66000000"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:text="源: --  fps: --"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            tools:ignore="HardcodedText,RtlHardcoded" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/channel_list_panel"
+        android:layout_width="560dp"
+        android:layout_height="match_parent"
+        android:background="#E6000000"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/channel_list_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="10dp"
+            android:text="频道列表"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            tools:ignore="HardcodedText" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#66FFFFFF" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+
+            <ListView
+                android:id="@+id/channel_group_list"
+                android:layout_width="180dp"
+                android:layout_height="match_parent"
+                android:choiceMode="singleChoice"
+                android:divider="#22FFFFFF"
+                android:dividerHeight="1dp"
+                android:listSelector="@drawable/channel_item_background" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="#44FFFFFF" />
+
+            <ListView
+                android:id="@+id/channel_list"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:choiceMode="singleChoice"
+                android:divider="#22FFFFFF"
+                android:dividerHeight="1dp"
+                android:listSelector="@drawable/channel_item_background" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

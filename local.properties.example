@@ -1,0 +1,3 @@
+# Copy to local.properties and point this at an Android SDK with platform android-27.
+sdk.dir=C\:\\Android\\Sdk
+

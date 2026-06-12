@@ -1,0 +1,9 @@
+.gradle/
+.idea/
+build/
+app/build/
+app/src/main/jniLibs/
+local.properties
+*.iml
+
+/.playwright-mcp

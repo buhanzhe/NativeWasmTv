@@ -1,0 +1,35 @@
+#217 [POST] https://player-api.yangshipin.cn/v1/player/get_live_info
+
+  General
+    status:    [200] 
+    duration:  108ms
+    type:      xhr
+    mimeType:  application/json
+
+  Request headers
+    sec-ch-ua-platform: "Windows"
+    yspticket: 5c40d99c304df40d750e99bac51225e7fe527b7feceecd184dc86241d8b5a5a4a093d2c14b37ae9318b282fe1cb2211ec0e6ccbee48747d8a91c48517b
+    referer: https://www.yangshipin.cn/
+    sec-ch-ua: "Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"
+    yspsdkinput: 5c41ec1dc1baaeb0d925a34cfd6d497f
+    seqid: 1
+    sec-ch-ua-mobile: ?0
+    request-id: 999999Fo6cT5xrlF1780495425021
+    user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36
+    accept: application/json, text/plain, */*
+    content-type: application/json;charset=UTF-8
+    yspsdksign: 03bafab9531b58603c8940dfb2219215-5c41ec1dc1baaeb0d925a34cfd6d497f-mpy505sj_i14w7j99m7-1-999999Fo6cT5xrlF1780495425021
+    yspplayertoken: U0qk9bNVquPQkp8uosLpQtqKEoKV64dxtr1oE8fGpoHnZYnt8nIMSjZ/MRdK27uPU1uxUkq6PgyY1A0V3e9NRHDdEPNJFu9zq5r6FPaoVAY
+    yspappid: 519748109
+
+  Response headers
+    access-control-allow-methods: POST, OPTIONS, GET, PUT
+    access-control-allow-origin: https://www.yangshipin.cn
+    date: Wed, 03 Jun 2026 14:03:44 GMT
+    content-type: application/json; charset=utf-8
+    server: APISIX/2.13.2210
+    access-control-allow-credentials: true
+    access-control-allow-headers: Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Accept, Origin, Cache-Control, X-Requested-With, X-Client-Info,platform, yspappid, yspPlayerToken,yspsdkinput,yspsdksign,request-id,seqId,yspticket
+
+Call browser_network_request with part="request-body" to read the request body.
+Call browser_network_request with part="response-body" to read the response body.

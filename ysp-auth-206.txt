@@ -1,0 +1,30 @@
+#206 [POST] https://player-api.yangshipin.cn/v1/player/auth
+
+  General
+    status:    [200] 
+    duration:  156ms
+    type:      xhr
+    mimeType:  application/json
+
+  Request headers
+    sec-ch-ua-platform: "Windows"
+    referer: https://www.yangshipin.cn/
+    sec-ch-ua: "Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"
+    sec-ch-ua-mobile: ?0
+    user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36
+    accept: application/json, text/plain, */*
+    content-type: application/x-www-form-urlencoded;charset=UTF-8
+    yspappid: 519748109
+
+  Response headers
+    access-control-allow-credentials: true
+    access-control-allow-methods: POST, OPTIONS, GET, PUT
+    access-control-allow-origin: https://www.yangshipin.cn
+    content-length: 166
+    date: Wed, 03 Jun 2026 14:03:44 GMT
+    content-type: application/json; charset=utf-8
+    server: APISIX/2.13.2210
+    access-control-allow-headers: Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Accept, Origin, Cache-Control, X-Requested-With, X-Client-Info,platform, yspappid, yspPlayerToken,yspsdkinput,yspsdksign,request-id,seqId,yspticket
+
+Call browser_network_request with part="request-body" to read the request body.
+Call browser_network_request with part="response-body" to read the response body.

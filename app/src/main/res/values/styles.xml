@@ -1,0 +1,8 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Holo.NoActionBar.Fullscreen">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/player_background</item>
+    </style>
+</resources>
