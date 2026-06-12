@@ -501,7 +501,7 @@ final class HlsProxyServer implements Closeable {
             }
             int nalType = data[nalStart] & 0x1f;
             byte[] replacement = null;
-            int updateTag = advanceCmgSessionForNal();
+            int updateTag = advanceCmgSessionForNal(nalType);
             boolean replaceNal = needsCmgNalDecode(nalType);
             boolean stateOnlyNal = needsCmgStateDecode(nalType);
             if (replaceNal || stateOnlyNal) {
@@ -603,7 +603,7 @@ final class HlsProxyServer implements Closeable {
             }
             int nalType = data[nalStart] & 0x1f;
             byte[] replacement = null;
-            int updateTag = advanceCmgSessionForNal();
+            int updateTag = advanceCmgSessionForNal(nalType);
             boolean replaceNal = needsCmgNalDecode(nalType);
             boolean stateOnlyNal = needsCmgStateDecode(nalType);
             if (replaceNal || stateOnlyNal) {
@@ -723,10 +723,23 @@ final class HlsProxyServer implements Closeable {
         return builder.toString();
     }
 
-    private static int advanceCmgSessionForNal() {
-        int updateTag = NativeCmgDecryptor.updateSessionForProbe();
+    private static int advanceCmgSessionForNal(int nalType) {
+        int updateTag;
+        if (cmgInitialUpdateTag != 0 || cmgStableUpdateTag != 0) {
+            if (cmgFirstStateNalPending && needsCmgStateDecode(nalType)) {
+                updateTag = cmgInitialUpdateTag;
+                cmgFirstStateNalPending = false;
+            } else if (cmgStableUpdateTag != 0) {
+                updateTag = cmgStableUpdateTag;
+            } else {
+                updateTag = cmgInitialUpdateTag;
+            }
+            NativeCmgDecryptor.setUpdateTagForProbe(updateTag);
+        } else {
+            updateTag = NativeCmgDecryptor.updateSessionForProbe();
+        }
         if (CMG_DECODE_DETAIL_LOGS.get() < 24) {
-            Log.i(TAG, "CMG UpdatePlayer before NAL tag="
+            Log.i(TAG, "CMG UpdatePlayer before NAL type=" + nalType + " tag="
                     + String.format(Locale.US, "%08x", updateTag));
         }
         return updateTag;

@@ -268,6 +268,27 @@ function headHex(bytes, offset = 0, length = 32) {
   return Buffer.from(bytes.subarray(offset, Math.min(bytes.length, offset + length))).toString("hex");
 }
 
+function loadWorkerFactory(workerPath, traceImports) {
+  const resolved = path.resolve(workerPath);
+  if (!traceImports) {
+    return require(resolved);
+  }
+  let source = fs.readFileSync(resolved, "utf8");
+  const marker = "d:eb},asm=Module.asm";
+  const replacement = "d:eb},__ntvWrapImports=(Module.__traceImports&&Object.keys(asmLibraryArg).forEach(function(k){var f=asmLibraryArg[k];if(typeof f==='function')asmLibraryArg[k]=function(){var a=Array.prototype.slice.call(arguments),r;try{r=f.apply(this,arguments)}catch(e){Module.__traceImports(k,a,undefined,e&&e.message?e.message:String(e));throw e}Module.__traceImports(k,a,r);return r}})),asm=Module.asm";
+  if (!source.includes(marker)) {
+    throw new Error("Unable to patch CMG worker import table");
+  }
+  source = source.replace(marker, replacement);
+  const moduleObject = { exports: {} };
+  const wrapped = new vm.Script(
+    `(function(exports, require, module, __filename, __dirname) { ${source}\n})`,
+    { filename: resolved }
+  ).runInThisContext();
+  wrapped(moduleObject.exports, require, moduleObject, resolved, path.dirname(resolved));
+  return moduleObject.exports;
+}
+
 async function main() {
   console.error("[compare] reading dumps");
   const meta = readMeta(metaPath);
@@ -276,11 +297,20 @@ async function main() {
   const appTs = fs.readFileSync(appPath);
   const originalNals = extractNals(originalTs);
   const appNals = extractNals(appTs);
+  const callTracePath = process.env.CMG_CALLTRACE || "";
+  const importTracePath = process.env.CMG_IMPORTTRACE || "";
+  const callTraceRows = [];
+  const importTraceRows = [];
+  let callTraceIndex = -1;
+  let callTraceMallocs = [];
+  let callTraceFrees = [];
+  let callTraceCalls = [];
+  let importTraceCalls = [];
   console.error(`[compare] nals original=${originalNals.length} app=${appNals.length} mediaTag=${mediaTagId}`);
   console.error("[compare] loading worker module");
   const savedArgv = process.argv;
   process.argv = process.argv.slice(0, 2);
-  const requireWorker = require(path.resolve(workerPath));
+  const requireWorker = loadWorkerFactory(workerPath, !!importTracePath);
   const { module } = await new Promise((resolve, reject) => {
     let instance;
     const timer = setTimeout(() => reject(new Error("CMGDecModule runtime init timeout")), 30000);
@@ -296,6 +326,16 @@ async function main() {
       instance = requireWorker({
         arguments: [],
         noInitialRun: true,
+        __traceImports(name, args, result, thrown) {
+          if (callTraceIndex !== -1) {
+            importTraceCalls.push({
+              name,
+              args,
+              result,
+              throw: thrown || undefined
+            });
+          }
+        },
         print() {},
         printErr() {},
         monitorRunDependencies(count) {
@@ -329,8 +369,84 @@ async function main() {
   const { sandbox, wrapper } = loadOfficialWrapper(hlsCmgPath);
   const fG = wrapper.fG;
   sandbox.activeURL = "https://www.yangshipin.cn/tv/home";
+  if (callTracePath) {
+    for (const name of ["_jsmalloc", "_jsfree", "_CMG_UpdatePlayer", "_CMG_InitPlayer",
+        "_CMG_jsdecLive0", "_CMG_jsdecLive1", "_CMG_jsdecLive2", "_CMG_jsdecLive3",
+        "_CMG_jsdecLive4", "_CMG_jsdecLive5", "_CMG_jsdecLive6", "_CMG_jsdecLive7",
+        "_CMG_jsdecLive8"]) {
+      const original = module[name];
+      if (typeof original !== "function") {
+        continue;
+      }
+      module[name] = function wrappedCmgCall(...args) {
+        const topBefore = module.HEAP32 ? module.HEAP32[17904 >> 2] : null;
+        const firstArgHead = args[0] && module.HEAPU8
+          ? headHex(Buffer.from(module.HEAPU8.slice(args[0], args[0] + 32)), 0, 32)
+          : "";
+        let result;
+        try {
+          result = original.apply(this, args);
+        } catch (error) {
+          if (callTraceIndex !== -1) {
+            callTraceCalls.push({
+              name,
+              args,
+              throw: error && error.message ? error.message : String(error),
+              topBefore,
+              topAfter: module.HEAP32 ? module.HEAP32[17904 >> 2] : null,
+              firstArgHead
+            });
+          }
+          throw error;
+        }
+        const topAfter = module.HEAP32 ? module.HEAP32[17904 >> 2] : null;
+        if (callTraceIndex !== -1) {
+          if (name === "_jsmalloc") {
+            callTraceMallocs.push({ size: args[0], result });
+          } else if (name === "_jsfree") {
+            callTraceFrees.push(args[0]);
+          } else {
+            callTraceCalls.push({ name, args, result, topBefore, topAfter, firstArgHead });
+          }
+        }
+        return result;
+      };
+    }
+  }
   console.error("[compare] InitPlayer");
+  callTraceIndex = callTracePath ? -2 : -1;
+  callTraceMallocs = [];
+  callTraceFrees = [];
+  callTraceCalls = [];
+  importTraceCalls = [];
   fG.moduleActive(module, mediaTagId, fG.INITPLAYER);
+  if (callTracePath) {
+    callTraceRows.push({
+      index: -2,
+      type: "init",
+      length: 0,
+      decoded: false,
+      liveDecodeEnabled: false,
+      officialDiffFromOriginal: 0,
+      beforeVmpTag: null,
+      activeResult: null,
+      activeVmpTag: sandbox.vmpTag || null,
+      afterVmpTag: sandbox.vmpTag || null,
+      mallocs: callTraceMallocs,
+      frees: callTraceFrees,
+      calls: callTraceCalls
+      ,
+      dynamicTop: module.HEAP32 ? module.HEAP32[17904 >> 2] : null
+    });
+    callTraceIndex = -1;
+  }
+  if (importTracePath) {
+    importTraceRows.push({
+      index: -2,
+      type: "init",
+      imports: importTraceCalls
+    });
+  }
 
   const maxTargets = Number(maxTargetsArg) || 0;
   let targets = 0;
@@ -349,6 +465,11 @@ async function main() {
     }
     const original = originalNals[index];
     const app = appNals[index];
+    callTraceIndex = callTracePath ? index : -1;
+    callTraceMallocs = [];
+    callTraceFrees = [];
+    callTraceCalls = [];
+    importTraceCalls = [];
     if (original.type !== app.type) {
       firstMismatch = {
         reason: "nal-sequence-type",
@@ -426,6 +547,35 @@ async function main() {
         expectedB64: Buffer.from(expected).toString("base64")
       });
     }
+    if (callTracePath) {
+      callTraceRows.push({
+        index,
+        type: original.type,
+        length: original.body.length,
+        decoded,
+        liveDecodeEnabled,
+        officialDiffFromOriginal: officialDiff,
+        beforeVmpTag,
+        activeResult,
+        activeVmpTag,
+        afterVmpTag: sandbox.vmpTag || null,
+        mallocs: callTraceMallocs,
+        frees: callTraceFrees,
+        calls: callTraceCalls,
+        dynamicTop: module.HEAP32 ? module.HEAP32[17904 >> 2] : null,
+        expectedHead64: headHex(Buffer.from(expected), 0, 64)
+      });
+    }
+    if (importTracePath) {
+      importTraceRows.push({
+        index,
+        type: original.type,
+        length: original.body.length,
+        decoded,
+        activeVmpTag,
+        imports: importTraceCalls
+      });
+    }
 
     const mismatchAt = firstDiff(expected, app.body);
     if (mismatchAt >= 0) {
@@ -462,6 +612,7 @@ async function main() {
   }
 
   fG.moduleActive(module, mediaTagId, fG.UNINITPLAYER);
+  callTraceIndex = -1;
 
   const report = {
     originalPath,
@@ -482,6 +633,12 @@ async function main() {
   console.log(JSON.stringify(report, null, 2));
   if (tracePath) {
     fs.writeFileSync(tracePath, trace.map(item => JSON.stringify(item)).join("\n") + "\n");
+  }
+  if (callTracePath) {
+    fs.writeFileSync(callTracePath, callTraceRows.map(item => JSON.stringify(item)).join("\n") + "\n");
+  }
+  if (importTracePath) {
+    fs.writeFileSync(importTracePath, importTraceRows.map(item => JSON.stringify(item)).join("\n") + "\n");
   }
   if (firstMismatch) {
     process.exitCode = 2;

@@ -30,7 +30,7 @@
 #define CMG_PLAYER_MEMORY_EXTEND 1968u
 #define CMG_NAL_MEMORY_EXTEND CMG_MEMORY_EXTEND
 #define CMG_PAGE_HOST "https://www.yangshipin.cn/tv/home"
-#define CMG_LOCATION_HREF "blob:https://www.yangshipin.cn/tv/home"
+#define CMG_LOCATION_HREF "https://www.yangshipin.cn/tv/home"
 
 typedef enum cmg_emval_type {
   CMG_EMVAL_EMPTY,
@@ -353,6 +353,10 @@ static u32 import_z(u32 operation, u32 argument) {
   if (name == NULL) {
     return 0;
   }
+  if (strncmp(name, "self.location.", strlen("self.location.")) == 0) {
+    wasm_rt_trap(WASM_RT_TRAP_UNREACHABLE);
+    return 0;
+  }
   if (strcmp(name, "self.location.href") == 0) {
     return cmg_return_js_string(CMG_LOCATION_HREF);
   }
@@ -423,7 +427,7 @@ static u32 import_D(u32 object, u32 property_handle) {
       return cmg_register_emval_string("www.yangshipin.cn", strlen("www.yangshipin.cn"));
     }
     if (strcmp(property, "protocol") == 0) {
-      return cmg_register_emval_string("blob:", strlen("blob:"));
+      return cmg_register_emval_string("https:", strlen("https:"));
     }
   }
   if (object == 1) {
@@ -434,7 +438,7 @@ static u32 import_D(u32 object, u32 property_handle) {
     if (g_location_property_reads == 2) {
       return cmg_register_emval_string(CMG_LOCATION_HREF, strlen(CMG_LOCATION_HREF));
     }
-    return cmg_register_emval_string("blob:", strlen("blob:"));
+    return cmg_register_emval_string("https:", strlen("https:"));
   }
   return 1;
 }
@@ -588,7 +592,8 @@ static int cmg_init_locked(void) {
   ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0] = CMG_DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS;
   LOGI("CMG init: global constructors");
   (*Z_LaZ_vv)();
-  ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0] = CMG_DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS;
+  LOGI("CMG init: dynamic top after ctors=%u",
+      ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0]);
   cmg_make_player_tag();
   LOGI("CMG init: activate player tag %s", g_player_tag);
   u32 init_tag_address = cmg_write_tag_buffer(g_player_tag, CMG_MEMORY_EXTEND, 1);
@@ -597,12 +602,11 @@ static int cmg_init_locked(void) {
   if (g_player_init_trap == 0) {
     (*Z_baZ_ii)(init_tag_address);
     g_player_active = 1;
+    LOGI("CMG init: dynamic top after InitPlayer=%u",
+        ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0]);
   } else {
     LOGE("CMG InitPlayer trapped: %d", g_player_init_trap);
     g_player_active = 1;
-  }
-  if (init_tag_address != 0) {
-    (*Z_BaZ_vi)(init_tag_address);
   }
   g_initialized = 1;
   LOGI("CMG wasm runtime initialized");
@@ -779,7 +783,7 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
   vod_functions[8] = Z_vaZ_iiiii;
   functions = live ? live_functions : vod_functions;
   host_length = live ? (u32) strlen(CMG_PAGE_HOST) : 0;
-  data_allocation_size = (size_t) length + host_length + CMG_NAL_MEMORY_EXTEND;
+  data_allocation_size = (size_t) length + CMG_NAL_MEMORY_EXTEND;
   data_address = (*Z_CaZ_ii)((u32) data_allocation_size);
   data_pointer = cmg_pointer(data_address, data_allocation_size);
   if (data_pointer == NULL) {
@@ -794,6 +798,9 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
   tag_address = cmg_write_tag_buffer(g_player_tag, 0, 0);
   if (cmg_pointer(tag_address, strlen(g_player_tag)) == NULL) {
     (*Z_BaZ_vi)(data_address);
+    if (tag_address != 0) {
+      (*Z_BaZ_vi)(tag_address);
+    }
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseByteArrayElements(env, input, input_bytes, JNI_ABORT);
     return NULL;
@@ -814,15 +821,15 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
     update_tag = cmg_update_player_with_fresh_tag();
     g_update_tag = update_tag;
   }
-  if (length > 50000) {
-    LOGI("CMG decode begin len=%d live=%d runSteps=%d updateTag=%08x tagAddr=%u dataAddr=%u hostLen=%u",
+  if (length > 100000) {
+    LOGI("CMG decode begin len=%d live=%d runSteps=%d updateTag=%08x dataAddr=%u dataSize=%u tagAddr=%u hostLen=%u",
         (int) length, live ? 1 : 0, run_steps ? 1 : 0, update_tag,
-        tag_address, data_address, host_length);
+        data_address, (u32) data_allocation_size, tag_address, host_length);
   }
   if (run_steps) {
     for (index = 0; index < 8; index++) {
       if (cmg_should_run_decode_step(update_tag, index)) {
-        functions[index](tag_address, data_address, (u32) length, host_length);
+        functions[7 - index](tag_address, data_address, (u32) length, host_length);
         ran_steps++;
       }
     }
@@ -832,7 +839,7 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
   } else {
     output_length = functions[8](data_address, tag_address, (u32) length, host_length);
   }
-  if (length > 50000) {
+  if (length > 100000) {
     LOGI("CMG decode end len=%d out=%u ranSteps=%d head=%02x%02x%02x%02x %02x%02x%02x%02x",
         (int) length, output_length, ran_steps,
         data_pointer[0], data_pointer[1], data_pointer[2], data_pointer[3],
@@ -900,7 +907,7 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalSingleStepForProbe(
   vod_functions[8] = Z_vaZ_iiiii;
   functions = live ? live_functions : vod_functions;
   host_length = live ? (u32) strlen(CMG_PAGE_HOST) : 0;
-  data_allocation_size = (size_t) length + host_length + CMG_NAL_MEMORY_EXTEND;
+  data_allocation_size = (size_t) length + CMG_NAL_MEMORY_EXTEND;
   data_address = (*Z_CaZ_ii)((u32) data_allocation_size);
   data_pointer = cmg_pointer(data_address, data_allocation_size);
   if (data_pointer == NULL) {
@@ -915,6 +922,9 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalSingleStepForProbe(
   tag_address = cmg_write_tag_buffer(g_player_tag, 0, 0);
   if (cmg_pointer(tag_address, strlen(g_player_tag)) == NULL) {
     (*Z_BaZ_vi)(data_address);
+    if (tag_address != 0) {
+      (*Z_BaZ_vi)(tag_address);
+    }
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseByteArrayElements(env, input, input_bytes, JNI_ABORT);
     return NULL;
@@ -935,10 +945,10 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalSingleStepForProbe(
   } else {
     output_length = functions[step](data_address, tag_address, (u32) length, host_length);
   }
-  if (length > 50000) {
-    LOGI("CMG single step len=%d live=%d step=%d out=%u tagAddr=%u dataAddr=%u head=%02x%02x%02x%02x",
+  if (length > 100000) {
+    LOGI("CMG single step len=%d live=%d step=%d out=%u dataAddr=%u dataSize=%u tagAddr=%u head=%02x%02x%02x%02x",
         (int) length, live ? 1 : 0, (int) step, output_length,
-        tag_address, data_address,
+        data_address, (u32) data_allocation_size, tag_address,
         data_pointer[32], data_pointer[33], data_pointer[34], data_pointer[35]);
   }
   output = (*env)->NewByteArray(env, (jsize) output_length);
