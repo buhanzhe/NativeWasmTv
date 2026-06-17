@@ -10,6 +10,8 @@ import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.AdapterView;
@@ -66,9 +68,12 @@ public final class MainActivity extends Activity {
     private YangshipinWebResolver yangshipinResolver;
     private SharpVideoView videoView;
     private Surface videoSurface;
+    private SurfaceView plainVideoView;
+    private Surface plainVideoSurface;
     private HlsProxyServer proxy;
     private IjkMediaPlayer player;
     private boolean prepared;
+    private boolean usePlainSurfaceForCurrentPlayer;
     private volatile int playRequestId;
     private int currentGroupIndex;
     private int currentChannelIndex;
@@ -125,6 +130,11 @@ public final class MainActivity extends Activity {
         });
 
         videoView = (SharpVideoView) findViewById(R.id.video_surface);
+        plainVideoView = new SurfaceView(this);
+        plainVideoView.setVisibility(View.GONE);
+        ((FrameLayout) root).addView(plainVideoView, 1,
+                new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT));
         View.OnClickListener openChannelsOnClick = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -138,6 +148,9 @@ public final class MainActivity extends Activity {
             public void onVideoSurfaceCreated(Surface surface) {
                 videoSurface = surface;
                 if (player != null) {
+                    if (usePlainSurfaceForCurrentPlayer) {
+                        return;
+                    }
                     player.setSurface(surface);
                 }
             }
@@ -150,6 +163,32 @@ public final class MainActivity extends Activity {
                 if (videoSurface == surface) {
                     videoSurface = null;
                 }
+            }
+        });
+        plainVideoView.setOnClickListener(openChannelsOnClick);
+        plainVideoView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder) {
+                plainVideoSurface = holder.getSurface();
+                if (player != null && usePlainSurfaceForCurrentPlayer) {
+                    player.setSurface(plainVideoSurface);
+                }
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                plainVideoSurface = holder.getSurface();
+                if (player != null && usePlainSurfaceForCurrentPlayer) {
+                    player.setSurface(plainVideoSurface);
+                }
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                if (player != null && usePlainSurfaceForCurrentPlayer) {
+                    player.setSurface(null);
+                }
+                plainVideoSurface = null;
             }
         });
         root.requestFocus();
@@ -637,8 +676,10 @@ public final class MainActivity extends Activity {
         player = nextPlayer;
         boolean yangshipinSource = streamUrl != null
                 && streamUrl.toLowerCase(Locale.US).contains("ysp.cctv.cn");
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec",
-                yangshipinSource ? 0 : 1);
+        usePlainSurfaceForCurrentPlayer = yangshipinSource;
+        videoView.setVisibility(usePlainSurfaceForCurrentPlayer ? View.GONE : View.VISIBLE);
+        plainVideoView.setVisibility(usePlainSurfaceForCurrentPlayer ? View.VISIBLE : View.GONE);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 0);
@@ -652,7 +693,9 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1024 * 1024);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 100L * 1000L);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index", -6);
-        if (videoSurface != null) {
+        if (usePlainSurfaceForCurrentPlayer && plainVideoSurface != null) {
+            nextPlayer.setSurface(plainVideoSurface);
+        } else if (!usePlainSurfaceForCurrentPlayer && videoSurface != null) {
             nextPlayer.setSurface(videoSurface);
         }
         nextPlayer.setOnVideoSizeChangedListener(new IMediaPlayer.OnVideoSizeChangedListener() {
@@ -788,6 +831,7 @@ public final class MainActivity extends Activity {
             player.release();
             player = null;
         }
+        usePlainSurfaceForCurrentPlayer = false;
     }
 
     private void resetVideoLayout() {

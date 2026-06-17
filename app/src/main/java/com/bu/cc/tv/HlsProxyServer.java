@@ -656,8 +656,14 @@ final class HlsProxyServer implements Closeable {
                         stats.shortOutput++;
                         if (stats.shortOutput <= 3) {
                             Log.w(TAG, "CMG NAL output shrank type=" + nalType
-                                    + " before=" + nal.length + " after=" + decoded.length);
+                                    + " before=" + nal.length + " after=" + decoded.length
+                                    + "; preserving original NAL length");
                         }
+                        byte[] padded = new byte[nal.length];
+                        System.arraycopy(decoded, 0, padded, 0, decoded.length);
+                        System.arraycopy(nal, decoded.length, padded, decoded.length,
+                                nal.length - decoded.length);
+                        decoded = padded;
                     }
                     replacement = decoded;
                     stats.decoded++;
@@ -726,15 +732,12 @@ final class HlsProxyServer implements Closeable {
     private static int advanceCmgSessionForNal(int nalType) {
         int updateTag;
         if (cmgInitialUpdateTag != 0 || cmgStableUpdateTag != 0) {
-            if (cmgFirstStateNalPending && needsCmgStateDecode(nalType)) {
-                updateTag = cmgInitialUpdateTag;
-                cmgFirstStateNalPending = false;
-            } else if (cmgStableUpdateTag != 0) {
-                updateTag = cmgStableUpdateTag;
-            } else {
-                updateTag = cmgInitialUpdateTag;
+            updateTag = NativeCmgDecryptor.updateSessionForProbe();
+            int capturedTag = capturedCmgUpdateTagForNal(nalType);
+            if (updateTag == 0 && capturedTag != 0) {
+                updateTag = capturedTag;
+                NativeCmgDecryptor.setUpdateTagForProbe(updateTag);
             }
-            NativeCmgDecryptor.setUpdateTagForProbe(updateTag);
         } else {
             updateTag = NativeCmgDecryptor.updateSessionForProbe();
         }
@@ -743,6 +746,17 @@ final class HlsProxyServer implements Closeable {
                     + String.format(Locale.US, "%08x", updateTag));
         }
         return updateTag;
+    }
+
+    private static int capturedCmgUpdateTagForNal(int nalType) {
+        if (cmgFirstStateNalPending && needsCmgStateDecode(nalType)) {
+            cmgFirstStateNalPending = false;
+            return cmgInitialUpdateTag;
+        }
+        if (cmgStableUpdateTag != 0) {
+            return cmgStableUpdateTag;
+        }
+        return cmgInitialUpdateTag;
     }
 
     private static boolean needsCmgNalDecode(int nalType) {
