@@ -683,6 +683,22 @@ static void init_globals(void) {
   w2c_g9 = 0u;
 }
 
+u32 cmg_debug_get_g6(void) {
+  return w2c_g6;
+}
+
+u32 cmg_debug_get_g7(void) {
+  return w2c_g7;
+}
+
+u32 cmg_debug_get_g9(void) {
+  return w2c_g9;
+}
+
+void cmg_debug_set_g7(u32 value) {
+  w2c_g7 = value;
+}
+
 static void w2c_f51(u32 w2c_p0) {
   u32 w2c_l1 = 0, w2c_l2 = 0, w2c_l3 = 0, w2c_l4 = 0, w2c_l5 = 0;
   f64 w2c_l6 = 0;

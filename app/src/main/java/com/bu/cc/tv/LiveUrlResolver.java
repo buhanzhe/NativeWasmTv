@@ -15,7 +15,9 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
 
 final class LiveUrlResolver {
@@ -25,34 +27,84 @@ final class LiveUrlResolver {
     private static final String VDN_API = "https://vdnx.live.cntv.cn/api/v3/vdn/live";
     private static final String VDN_BACKUP_API = "https://vdnxbk.live.cntv.cn/api/v3/vdn/live";
     private static final String AUTH_SALT = "a4220a71b31746908fa3e7fdd7a6852a";
+    private static final String CACHE_URL_PREFIX = "cached_url_";
+    private static final String CACHE_TIME_PREFIX = "cached_at_";
+    private static final long CACHE_TTL_MS = 10L * 60L * 1000L;
+    private static final long STALE_CACHE_TTL_MS = 6L * 60L * 60L * 1000L;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
     private final SharedPreferences preferences;
     private final Random random = new Random();
+    private final Map<String, CachedUrl> memoryCache = new HashMap<String, CachedUrl>();
 
     LiveUrlResolver(SharedPreferences preferences) {
         this.preferences = preferences;
     }
 
     String resolve(Channel channel) throws IOException {
+        CachedUrl cached = getCached(channel.streamId);
+        long now = System.currentTimeMillis();
+        long cacheAge = cached == null ? Long.MAX_VALUE : now - cached.cachedAt;
+        if (cached != null && cacheAge >= 0L && cacheAge < CACHE_TTL_MS) {
+            Log.i(TAG, "Resolved HLS from cache for " + channel.streamId);
+            return cached.url;
+        }
+
         IOException lastError = null;
         try {
-            return resolveFromApi(VDN_API, channel);
+            String url = resolveFromApi(VDN_API, channel);
+            cache(channel.streamId, url, now);
+            return url;
         } catch (IOException error) {
             lastError = error;
             Log.w(TAG, "Primary VDN resolve failed for " + channel.streamId, error);
         }
         try {
-            return resolveFromApi(VDN_BACKUP_API, channel);
+            String url = resolveFromApi(VDN_BACKUP_API, channel);
+            cache(channel.streamId, url, now);
+            return url;
         } catch (IOException error) {
             Log.w(TAG, "Backup VDN resolve failed for " + channel.streamId, error);
+            if (cached != null && cacheAge >= 0L && cacheAge < STALE_CACHE_TTL_MS) {
+                Log.i(TAG, "Using stale HLS cache after resolve failure for "
+                        + channel.streamId);
+                return cached.url;
+            }
             if (lastError != null) {
                 throw lastError;
             }
             throw error;
         }
+    }
+
+    private CachedUrl getCached(String streamId) {
+        synchronized (memoryCache) {
+            CachedUrl cached = memoryCache.get(streamId);
+            if (cached != null) {
+                return cached;
+            }
+            String url = preferences.getString(CACHE_URL_PREFIX + streamId, null);
+            long cachedAt = preferences.getLong(CACHE_TIME_PREFIX + streamId, 0L);
+            if (url == null || url.length() == 0 || cachedAt <= 0L) {
+                return null;
+            }
+            cached = new CachedUrl(url, cachedAt);
+            memoryCache.put(streamId, cached);
+            return cached;
+        }
+    }
+
+    private void cache(String streamId, String url, long cachedAt) {
+        CachedUrl cached = new CachedUrl(url, cachedAt);
+        synchronized (memoryCache) {
+            memoryCache.put(streamId, cached);
+        }
+        preferences.edit()
+                .putString(CACHE_URL_PREFIX + streamId, url)
+                .putLong(CACHE_TIME_PREFIX + streamId, cachedAt)
+                .apply();
     }
 
     private String resolveFromApi(String endpoint, Channel channel) throws IOException {
@@ -76,12 +128,14 @@ final class LiveUrlResolver {
         connection.setRequestProperty("Referer", "https://tv.cctv.com/");
         connection.setRequestProperty("auth-key", authKey);
         connection.connect();
+        boolean responseConsumed = false;
         try {
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
                 throw new IOException("VDN HTTP " + status);
             }
             String body = new String(readFully(connection.getInputStream()), "UTF-8");
+            responseConsumed = true;
             String hls = parseHlsUrl(body);
             if (hls == null || hls.length() == 0) {
                 throw new IOException("VDN response did not include HLS URL");
@@ -90,7 +144,9 @@ final class LiveUrlResolver {
             Log.i(TAG, "Resolved dynamic HLS for " + channel.streamId + ": " + hls);
             return hls;
         } finally {
-            connection.disconnect();
+            if (!responseConsumed) {
+                connection.disconnect();
+            }
         }
     }
 
@@ -167,6 +223,16 @@ final class LiveUrlResolver {
             return output.toByteArray();
         } finally {
             input.close();
+        }
+    }
+
+    private static final class CachedUrl {
+        final String url;
+        final long cachedAt;
+
+        CachedUrl(String url, long cachedAt) {
+            this.url = url;
+            this.cachedAt = cachedAt;
         }
     }
 }

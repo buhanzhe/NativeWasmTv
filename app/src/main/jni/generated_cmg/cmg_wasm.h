@@ -224,6 +224,10 @@ extern u32 (*WASM_RT_ADD_PREFIX(Z_KaZ_iv))(void);
 extern void (*WASM_RT_ADD_PREFIX(Z_LaZ_vv))(void);
 /* export: 'Ma' */
 extern u32 (*WASM_RT_ADD_PREFIX(Z_MaZ_ii))(u32);
+u32 cmg_debug_get_g6(void);
+u32 cmg_debug_get_g7(void);
+u32 cmg_debug_get_g9(void);
+void cmg_debug_set_g7(u32 value);
 #ifdef __cplusplus
 }
 #endif

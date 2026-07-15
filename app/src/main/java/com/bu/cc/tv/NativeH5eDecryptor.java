@@ -8,5 +8,9 @@ final class NativeH5eDecryptor {
     private NativeH5eDecryptor() {
     }
 
-    static synchronized native byte[] decryptTransportStream(byte[] transportStream);
+    static native byte[] decryptTransportStream(byte[] transportStream);
+
+    static native void cancelPendingDecrypts();
+
+    static native void releaseThreadContext();
 }

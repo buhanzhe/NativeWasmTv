@@ -17,7 +17,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 #define TS_PACKET_SIZE 188
-#define MEMORY_INITIAL_PAGES 1024
+#define MEMORY_INITIAL_PAGES 256
 #define MEMORY_MAX_PAGES 1536
 #define TABLE_ELEMENTS 544
 #define DYNAMIC_TOP_PTR 40512u
@@ -26,9 +26,15 @@
 #define EMBIND_STORAGE 6332000u
 #define DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS 7053264u
 #define MEMORY_EXTEND 2048u
-#define NAL_MEMORY_EXTEND (1024u * 1024u)
+/* VOD8 uses the allocation tail as an internal transform workspace. Most
+ * frames fit in tens of KiB, but some valid CCTV slices need close to 2 MiB;
+ * sizing this like a normal output buffer causes a wasm bounds trap. The wasm
+ * allocator reuses this block, so it raises one worker's high-water mark once
+ * instead of allocating 2 MiB per frame. */
+#define NAL_MEMORY_EXTEND (2u * 1024u * 1024u)
 #define PLAYER_TAG "player_container_player"
-#define PAGE_HOST "https://www.cctv.com"
+#define SPECIAL_PLAYER_TAG PLAYER_TAG "##1000000##0"
+#define PAGE_HOST "https://tv.cctv.com"
 #define LOCATION_HREF "blob:https://www.cctv.com/a2a31e32-7705-4db1-b190-1bd401598188"
 
 typedef struct w2c_env {
@@ -57,6 +63,10 @@ typedef struct pes_stream {
   packet_slot* slots;
   size_t slot_count;
   size_t slot_capacity;
+  size_t header_packet_offset;
+  size_t header_payload_offset;
+  size_t header_length;
+  unsigned int packet_length;
 } pes_stream;
 
 typedef u32 (*decrypt_function)(w2c_cctv__h5e*, u32, u32, u32, u32);
@@ -75,19 +85,33 @@ typedef struct emval_handle {
   u32 destructor_address;
 } emval_handle;
 
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static w2c_env g_env;
-static w2c_cctv__h5e g_module;
-static int g_runtime_initialized;
-static int g_ready;
-static u32 g_player_address;
-static emval_handle g_emval_handles[64];
-static u32 g_emval_free_list[64];
-static size_t g_emval_free_count;
-static u32 g_emval_handle_count;
-static const char* g_wasm_stage = "idle";
-static struct timeval g_worker_now;
-static int g_worker_clock_frozen;
+static __thread w2c_env g_env;
+static __thread w2c_cctv__h5e g_module;
+static __thread int g_runtime_initialized;
+static __thread int g_ready;
+static __thread int g_session_started;
+static __thread emval_handle g_emval_handles[64];
+static __thread u32 g_emval_free_list[64];
+static __thread size_t g_emval_free_count;
+static __thread u32 g_emval_handle_count;
+static __thread const char* g_wasm_stage = "idle";
+static __thread struct timeval g_worker_now;
+static __thread int g_worker_clock_frozen;
+static volatile u32 g_cancel_generation;
+static __thread u32 g_decrypt_generation;
+static __thread int g_decrypt_cancelled;
+static __thread size_t g_current_nal_length;
+static __thread int g_current_nal_type;
+static __thread char g_current_update_tag[16];
+static __thread int g_should_decrypt;
+
+static int decrypt_was_cancelled(void) {
+  u32 generation = __sync_add_and_fetch(&g_cancel_generation, 0);
+  if (generation != g_decrypt_generation) {
+    g_decrypt_cancelled = 1;
+  }
+  return g_decrypt_cancelled;
+}
 
 static void get_worker_time(struct timeval* now) {
   if (g_worker_clock_frozen) {
@@ -444,57 +468,118 @@ static int ensure_module_ready(void) {
     g_env.embind_storage = EMBIND_STORAGE;
     g_runtime_initialized = 1;
   }
-  g_ready = reset_module_state();
+  /* The browser creates one H5E player for the whole live stream. Resetting the
+   * module for every .ts file loses type-25 control/key state and eventually
+   * feeds undecodable NALs to MediaCodec. Keep the module until the worker is
+   * stopped on a channel switch. */
+  if (!g_ready) {
+    g_ready = reset_module_state();
+  }
   return g_ready;
 }
 
-static int begin_session(void) {
+static u32 allocate_player_argument(void) {
   size_t length = strlen(PLAYER_TAG);
+  size_t capacity = length + MEMORY_EXTEND;
   uint8_t* target;
+  u32 address;
   g_wasm_stage = "player-malloc";
-  g_player_address = w2c_cctv__h5e_Da(&g_module, (u32) length + 1);
+  address = w2c_cctv__h5e_Da(&g_module, (u32) capacity);
   g_wasm_stage = "idle";
-  target = env_pointer(&g_env, g_player_address, length + 1);
+  target = env_pointer(&g_env, address, capacity);
   if (target == NULL) {
     return 0;
   }
-  memset(target, 0, length + 1);
+  memset(target, 0, capacity);
   memcpy(target, PLAYER_TAG, length);
+  return address;
+}
+
+static int begin_session(void) {
+  u32 player_argument;
+  if (g_session_started) {
+    return 1;
+  }
+  player_argument = allocate_player_argument();
+  if (player_argument == 0) {
+    return 0;
+  }
   g_wasm_stage = "init-player";
-  w2c_cctv__h5e_aa(&g_module, g_player_address);
+  w2c_cctv__h5e_aa(&g_module, player_argument);
+  g_wasm_stage = "player-free";
+  w2c_cctv__h5e_Ca(&g_module, player_argument);
   g_wasm_stage = "idle";
+  g_session_started = 1;
+  g_should_decrypt = 0;
   return 1;
 }
 
 static void end_session(void) {
-  if (g_player_address != 0) {
+  u32 player_argument;
+  if (g_session_started) {
+    player_argument = allocate_player_argument();
+    if (player_argument == 0) {
+      g_session_started = 0;
+      return;
+    }
     g_wasm_stage = "uninit-player";
-    w2c_cctv__h5e_ba(&g_module, g_player_address);
+    w2c_cctv__h5e_ba(&g_module, player_argument);
     g_wasm_stage = "idle";
     g_wasm_stage = "player-free";
-    w2c_cctv__h5e_Ca(&g_module, g_player_address);
+    w2c_cctv__h5e_Ca(&g_module, player_argument);
     g_wasm_stage = "idle";
-    g_player_address = 0;
+    g_session_started = 0;
   }
 }
 
-static int decrypt_nal(const uint8_t* nal, size_t nal_length, uint8_t** result, size_t* result_length) {
+static int decrypt_nal(const uint8_t* nal, size_t nal_length,
+    uint8_t** result, size_t* result_length) {
   static decrypt_function functions[9] = {
     w2c_cctv__h5e_ta, w2c_cctv__h5e_sa, w2c_cctv__h5e_ra,
     w2c_cctv__h5e_qa, w2c_cctv__h5e_pa, w2c_cctv__h5e_oa,
     w2c_cctv__h5e_na, w2c_cctv__h5e_ma, w2c_cctv__h5e_ua
   };
   static const char host[] = PAGE_HOST;
+  const char* media_tag;
   size_t host_length = strlen(host);
-  size_t tag_length = strlen(PLAYER_TAG);
+  size_t tag_length;
   u32 tag_address;
   uint8_t* tag_data;
   char tag[16];
   u32 output_length;
+  u32 update_argument;
   int index;
+  g_current_nal_length = nal_length;
+  g_current_nal_type = nal_length > 0 ? nal[0] & 0x1f : -1;
+  /* UpdatePlayer uses the 2 KiB scratch area following mediaTagID. Allocate
+   * and free a fresh argument exactly like the official worker; reusing the
+   * tiny InitPlayer string corrupts the wasm heap after enough NALs. */
+  update_argument = allocate_player_argument();
+  if (update_argument == 0) {
+    return 0;
+  }
   g_wasm_stage = "update-player";
-  snprintf(tag, sizeof(tag), "%08x", w2c_cctv__h5e_ca(&g_module, g_player_address));
+  snprintf(tag, sizeof(tag), "%08x", w2c_cctv__h5e_ca(&g_module, update_argument));
+  g_wasm_stage = "player-free";
+  w2c_cctv__h5e_Ca(&g_module, update_argument);
+  snprintf(g_current_update_tag, sizeof(g_current_update_tag), "%s", tag);
   g_wasm_stage = "idle";
+  /* CCTV updates the player state for every NAL, not only picture NALs. NAL
+   * type 25 is an H5E control NAL: its first payload byte enables/disables
+   * decryption for the following type 1/5 pictures. Skipping either operation
+   * eventually feeds VOD8 the wrong state and can trap inside wasm. */
+  if (g_current_nal_type == 25) {
+    g_should_decrypt = nal_length > 1 && nal[1] == 1;
+    media_tag = PLAYER_TAG;
+  } else if (g_current_nal_type == 1 || g_current_nal_type == 5) {
+    if (!g_should_decrypt) {
+      return 0;
+    }
+    media_tag = SPECIAL_PLAYER_TAG;
+  } else {
+    return 0;
+  }
+  tag_length = strlen(media_tag);
   g_wasm_stage = "tag-malloc";
   tag_address = w2c_cctv__h5e_Da(&g_module, (u32) tag_length + 1);
   g_wasm_stage = "idle";
@@ -503,12 +588,13 @@ static int decrypt_nal(const uint8_t* nal, size_t nal_length, uint8_t** result, 
     return 0;
   }
   memset(tag_data, 0, tag_length + 1);
-  memcpy(tag_data, PLAYER_TAG, tag_length);
+  memcpy(tag_data, media_tag, tag_length);
   g_wasm_stage = "nal-malloc";
   u32 data_address = w2c_cctv__h5e_Da(&g_module,
       (u32) nal_length + (u32) host_length + NAL_MEMORY_EXTEND);
   g_wasm_stage = "idle";
-  uint8_t* data = env_pointer(&g_env, data_address, nal_length + host_length + NAL_MEMORY_EXTEND);
+  uint8_t* data = env_pointer(&g_env, data_address,
+      nal_length + host_length + NAL_MEMORY_EXTEND);
   if (data == NULL) {
     g_wasm_stage = "tag-free";
     w2c_cctv__h5e_Ca(&g_module, tag_address);
@@ -520,12 +606,14 @@ static int decrypt_nal(const uint8_t* nal, size_t nal_length, uint8_t** result, 
   for (index = 0; index < 8; index++) {
     if (strchr("0123456", tag[index]) != NULL) {
       g_wasm_stage = "vod-step";
-      functions[index](&g_module, tag_address, data_address, (u32) nal_length, (u32) host_length);
+      functions[index](&g_module, tag_address, data_address,
+          (u32) nal_length, (u32) host_length);
       g_wasm_stage = "idle";
     }
   }
   g_wasm_stage = "vod-output";
-  output_length = functions[8](&g_module, tag_address, data_address, (u32) nal_length, (u32) host_length);
+  output_length = functions[8](&g_module, tag_address, data_address,
+      (u32) nal_length, (u32) host_length);
   g_wasm_stage = "idle";
   if (output_length > nal_length + host_length + NAL_MEMORY_EXTEND) {
     g_wasm_stage = "nal-free";
@@ -643,13 +731,30 @@ static int write_pes_payload(uint8_t* output, pes_stream* pes, const uint8_t* by
       memcpy(packet + TS_PACKET_SIZE - available, bytes + consumed, available);
       consumed += available;
     } else {
-      packet[3] = (packet[3] & 0xcf) | 0x20;
+      /* Keep the payload-present bit even when the rewritten PES has no bytes
+       * left for this packet. Its continuity counter was advanced as a payload
+       * packet upstream; changing it to adaptation-only makes the next real
+       * packet look discontinuous and causes FFmpeg/MediaCodec to discard a
+       * complete GOP. A 183-byte adaptation field still leaves zero payload. */
+      packet[3] = (packet[3] & 0xcf) | 0x30;
       packet[4] = 183;
       packet[5] = 0;
       memset(packet + 6, 0xff, 182);
     }
   }
-  return consumed == length;
+  if (consumed != length) {
+    return 0;
+  }
+  if (pes->packet_length > 0 && pes->header_length >= 6
+      && pes->packet_length >= pes->header_length - 6) {
+    size_t updated_length = length + pes->header_length - 6;
+    if (updated_length <= 0xffff) {
+      uint8_t* header = output + pes->header_packet_offset + pes->header_payload_offset;
+      header[4] = (uint8_t) ((updated_length >> 8) & 0xff);
+      header[5] = (uint8_t) (updated_length & 0xff);
+    }
+  }
+  return 1;
 }
 
 static int decrypt_pes(uint8_t* output, pes_stream* pes) {
@@ -659,6 +764,18 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
   size_t position = 0;
   size_t prefix_length;
   int changed = 0;
+  if (pes->packet_length > 0 && pes->header_length >= 6
+      && pes->packet_length >= pes->header_length - 6) {
+    size_t expected = pes->packet_length - (pes->header_length - 6);
+    if (pes->length < expected) {
+      /* Never decrypt the final, truncated slice of a segment. A partially
+       * rewritten frame produces the characteristic top-only mosaic. */
+      return 0;
+    }
+    if (pes->length > expected) {
+      pes->length = expected;
+    }
+  }
   while ((position = find_start_code(pes->bytes, pes->length, position, &prefix_length)) < pes->length) {
     size_t nal_start = position + prefix_length;
     size_t next_prefix;
@@ -668,6 +785,10 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
     size_t replacement_length = 0;
     int type;
     size_t required;
+    if (decrypt_was_cancelled()) {
+      free(decrypted);
+      return 0;
+    }
     if (nal_length == 0) {
       position = nal_start;
       continue;
@@ -690,7 +811,7 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
     }
     memcpy(decrypted + decrypted_length, pes->bytes + position, prefix_length);
     decrypted_length += prefix_length;
-    if ((type == 1 || type == 5) && decrypt_nal(pes->bytes + nal_start, nal_length,
+    if (decrypt_nal(pes->bytes + nal_start, nal_length,
             &replacement, &replacement_length)) {
       memcpy(decrypted + decrypted_length, replacement, replacement_length);
       decrypted_length += replacement_length;
@@ -739,7 +860,9 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
   size_t packet_offset;
   memset(&pes, 0, sizeof(pes));
   pes.pid = -1;
-  memcpy(output, input, length);
+  if (output != input) {
+    memcpy(output, input, length);
+  }
   gettimeofday(&g_worker_now, NULL);
   g_worker_clock_frozen = 1;
   if (!ensure_module_ready() || !begin_session()) {
@@ -754,6 +877,9 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
     int pid;
     int adaptation_control;
     int payload_unit_start;
+    if (decrypt_was_cancelled()) {
+      break;
+    }
     if (packet[0] != 0x47) {
       continue;
     }
@@ -781,7 +907,12 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
         changed |= flush_pes(output, &pes);
       }
       pes.pid = pid;
-      payload_offset += 9 + packet[payload_offset + 8];
+      pes.header_packet_offset = packet_offset;
+      pes.header_payload_offset = payload_offset;
+      pes.header_length = 9 + packet[payload_offset + 8];
+      pes.packet_length = ((unsigned int) packet[payload_offset + 4] << 8)
+          | packet[payload_offset + 5];
+      payload_offset += pes.header_length;
       if (payload_offset >= TS_PACKET_SIZE) {
         continue;
       }
@@ -795,10 +926,14 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
       }
     }
   }
-  if (pes.pid >= 0) {
+  if (pes.pid >= 0 && !decrypt_was_cancelled()) {
     changed |= flush_pes(output, &pes);
+  } else {
+    clear_pes(&pes);
   }
-  end_session();
+  /* Keep the web-player session and its control state across ordered HLS
+   * segments. releaseThreadContext() tears the entire runtime down when the
+   * proxy is closed or the channel changes. */
   g_worker_clock_frozen = 0;
   return changed;
 }
@@ -809,43 +944,86 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_decryptTransportStream(
   jsize length;
   jbyte* input;
   uint8_t* output;
-  jbyteArray result;
   int trapped = 0;
+  int decrypted = 0;
   (void) clazz;
   if (transport_stream == NULL) {
     return NULL;
   }
+  g_decrypt_generation = __sync_add_and_fetch(&g_cancel_generation, 0);
+  g_decrypt_cancelled = 0;
   length = (*env)->GetArrayLength(env, transport_stream);
   input = (*env)->GetByteArrayElements(env, transport_stream, NULL);
   output = (uint8_t*) malloc((size_t) length);
-  result = (*env)->NewByteArray(env, length);
-  if (input == NULL || output == NULL || result == NULL) {
+  if (input == NULL || output == NULL) {
     free(output);
     if (input != NULL) {
       (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
     }
-    return transport_stream;
-  }
-  pthread_mutex_lock(&g_lock);
-  wasm_rt_trap_t trap = (wasm_rt_trap_t) wasm_rt_try(g_wasm_rt_jmp_buf);
-  if (trap == WASM_RT_TRAP_NONE) {
-    decrypt_transport_stream(output, (const uint8_t*) input, (size_t) length);
-  } else {
-    LOGE("wasm trap during %s: %s", g_wasm_stage, wasm_rt_strerror(trap));
-    trapped = 1;
-    g_ready = 0;
-    g_player_address = 0;
-    g_worker_clock_frozen = 0;
-  }
-  pthread_mutex_unlock(&g_lock);
-  if (trapped) {
-    (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-    (*env)->DeleteLocalRef(env, result);
-    free(output);
     return NULL;
   }
-  (*env)->SetByteArrayRegion(env, result, 0, length, (const jbyte*) output);
+  wasm_rt_trap_t trap = (wasm_rt_trap_t) wasm_rt_try(g_wasm_rt_jmp_buf);
+  if (trap == WASM_RT_TRAP_NONE) {
+    decrypted = decrypt_transport_stream(output, (const uint8_t*) input, (size_t) length);
+  } else {
+    LOGE("wasm trap during %s: %s nalType=%d nalLen=%u updateTag=%s",
+        g_wasm_stage, wasm_rt_strerror(trap), g_current_nal_type,
+        (unsigned int) g_current_nal_length, g_current_update_tag);
+    trapped = 1;
+    g_ready = 0;
+    g_session_started = 0;
+    g_worker_clock_frozen = 0;
+  }
+  if (trapped) {
+    (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
+    free(output);
+    LOGW("Rejecting encrypted transport stream after decrypt trap");
+    return NULL;
+  }
+  if (g_decrypt_cancelled) {
+    (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
+    free(output);
+    LOGI("CCTV decrypt cancelled for channel switch");
+    return NULL;
+  }
+  if (!decrypted) {
+    (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
+    free(output);
+    LOGW("Rejecting transport stream because no encrypted video NAL was decoded");
+    return NULL;
+  }
+  (*env)->SetByteArrayRegion(env, transport_stream, 0, length, (const jbyte*) output);
   (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
   free(output);
-  return result;
+  return transport_stream;
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeH5eDecryptor_cancelPendingDecrypts(JNIEnv* env, jclass clazz) {
+  u32 generation;
+  (void) env;
+  (void) clazz;
+  generation = __sync_add_and_fetch(&g_cancel_generation, 1);
+  LOGI("CCTV decrypt cancellation generation=%u", generation);
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeH5eDecryptor_releaseThreadContext(JNIEnv* env, jclass clazz) {
+  (void) env;
+  (void) clazz;
+  if (!g_runtime_initialized) {
+    return;
+  }
+  reset_emval_state();
+  wasm2c_cctv__h5e_free(&g_module);
+  wasm_rt_free_funcref_table(&g_env.table);
+  wasm_rt_free_memory(&g_env.memory);
+  wasm_rt_free_thread();
+  memset(&g_env, 0, sizeof(g_env));
+  memset(&g_module, 0, sizeof(g_module));
+  g_runtime_initialized = 0;
+  g_ready = 0;
+  g_session_started = 0;
+  g_worker_clock_frozen = 0;
+  g_wasm_stage = "idle";
 }

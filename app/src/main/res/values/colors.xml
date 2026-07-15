@@ -1,4 +1,9 @@
 <resources>
     <color name="player_background">#000000</color>
+    <color name="accent">#2F80ED</color>
+    <color name="selected_surface">#334F8FD8</color>
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#C7D0D9E4</color>
+    <color name="text_muted">#8390A0B2</color>
+    <color name="divider">#24FFFFFF</color>
 </resources>
-

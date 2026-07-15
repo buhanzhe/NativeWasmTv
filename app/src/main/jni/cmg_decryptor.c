@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,8 +30,9 @@
 #define CMG_MEMORY_EXTEND 2048u
 #define CMG_PLAYER_MEMORY_EXTEND 1968u
 #define CMG_NAL_MEMORY_EXTEND CMG_MEMORY_EXTEND
-#define CMG_PAGE_HOST "https://www.yangshipin.cn/tv/home"
+#define CMG_LOCATION_ORIGIN "https://www.yangshipin.cn"
 #define CMG_LOCATION_HREF "https://www.yangshipin.cn/tv/home"
+#define CMG_PAGE_HOST CMG_LOCATION_ORIGIN
 
 typedef enum cmg_emval_type {
   CMG_EMVAL_EMPTY,
@@ -58,15 +60,27 @@ static u32 g_embind_storage = CMG_EMBIND_STORAGE;
 static u32 g_temp_ret0;
 static char g_player_tag[32];
 static char g_forced_player_tag[32];
+static char g_forced_location_href[256];
 static int g_player_active;
 static int g_player_init_trap;
+static u32 g_player_init_result;
 static u32 g_update_tag;
 static u32 g_logged_update_tag;
+static uint64_t g_forced_clock_ms;
 static cmg_emval_handle g_emval_handles[64];
 static u32 g_emval_free_list[64];
 static size_t g_emval_free_count;
 static u32 g_emval_handle_count;
 static int g_location_property_reads;
+static const char* g_trace_phase = "idle";
+static int g_env_read_log_count;
+static int g_import_log_count;
+static int g_update_call_log_count;
+static int g_heap_log_count;
+static u32 g_decode_data_address;
+static u32 g_decode_data_capacity;
+static u32 g_decode_tag_address;
+static u32 g_decode_tag_capacity;
 
 u32 (*Z_envZ___table_baseZ_i) = &g_table_base;
 u32 (*Z_envZ_aZ_i) = &g_temp_double_ptr;
@@ -81,6 +95,18 @@ static uint8_t* cmg_pointer(u32 address, size_t size) {
     return NULL;
   }
   return g_memory.data + address;
+}
+
+static u32 cmg_dynamic_top(void) {
+  uint32_t* top = (uint32_t*) cmg_pointer(CMG_DYNAMIC_TOP_PTR, sizeof(uint32_t));
+  return top == NULL ? 0 : *top;
+}
+
+static void cmg_set_dynamic_top(u32 value) {
+  uint32_t* top = (uint32_t*) cmg_pointer(CMG_DYNAMIC_TOP_PTR, sizeof(uint32_t));
+  if (top != NULL) {
+    *top = value;
+  }
 }
 
 static int cmg_apply_memory_init(void) {
@@ -164,6 +190,14 @@ static u32 cmg_register_emval_destructors(void) {
   return handle;
 }
 
+static u32 cmg_register_emval_location(void) {
+  u32 handle = cmg_allocate_emval_handle();
+  if (handle > 4) {
+    g_emval_handles[handle].type = CMG_EMVAL_LOCATION;
+  }
+  return handle;
+}
+
 static void cmg_release_emval_handle(u32 handle) {
   if (handle <= 4 || handle >= g_emval_handle_count || g_emval_handles[handle].refcount == 0) {
     return;
@@ -214,22 +248,45 @@ static u32 cmg_write_tag_buffer(const char* text, u32 extra, int clear_buffer) {
 }
 
 static u32 cmg_update_player_with_fresh_tag(void) {
-  u32 tag_address = cmg_write_tag_buffer(g_player_tag, CMG_MEMORY_EXTEND, 1);
+  const char* previous_phase = g_trace_phase;
+  u32 tag_address;
   u32 update_tag = 0;
+  int should_log = g_update_call_log_count < 24;
+  /* hls.cmg.js clears the complete tag + MemoryExtend allocation before
+   * copying mediaTagId. UpdatePlayer reads beyond the string terminator. */
+  tag_address = cmg_write_tag_buffer(g_player_tag, CMG_MEMORY_EXTEND, 1);
+  g_trace_phase = "update";
+  if (should_log) {
+    LOGI("CMG UpdatePlayer begin tagAddr=%u size=%u top=%u g6=%u g7=%u g9=%u",
+        tag_address, (u32) (strlen(g_player_tag) + CMG_MEMORY_EXTEND),
+        cmg_dynamic_top(), cmg_debug_get_g6(), cmg_debug_get_g7(), cmg_debug_get_g9());
+  }
   if (cmg_pointer(tag_address, strlen(g_player_tag) + CMG_MEMORY_EXTEND) != NULL) {
     update_tag = (*Z_daZ_ii)(tag_address);
+  }
+  if (should_log || update_tag != g_logged_update_tag) {
+    LOGI("CMG UpdatePlayer end result=%08x top=%u g6=%u g7=%u g9=%u",
+        update_tag, cmg_dynamic_top(), cmg_debug_get_g6(), cmg_debug_get_g7(),
+        cmg_debug_get_g9());
   }
   if (tag_address != 0) {
     (*Z_BaZ_vi)(tag_address);
   }
+  if (should_log) {
+    LOGI("CMG UpdatePlayer free tagAddr=%u top=%u", tag_address, cmg_dynamic_top());
+  }
+  g_update_call_log_count++;
+  g_trace_phase = previous_phase;
   return update_tag;
 }
 
 static u32 cmg_return_js_string(const char* text) {
   size_t length = strlen(text) + 1;
-  u32 address = (*Z_EaZ_ii)((u32) length);
-  uint8_t* target = cmg_pointer(address, length);
+  size_t total = length;
+  u32 address = (*Z_EaZ_ii)((u32) total);
+  uint8_t* target = cmg_pointer(address, total);
   if (target != NULL) {
+    memset(target, 0, total);
     memcpy(target, text, length);
   }
   return address;
@@ -253,46 +310,123 @@ static const char* cmg_emval_text(u32 handle) {
   return "";
 }
 
-static u32 env_now_ms(void) {
+static const char* cmg_location_href(void) {
+  return g_forced_location_href[0] != '\0' ? g_forced_location_href : CMG_LOCATION_HREF;
+}
+
+static void cmg_log_env_read(const char* api, const char* name, const char* value) {
+  if (g_env_read_log_count < 48) {
+    LOGI("CMG env %s phase=%s %s -> %s",
+        api, g_trace_phase, name == NULL ? "(null)" : name, value == NULL ? "(null)" : value);
+    g_env_read_log_count++;
+  }
+}
+
+static int cmg_should_log_import(void) {
+  return g_import_log_count < 96
+      && strcmp(g_trace_phase, "idle") != 0;
+}
+
+static void cmg_log_import(const char* api, const char* format, ...) {
+  va_list args;
+  char message[512];
+  if (!cmg_should_log_import()) {
+    return;
+  }
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+  LOGI("CMG import %s phase=%s top=%u g6=%u g7=%u g9=%u %s",
+      api, g_trace_phase, cmg_dynamic_top(), cmg_debug_get_g6(),
+      cmg_debug_get_g7(), cmg_debug_get_g9(), message);
+  g_import_log_count++;
+}
+
+static void cmg_hex_bytes(u32 address, size_t size, char* output, size_t output_size) {
+  size_t i;
+  uint8_t* bytes;
+  size_t limit;
+  if (output_size == 0) {
+    return;
+  }
+  output[0] = '\0';
+  bytes = cmg_pointer(address, size);
+  if (bytes == NULL) {
+    return;
+  }
+  limit = size;
+  if (limit > (output_size - 1) / 2) {
+    limit = (output_size - 1) / 2;
+  }
+  for (i = 0; i < limit; i++) {
+    snprintf(output + i * 2, output_size - i * 2, "%02x", bytes[i]);
+  }
+}
+
+static u32 cmg_u32_at(u32 address) {
+  uint32_t* value = (uint32_t*) cmg_pointer(address, sizeof(uint32_t));
+  return value == NULL ? 0u : *value;
+}
+
+static void cmg_log_heap_snapshot(const char* label) {
+  char stack_a[129];
+  char stack_b[129];
+  char heap_a[193];
+  if (g_heap_log_count >= 48 || strcmp(g_trace_phase, "init") != 0) {
+    return;
+  }
+  cmg_hex_bytes(18336u, 64, stack_a, sizeof(stack_a));
+  cmg_hex_bytes(18656u, 64, stack_b, sizeof(stack_b));
+  cmg_hex_bytes(6691728u, 96, heap_a, sizeof(heap_a));
+  LOGI("CMG heap %s top=%u g6=%u g7=%u g9=%u s18336=%s s18656=%s h6691728=%s",
+      label, cmg_dynamic_top(), cmg_debug_get_g6(), cmg_debug_get_g7(),
+      cmg_debug_get_g9(), stack_a, stack_b, heap_a);
+  g_heap_log_count++;
+}
+
+static uint64_t cmg_now_ms64(void) {
   struct timeval now;
+  if (g_forced_clock_ms != 0u) {
+    return g_forced_clock_ms;
+  }
   gettimeofday(&now, NULL);
-  return (u32) ((uint64_t) now.tv_sec * 1000u + (uint64_t) now.tv_usec / 1000u);
+  return (uint64_t) now.tv_sec * 1000u + (uint64_t) now.tv_usec / 1000u;
+}
+
+static u32 env_now_ms(void) {
+  return (u32) cmg_now_ms64();
 }
 
 static void cmg_make_player_tag(void) {
-  struct timeval now;
   uint64_t millis;
   if (g_forced_player_tag[0] != '\0') {
     snprintf(g_player_tag, sizeof(g_player_tag), "%s", g_forced_player_tag);
     return;
   }
-  gettimeofday(&now, NULL);
-  millis = (uint64_t) now.tv_sec * 1000u + (uint64_t) now.tv_usec / 1000u;
+  millis = cmg_now_ms64();
   snprintf(g_player_tag, sizeof(g_player_tag), "%llu", (unsigned long long) millis);
 }
 
 static u32 import_e(void) { return g_temp_ret0; }
 static void import_f(u32 value) { g_temp_ret0 = value; }
 static u32 import_g(u32 timeval_address, u32 timezone_address) {
-  struct timeval now;
+  uint64_t millis;
   uint8_t* target;
   (void) timezone_address;
-  gettimeofday(&now, NULL);
+  millis = cmg_now_ms64();
   target = cmg_pointer(timeval_address, 8);
   if (target == NULL) {
     return (u32) -1;
   }
-  ((u32*) target)[0] = (u32) now.tv_sec;
-  ((u32*) target)[1] = (u32) now.tv_usec;
+  ((u32*) target)[0] = (u32) (millis / 1000u);
+  ((u32*) target)[1] = (u32) ((millis % 1000u) * 1000u);
   return 0;
 }
 static void import_h(u32 a, u32 b, u32 c, u32 d, u32 e) {
   (void) a; (void) b; (void) c; (void) d; (void) e;
 }
 static f64 import_i(void) {
-  struct timeval now;
-  gettimeofday(&now, NULL);
-  return (f64) now.tv_sec * 1000.0 + (f64) now.tv_usec / 1000.0;
+  return (f64) cmg_now_ms64();
 }
 static void import_j(void) { LOGE("CMG pure virtual call"); wasm_rt_trap(WASM_RT_TRAP_UNREACHABLE); }
 static void import_k(u32 a, u32 b) { (void) a; (void) b; }
@@ -353,28 +487,39 @@ static u32 import_z(u32 operation, u32 argument) {
   if (name == NULL) {
     return 0;
   }
-  if (strncmp(name, "self.location.", strlen("self.location.")) == 0) {
-    wasm_rt_trap(WASM_RT_TRAP_UNREACHABLE);
-    return 0;
-  }
   if (strcmp(name, "self.location.href") == 0) {
-    return cmg_return_js_string(CMG_LOCATION_HREF);
+    cmg_log_env_read("z", name, cmg_location_href());
+    return cmg_return_js_string(cmg_location_href());
+  }
+  if (strcmp(name, "self.location.origin") == 0) {
+    cmg_log_env_read("z", name, CMG_LOCATION_ORIGIN);
+    return cmg_return_js_string(CMG_LOCATION_ORIGIN);
   }
   if (strcmp(name, "self.location.host") == 0) {
+    cmg_log_env_read("z", name, "www.yangshipin.cn");
     return cmg_return_js_string("www.yangshipin.cn");
   }
   if (strcmp(name, "self.location.protocol") == 0) {
+    cmg_log_env_read("z", name, "https:");
     return cmg_return_js_string("https:");
   }
   if (strcmp(name, "location.href") == 0) {
-    return cmg_return_js_string(CMG_LOCATION_HREF);
+    cmg_log_env_read("z", name, cmg_location_href());
+    return cmg_return_js_string(cmg_location_href());
+  }
+  if (strcmp(name, "location.origin") == 0) {
+    cmg_log_env_read("z", name, CMG_LOCATION_ORIGIN);
+    return cmg_return_js_string(CMG_LOCATION_ORIGIN);
   }
   if (strcmp(name, "location.host") == 0) {
+    cmg_log_env_read("z", name, "www.yangshipin.cn");
     return cmg_return_js_string("www.yangshipin.cn");
   }
   if (strcmp(name, "location.protocol") == 0) {
+    cmg_log_env_read("z", name, "https:");
     return cmg_return_js_string("https:");
   }
+  cmg_log_env_read("z", name, "");
   return cmg_return_js_string("");
 }
 static void import_A(void) { LOGE("CMG abort"); wasm_rt_trap(WASM_RT_TRAP_UNREACHABLE); }
@@ -395,61 +540,107 @@ static u32 import_B(u32 type, u32 value_address) {
   }
   length_pointer = (uint32_t*) cmg_pointer(string_address, sizeof(uint32_t));
   if (length_pointer == NULL) {
+    cmg_log_import("B", "type=%u value=%u string=%u missing-length",
+        type, value_address, string_address);
     return 1;
   }
   if (*length_pointer > 4096u) {
+    cmg_log_import("B", "type=%u value=%u string=%u bad-length=%u",
+        type, value_address, string_address, *length_pointer);
     return 1;
   }
   text = cmg_pointer(string_address + 4, *length_pointer);
   if (text == NULL) {
+    cmg_log_import("B", "type=%u value=%u string=%u length=%u missing-text",
+        type, value_address, string_address, *length_pointer);
     return 1;
   }
   result = cmg_register_emval_string((const char*) text, *length_pointer);
+  cmg_log_import("B", "type=%u value=%u string=%u length=%u -> handle=%u text=%s",
+      type, value_address, string_address, *length_pointer, result,
+      result <= 4 ? "(failed)" : g_emval_handles[result].text);
+  cmg_log_heap_snapshot("after-B");
   return result;
 }
 static void import_C(u32 destructors) {
+  u32 destructor_address = destructors < g_emval_handle_count
+      ? g_emval_handles[destructors].destructor_address : 0;
+  cmg_log_import("C", "destructors=%u type=%u destructorAddr=%u",
+      destructors,
+      destructors < g_emval_handle_count ? (u32) g_emval_handles[destructors].type : 0,
+      destructor_address);
+  cmg_log_heap_snapshot("before-C");
   if (destructors > 4 && destructors < g_emval_handle_count
       && g_emval_handles[destructors].type == CMG_EMVAL_DESTRUCTORS) {
-    if (g_emval_handles[destructors].destructor_address != 0) {
-      (*Z_AaZ_vi)(g_emval_handles[destructors].destructor_address);
+    if (destructor_address != 0) {
+      (*Z_AaZ_vi)(destructor_address);
     }
     cmg_release_emval_handle(destructors);
   }
+  cmg_log_heap_snapshot("after-C");
 }
 static u32 import_D(u32 object, u32 property_handle) {
   const char* property = property_handle < g_emval_handle_count
       ? g_emval_handles[property_handle].text : NULL;
-  if (object == 1 && property != NULL) {
+  int is_location = object == 1 || (object < g_emval_handle_count
+      && g_emval_handles[object].type == CMG_EMVAL_LOCATION);
+  if (is_location && property != NULL) {
     if (strcmp(property, "href") == 0) {
-      return cmg_register_emval_string(CMG_LOCATION_HREF, strlen(CMG_LOCATION_HREF));
+      cmg_log_env_read("D", property, cmg_location_href());
+      return cmg_register_emval_string(cmg_location_href(), strlen(cmg_location_href()));
+    }
+    if (strcmp(property, "origin") == 0) {
+      cmg_log_env_read("D", property, CMG_LOCATION_ORIGIN);
+      return cmg_register_emval_string(CMG_LOCATION_ORIGIN, strlen(CMG_LOCATION_ORIGIN));
     }
     if (strcmp(property, "host") == 0) {
+      cmg_log_env_read("D", property, "www.yangshipin.cn");
       return cmg_register_emval_string("www.yangshipin.cn", strlen("www.yangshipin.cn"));
     }
     if (strcmp(property, "protocol") == 0) {
+      cmg_log_env_read("D", property, "https:");
       return cmg_register_emval_string("https:", strlen("https:"));
     }
   }
-  if (object == 1) {
+  if (is_location) {
     g_location_property_reads++;
     if (g_location_property_reads == 1) {
-      return cmg_register_emval_string("www.yangshipin.cn", strlen("www.yangshipin.cn"));
+      cmg_log_env_read("D", "(fallback-1)", CMG_LOCATION_ORIGIN);
+      return cmg_register_emval_string(CMG_LOCATION_ORIGIN, strlen(CMG_LOCATION_ORIGIN));
     }
     if (g_location_property_reads == 2) {
-      return cmg_register_emval_string(CMG_LOCATION_HREF, strlen(CMG_LOCATION_HREF));
+      cmg_log_env_read("D", "(fallback-2)", cmg_location_href());
+      return cmg_register_emval_string(cmg_location_href(), strlen(cmg_location_href()));
     }
+    cmg_log_env_read("D", "(fallback-n)", "https:");
     return cmg_register_emval_string("https:", strlen("https:"));
   }
+  cmg_log_env_read("D", property, "(handle-1)");
   return 1;
 }
 static u32 import_E(u32 name_address) {
   const char* name = (const char*) cmg_pointer(name_address, 1);
   if (name != NULL && (strcmp(name, "location") == 0 || strcmp(name, "self") == 0)) {
-    return 1;
+    u32 handle = cmg_register_emval_location();
+    cmg_log_import("E", "nameAddr=%u name=%s -> handle=%u",
+        name_address, name, handle);
+    return handle;
   }
+  cmg_log_import("E", "nameAddr=%u name=%s -> handle=1",
+      name_address, name == NULL ? "(null)" : name);
   return 1;
 }
-static void import_F(u32 handle) { cmg_release_emval_handle(handle); }
+static void import_F(u32 handle) {
+  cmg_emval_type type = handle < g_emval_handle_count ? g_emval_handles[handle].type : CMG_EMVAL_EMPTY;
+  cmg_log_import("F", "handle=%u type=%u ref=%d text=%s",
+      handle,
+      (u32) type,
+      handle < g_emval_handle_count ? g_emval_handles[handle].refcount : 0,
+      (handle < g_emval_handle_count && g_emval_handles[handle].text != NULL)
+          ? g_emval_handles[handle].text : "");
+  cmg_release_emval_handle(handle);
+  cmg_log_heap_snapshot("after-F");
+}
 static f64 import_G(u32 handle, u32 return_type, u32 destructors_address) {
   const char* text = cmg_emval_text(handle);
   size_t length = strlen(text);
@@ -457,26 +648,48 @@ static f64 import_G(u32 handle, u32 return_type, u32 destructors_address) {
   u32 result;
   uint32_t* pointer;
   uint8_t* output;
+  u32 destructors_before;
+  char destructors_hex_before[33];
+  char destructors_hex_after[33];
+  char result_hex_before[129];
+  char result_hex[129];
   (void) return_type;
+  destructors_before = cmg_u32_at(destructors_address);
+  cmg_hex_bytes(destructors_address, 16, destructors_hex_before, sizeof(destructors_hex_before));
+  cmg_hex_bytes(destructors_before, 64, result_hex_before, sizeof(result_hex_before));
   pointer = (uint32_t*) cmg_pointer(destructors_address, sizeof(uint32_t));
   if (pointer == NULL) {
+    cmg_log_import("G", "handle=%u returnType=%u destructorsAddr=%u missing-destructors text=%s",
+        handle, return_type, destructors_address, text);
     return 0.0;
   }
-  *pointer = destructors;
   result = (*Z_EaZ_ii)((u32) length + 5);
+  *pointer = destructors;
   pointer = (uint32_t*) cmg_pointer(result, sizeof(uint32_t));
   if (pointer == NULL) {
+    cmg_log_import("G", "handle=%u returnType=%u destructors=%u result=%u missing-length text=%s",
+        handle, return_type, destructors, result, text);
     return 0.0;
   }
   *pointer = (uint32_t) length;
   output = cmg_pointer(result + 4, length + 1);
   if (output == NULL) {
+    cmg_log_import("G", "handle=%u returnType=%u destructors=%u result=%u length=%u missing-output text=%s",
+        handle, return_type, destructors, result, (u32) length, text);
     return 0.0;
   }
   memcpy(output, text, length + 1);
   if (destructors > 4) {
     g_emval_handles[destructors].destructor_address = result;
   }
+  cmg_hex_bytes(destructors_address, 16, destructors_hex_after, sizeof(destructors_hex_after));
+  cmg_hex_bytes(result, 64, result_hex, sizeof(result_hex));
+  cmg_log_import("G",
+      "handle=%u returnType=%u destructorsAddr=%u d0=%u dh0=%s rbh=%s destructors=%u d1=%u dh1=%s result=%u r0=%u rh=%s length=%u text=%s",
+      handle, return_type, destructors_address, destructors_before, destructors_hex_before, result_hex_before,
+      destructors, cmg_u32_at(destructors_address), destructors_hex_after, result,
+      cmg_u32_at(result), result_hex, (u32) length, text);
+  cmg_log_heap_snapshot("after-G");
   return (f64) result;
 }
 static void import_H(u32 a) { (void) a; }
@@ -592,25 +805,228 @@ static int cmg_init_locked(void) {
   ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0] = CMG_DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS;
   LOGI("CMG init: global constructors");
   (*Z_LaZ_vv)();
-  LOGI("CMG init: dynamic top after ctors=%u",
-      ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0]);
+  ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0] = CMG_DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS;
   cmg_make_player_tag();
   LOGI("CMG init: activate player tag %s", g_player_tag);
   u32 init_tag_address = cmg_write_tag_buffer(g_player_tag, CMG_MEMORY_EXTEND, 1);
-  LOGI("CMG init: activate player");
+  LOGI("CMG init: activate player tagAddr=%u size=%u",
+      init_tag_address, (u32) (strlen(g_player_tag) + CMG_MEMORY_EXTEND));
   g_player_init_trap = wasm_rt_impl_try();
   if (g_player_init_trap == 0) {
-    (*Z_baZ_ii)(init_tag_address);
+    g_trace_phase = "init";
+    LOGI("CMG InitPlayer begin tagAddr=%u top=%u", init_tag_address, cmg_dynamic_top());
+    g_player_init_result = (*Z_baZ_ii)(init_tag_address);
+    LOGI("CMG InitPlayer end result=%08x top=%u", g_player_init_result, cmg_dynamic_top());
+    g_trace_phase = "idle";
+    LOGI("CMG InitPlayer result=%08x clock=%llu",
+        g_player_init_result, (unsigned long long) cmg_now_ms64());
     g_player_active = 1;
-    LOGI("CMG init: dynamic top after InitPlayer=%u",
-        ((u32*) (g_memory.data + CMG_DYNAMIC_TOP_PTR))[0]);
   } else {
     LOGE("CMG InitPlayer trapped: %d", g_player_init_trap);
     g_player_active = 1;
   }
+  if (init_tag_address != 0) {
+    (*Z_BaZ_vi)(init_tag_address);
+    LOGI("CMG InitPlayer free tagAddr=%u top=%u", init_tag_address, cmg_dynamic_top());
+  }
   g_initialized = 1;
   LOGI("CMG wasm runtime initialized");
   return 1;
+}
+
+static void cmg_reset_runtime_locked(void) {
+  u32 handle;
+  if (g_memory.data != NULL) {
+    free(g_memory.data);
+  }
+  if (g_table.data != NULL) {
+    free(g_table.data);
+  }
+  for (handle = 5; handle < g_emval_handle_count; handle++) {
+    free(g_emval_handles[handle].text);
+  }
+  memset(&g_memory, 0, sizeof(g_memory));
+  memset(&g_table, 0, sizeof(g_table));
+  memset(g_player_tag, 0, sizeof(g_player_tag));
+  memset(g_emval_handles, 0, sizeof(g_emval_handles));
+  memset(g_emval_free_list, 0, sizeof(g_emval_free_list));
+  g_initialized = 0;
+  g_player_active = 0;
+  g_player_init_trap = 0;
+  g_player_init_result = 0;
+  g_update_tag = 0;
+  g_logged_update_tag = 0;
+  g_emval_free_count = 0;
+  g_emval_handle_count = 0;
+  g_location_property_reads = 0;
+  g_decode_data_address = 0;
+  g_decode_data_capacity = 0;
+  g_decode_tag_address = 0;
+  g_decode_tag_capacity = 0;
+  g_trace_phase = "idle";
+}
+
+static int cmg_parse_trace_update_delta(const char* update_trace, int wanted_index, uint64_t* delta) {
+  char* copy;
+  char* save;
+  char* token;
+  int index = 0;
+  if (delta == NULL) {
+    return 0;
+  }
+  *delta = 0u;
+  if (update_trace == NULL || update_trace[0] == '\0') {
+    return 0;
+  }
+  copy = strdup(update_trace);
+  if (copy == NULL) {
+    return 0;
+  }
+  token = strtok_r(copy, ";", &save);
+  while (token != NULL) {
+    if (index == wanted_index) {
+      char* comma = strchr(token, ',');
+      if (comma != NULL) {
+        *comma = '\0';
+      }
+      *delta = (uint64_t) strtoull(token, NULL, 10);
+      free(copy);
+      return 1;
+    }
+    index++;
+    token = strtok_r(NULL, ";", &save);
+  }
+  free(copy);
+  return 0;
+}
+
+typedef struct cmg_replay_alloc {
+  u32 official;
+  u32 actual;
+} cmg_replay_alloc;
+
+static u32 cmg_replay_lookup_alloc(cmg_replay_alloc* allocs, int count, u32 official) {
+  int i;
+  for (i = count - 1; i >= 0; i--) {
+    if (allocs[i].official == official) {
+      return allocs[i].actual;
+    }
+  }
+  return 0u;
+}
+
+static void cmg_replay_remove_alloc(cmg_replay_alloc* allocs, int* count, u32 official) {
+  int i;
+  if (allocs == NULL || count == NULL) {
+    return;
+  }
+  for (i = *count - 1; i >= 0; i--) {
+    if (allocs[i].official == official) {
+      int j;
+      for (j = i; j + 1 < *count; j++) {
+        allocs[j] = allocs[j + 1];
+      }
+      (*count)--;
+      return;
+    }
+  }
+}
+
+static int cmg_trace_starts_with(const char* text, const char* prefix) {
+  return text != NULL && strncmp(text, prefix, strlen(prefix)) == 0;
+}
+
+static u32 cmg_parse_event_number(const char* event, const char* marker) {
+  const char* start;
+  if (event == NULL || marker == NULL) {
+    return 0u;
+  }
+  start = strstr(event, marker);
+  if (start == NULL) {
+    return 0u;
+  }
+  start += strlen(marker);
+  return (u32) strtoul(start, NULL, 10);
+}
+
+static u32 cmg_replay_official_trace_locked(const char* native_trace,
+    const char* update_trace, uint64_t update_base_time_ms, int clock_offset_ms) {
+  char* copy;
+  char* save;
+  char* token;
+  char* events[128];
+  int event_count = 0;
+  int i;
+  int update_index = 0;
+  u32 last_tag = 0u;
+  cmg_replay_alloc allocs[64];
+  int alloc_count = 0;
+  const char* previous_phase = g_trace_phase;
+  if (native_trace == NULL || native_trace[0] == '\0' || !g_initialized || !g_player_active) {
+    return 0u;
+  }
+  copy = strdup(native_trace);
+  if (copy == NULL) {
+    return 0u;
+  }
+  token = strtok_r(copy, ";", &save);
+  while (token != NULL && event_count < (int) (sizeof(events) / sizeof(events[0]))) {
+    events[event_count++] = token;
+    token = strtok_r(NULL, ";", &save);
+  }
+  g_trace_phase = "replay";
+  for (i = 0; i < event_count; i++) {
+    const char* event = events[i];
+    if (cmg_trace_starts_with(event, "_CMG_InitPlayer")) {
+      continue;
+    }
+    if (cmg_trace_starts_with(event, "_CMG_UpdatePlayer")) {
+      uint64_t delta = 0u;
+      if (update_base_time_ms > 0u
+          && cmg_parse_trace_update_delta(update_trace, update_index, &delta)) {
+        int64_t clock = (int64_t) update_base_time_ms + (int64_t) delta + clock_offset_ms;
+        g_forced_clock_ms = clock > 0 ? (uint64_t) clock : 0u;
+      }
+      last_tag = cmg_update_player_with_fresh_tag();
+      g_update_tag = last_tag;
+      update_index++;
+      continue;
+    }
+    if (cmg_trace_starts_with(event, "_jsmalloc:")) {
+      u32 size = cmg_parse_event_number(event, "_jsmalloc:");
+      u32 official = cmg_parse_event_number(event, "->");
+      if (i + 1 < event_count
+          && (cmg_trace_starts_with(events[i + 1], "_CMG_UpdatePlayer")
+              || cmg_trace_starts_with(events[i + 1], "_CMG_InitPlayer"))) {
+        continue;
+      }
+      if (size > 0u && official > 0u && alloc_count < (int) (sizeof(allocs) / sizeof(allocs[0]))) {
+        u32 actual = (*Z_CaZ_ii)(size);
+        allocs[alloc_count].official = official;
+        allocs[alloc_count].actual = actual;
+        alloc_count++;
+        if (g_update_call_log_count < 24) {
+          LOGI("CMG replay malloc size=%u official=%u actual=%u", size, official, actual);
+        }
+      }
+      continue;
+    }
+    if (cmg_trace_starts_with(event, "_jsfree:")) {
+      u32 official = cmg_parse_event_number(event, "_jsfree:");
+      u32 actual = cmg_replay_lookup_alloc(allocs, alloc_count, official);
+      if (actual != 0u) {
+        (*Z_BaZ_vi)(actual);
+        cmg_replay_remove_alloc(allocs, &alloc_count, official);
+        if (g_update_call_log_count < 24) {
+          LOGI("CMG replay free official=%u actual=%u", official, actual);
+        }
+      }
+      continue;
+    }
+  }
+  g_trace_phase = previous_phase;
+  free(copy);
+  return last_tag;
 }
 
 JNIEXPORT jstring JNICALL
@@ -664,6 +1080,95 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_configureRuntimeForProbe(
   return JNI_TRUE;
 }
 
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_configureLocationForProbe(
+    JNIEnv* env, jclass clazz, jstring href) {
+  const char* href_chars;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  if (!g_initialized) {
+    memset(g_forced_location_href, 0, sizeof(g_forced_location_href));
+    if (href != NULL) {
+      href_chars = (*env)->GetStringUTFChars(env, href, NULL);
+      if (href_chars != NULL) {
+        snprintf(g_forced_location_href, sizeof(g_forced_location_href), "%s", href_chars);
+        (*env)->ReleaseStringUTFChars(env, href, href_chars);
+      }
+    }
+    LOGI("CMG probe location href=%s",
+        g_forced_location_href[0] == '\0' ? CMG_LOCATION_HREF : g_forced_location_href);
+  }
+  pthread_mutex_unlock(&g_lock);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_initializeRuntimeForProbe(JNIEnv* env, jclass clazz) {
+  jboolean result;
+  (void) env;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  result = cmg_init_locked() ? JNI_TRUE : JNI_FALSE;
+  pthread_mutex_unlock(&g_lock);
+  return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_resetRuntimeForProbe(JNIEnv* env, jclass clazz) {
+  (void) env;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  cmg_reset_runtime_locked();
+  pthread_mutex_unlock(&g_lock);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_getPlayerInitResultForProbe(JNIEnv* env, jclass clazz) {
+  jint result;
+  (void) env;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  result = (jint) g_player_init_result;
+  pthread_mutex_unlock(&g_lock);
+  return result;
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_setClockForProbe(
+    JNIEnv* env, jclass clazz, jlong epoch_millis) {
+  (void) env;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  g_forced_clock_ms = epoch_millis > 0 ? (uint64_t) epoch_millis : 0u;
+  pthread_mutex_unlock(&g_lock);
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_clearClockForProbe(JNIEnv* env, jclass clazz) {
+  (void) env;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  g_forced_clock_ms = 0u;
+  pthread_mutex_unlock(&g_lock);
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_setPlayerTagForProbe(
+    JNIEnv* env, jclass clazz, jstring player_tag) {
+  const char* tag_chars;
+  (void) clazz;
+  pthread_mutex_lock(&g_lock);
+  if (player_tag != NULL) {
+    tag_chars = (*env)->GetStringUTFChars(env, player_tag, NULL);
+    if (tag_chars != NULL) {
+      snprintf(g_player_tag, sizeof(g_player_tag), "%s", tag_chars);
+      (*env)->ReleaseStringUTFChars(env, player_tag, tag_chars);
+    }
+  } else {
+    cmg_make_player_tag();
+  }
+  pthread_mutex_unlock(&g_lock);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_bu_cc_tv_NativeCmgDecryptor_updateSessionForProbe(JNIEnv* env, jclass clazz) {
   u32 update_tag = 0;
@@ -686,6 +1191,39 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_updateSessionForProbe(JNIEnv* env, jclass c
   }
   pthread_mutex_unlock(&g_lock);
   return (jint) update_tag;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_replayOfficialTraceForProbe(
+    JNIEnv* env, jclass clazz, jstring native_trace, jstring update_trace,
+    jlong update_base_time_ms, jint clock_offset_ms) {
+  const char* native_chars = NULL;
+  const char* update_chars = NULL;
+  u32 result;
+  (void) clazz;
+  if (native_trace != NULL) {
+    native_chars = (*env)->GetStringUTFChars(env, native_trace, NULL);
+  }
+  if (update_trace != NULL) {
+    update_chars = (*env)->GetStringUTFChars(env, update_trace, NULL);
+  }
+  pthread_mutex_lock(&g_lock);
+  result = cmg_replay_official_trace_locked(native_chars, update_chars,
+      update_base_time_ms > 0 ? (uint64_t) update_base_time_ms : 0u,
+      (int) clock_offset_ms);
+  if (result != 0u) {
+    g_update_tag = result;
+    g_logged_update_tag = result;
+    LOGI("CMG official trace replay result=%08x", result);
+  }
+  pthread_mutex_unlock(&g_lock);
+  if (native_chars != NULL) {
+    (*env)->ReleaseStringUTFChars(env, native_trace, native_chars);
+  }
+  if (update_chars != NULL) {
+    (*env)->ReleaseStringUTFChars(env, update_trace, update_chars);
+  }
+  return (jint) result;
 }
 
 JNIEXPORT void JNICALL
@@ -792,7 +1330,7 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
     return NULL;
   }
   memcpy(data_pointer, input_bytes, (size_t) length);
-  if (host_length > 0) {
+  if (live && host_length > 0) {
     memcpy(data_pointer + length, CMG_PAGE_HOST, host_length);
   }
   tag_address = cmg_write_tag_buffer(g_player_tag, 0, 0);
@@ -822,9 +1360,10 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
     g_update_tag = update_tag;
   }
   if (length > 100000) {
-    LOGI("CMG decode begin len=%d live=%d runSteps=%d updateTag=%08x dataAddr=%u dataSize=%u tagAddr=%u hostLen=%u",
+    LOGI("CMG decode begin len=%d live=%d runSteps=%d updateTag=%08x dataAddr=%u dataSize=%u tagAddr=%u hostLen=%u top=%u g6=%u g7=%u g9=%u",
         (int) length, live ? 1 : 0, run_steps ? 1 : 0, update_tag,
-        data_address, (u32) data_allocation_size, tag_address, host_length);
+        data_address, (u32) data_allocation_size, tag_address, host_length,
+        cmg_dynamic_top(), cmg_debug_get_g6(), cmg_debug_get_g7(), cmg_debug_get_g9());
   }
   if (run_steps) {
     for (index = 0; index < 8; index++) {
@@ -840,8 +1379,9 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
     output_length = functions[8](data_address, tag_address, (u32) length, host_length);
   }
   if (length > 100000) {
-    LOGI("CMG decode end len=%d out=%u ranSteps=%d head=%02x%02x%02x%02x %02x%02x%02x%02x",
+    LOGI("CMG decode end len=%d out=%u ranSteps=%d top=%u g6=%u g7=%u g9=%u head=%02x%02x%02x%02x %02x%02x%02x%02x",
         (int) length, output_length, ran_steps,
+        cmg_dynamic_top(), cmg_debug_get_g6(), cmg_debug_get_g7(), cmg_debug_get_g9(),
         data_pointer[0], data_pointer[1], data_pointer[2], data_pointer[3],
         data_pointer[32], data_pointer[33], data_pointer[34], data_pointer[35]);
   }
@@ -854,6 +1394,145 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalForProbe(
   pthread_mutex_unlock(&g_lock);
   (*env)->ReleaseByteArrayElements(env, input, input_bytes, JNI_ABORT);
   return output;
+}
+
+/*
+ * Production fast path for Dalvik devices. The old probe API returns a new
+ * byte[] for every NAL, which creates several megabytes of short-lived Java
+ * objects per transport-stream segment. Decode from a range of the PES buffer
+ * and copy the result back only when it fits in the original range.
+ *
+ * Returns the decoded length, -1 on failure, or -2 when the output grew and
+ * therefore cannot be written in place.
+ */
+JNIEXPORT jint JNICALL
+Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalRangeInPlace(
+    JNIEnv* env, jclass clazz, jbyteArray input, jint offset, jint length,
+    jboolean live, jboolean run_steps) {
+  jsize array_length;
+  jbyte* input_bytes;
+  u32 data_address;
+  u32 tag_address;
+  u32 host_length;
+  size_t data_allocation_size;
+  u32 update_tag;
+  u32 output_length;
+  int trap;
+  int index;
+  int result = -1;
+  uint8_t* data_pointer;
+  uint8_t* tag_pointer;
+  size_t tag_length;
+  cmg_decode_function live_functions[9];
+  cmg_decode_function vod_functions[9];
+  cmg_decode_function* functions;
+  (void) clazz;
+
+  if (input == NULL || offset < 0 || length <= 0) {
+    return -1;
+  }
+  array_length = (*env)->GetArrayLength(env, input);
+  if (offset > array_length || length > array_length - offset) {
+    return -1;
+  }
+  input_bytes = (*env)->GetByteArrayElements(env, input, NULL);
+  if (input_bytes == NULL) {
+    return -1;
+  }
+
+  pthread_mutex_lock(&g_lock);
+  if (!cmg_init_locked() || !g_player_active) {
+    pthread_mutex_unlock(&g_lock);
+    (*env)->ReleaseByteArrayElements(env, input, input_bytes, JNI_ABORT);
+    return -1;
+  }
+
+  live_functions[0] = Z_eaZ_iiiii;
+  live_functions[1] = Z_faZ_iiiii;
+  live_functions[2] = Z_gaZ_iiiii;
+  live_functions[3] = Z_haZ_iiiii;
+  live_functions[4] = Z_iaZ_iiiii;
+  live_functions[5] = Z_jaZ_iiiii;
+  live_functions[6] = Z_kaZ_iiiii;
+  live_functions[7] = Z_laZ_iiiii;
+  live_functions[8] = Z_maZ_iiiii;
+  vod_functions[0] = Z_naZ_iiiii;
+  vod_functions[1] = Z_oaZ_iiiii;
+  vod_functions[2] = Z_paZ_iiiii;
+  vod_functions[3] = Z_qaZ_iiiii;
+  vod_functions[4] = Z_raZ_iiiii;
+  vod_functions[5] = Z_saZ_iiiii;
+  vod_functions[6] = Z_taZ_iiiii;
+  vod_functions[7] = Z_uaZ_iiiii;
+  vod_functions[8] = Z_vaZ_iiiii;
+  functions = live ? live_functions : vod_functions;
+  host_length = live ? (u32) strlen(CMG_PAGE_HOST) : 0;
+  data_allocation_size = (size_t) length + CMG_NAL_MEMORY_EXTEND;
+  if (g_decode_data_address == 0
+      || g_decode_data_capacity < (u32) data_allocation_size) {
+    if (g_decode_data_address != 0) {
+      (*Z_BaZ_vi)(g_decode_data_address);
+    }
+    g_decode_data_address = (*Z_CaZ_ii)((u32) data_allocation_size);
+    g_decode_data_capacity = (u32) data_allocation_size;
+  }
+  tag_length = strlen(g_player_tag);
+  if (g_decode_tag_address == 0 || g_decode_tag_capacity < (u32) tag_length) {
+    if (g_decode_tag_address != 0) {
+      (*Z_BaZ_vi)(g_decode_tag_address);
+    }
+    g_decode_tag_address = (*Z_CaZ_ii)((u32) tag_length);
+    g_decode_tag_capacity = (u32) tag_length;
+  }
+  data_address = g_decode_data_address;
+  tag_address = g_decode_tag_address;
+  data_pointer = cmg_pointer(data_address, data_allocation_size);
+  tag_pointer = cmg_pointer(tag_address, tag_length);
+  if (data_pointer == NULL || tag_pointer == NULL) {
+    pthread_mutex_unlock(&g_lock);
+    (*env)->ReleaseByteArrayElements(env, input, input_bytes, JNI_ABORT);
+    return -1;
+  }
+  memcpy(data_pointer, input_bytes + offset, (size_t) length);
+  if (live && host_length > 0) {
+    memcpy(data_pointer + length, CMG_PAGE_HOST, host_length);
+  }
+  memcpy(tag_pointer, g_player_tag, tag_length);
+
+  trap = wasm_rt_impl_try();
+  if (trap == 0) {
+    update_tag = g_update_tag;
+    if (update_tag == 0) {
+      update_tag = cmg_update_player_with_fresh_tag();
+      g_update_tag = update_tag;
+    }
+    if (run_steps) {
+      for (index = 0; index < 8; index++) {
+        if (cmg_should_run_decode_step(update_tag, index)) {
+          functions[7 - index](tag_address, data_address, (u32) length, host_length);
+        }
+      }
+    }
+    if (live) {
+      output_length = functions[8](tag_address, data_address, (u32) length, host_length);
+    } else {
+      output_length = functions[8](data_address, tag_address, (u32) length, host_length);
+    }
+    if (output_length <= (u32) length) {
+      memcpy(input_bytes + offset, data_pointer, (size_t) output_length);
+      result = (int) output_length;
+    } else {
+      result = -2;
+    }
+  } else {
+    LOGE("CMG in-place decode trapped: trap=%d len=%d live=%d updateTag=%08x",
+        trap, (int) length, live ? 1 : 0, g_update_tag);
+  }
+
+  pthread_mutex_unlock(&g_lock);
+  (*env)->ReleaseByteArrayElements(env, input, input_bytes,
+      result >= 0 ? 0 : JNI_ABORT);
+  return (jint) result;
 }
 
 JNIEXPORT jbyteArray JNICALL
@@ -916,7 +1595,7 @@ Java_com_bu_cc_tv_NativeCmgDecryptor_decodeNalSingleStepForProbe(
     return NULL;
   }
   memcpy(data_pointer, input_bytes, (size_t) length);
-  if (host_length > 0) {
+  if (live && host_length > 0) {
     memcpy(data_pointer + length, CMG_PAGE_HOST, host_length);
   }
   tag_address = cmg_write_tag_buffer(g_player_tag, 0, 0);

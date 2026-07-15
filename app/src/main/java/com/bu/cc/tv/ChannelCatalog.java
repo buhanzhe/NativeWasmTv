@@ -13,24 +13,58 @@ final class ChannelCatalog {
             channel("1", "CCTV-1 综合", "cctv1", "600001859", "2024078201"),
             channel("2", "CCTV-2 财经", "cctv2", "600001800", "2024075401"),
             channel("3", "CCTV-3 综艺", "cctv3", "600001801", "2024068501"),
-            channel("4", "CCTV-4 中文国际", "cctv4", "600001814", "2029797101"),
+            channel("4", "CCTV-4 中文国际（亚）", "cctv4", "600001814", "2029797101"),
             channel("5", "CCTV-5 体育", "cctv5", "600001818", "2024078401"),
             channel("5+", "CCTV-5+ 体育赛事", "cctv5plus", "600001817", "2024078001"),
             channel("6", "CCTV-6 电影", "cctv6", "600108442", "2013693901"),
             channel("7", "CCTV-7 国防军事", "cctv7", "600004092", "2024072001"),
             channel("8", "CCTV-8 电视剧", "cctv8", "600001803", "2029793001"),
-            channel("9", "CCTV-9 纪录", "cctv9", "600004078", "2024078601"),
+            channel("9", "CCTV-9 纪录", "cctvjilu", "600004078", "2024078601"),
             channel("10", "CCTV-10 科教", "cctv10", "600001805", "2024078701"),
             channel("11", "CCTV-11 戏曲", "cctv11", "600001806", "2027248701"),
             channel("12", "CCTV-12 社会与法", "cctv12", "600001807", "2027248801"),
             channel("13", "CCTV-13 新闻", "cctv13", "600001811", "2029797201"),
-            channel("14", "CCTV-14 少儿", "cctv14", "600001809", "2027248901"),
+            channel("14", "CCTV-14 少儿", "cctvchild", "600001809", "2027248901"),
             channel("15", "CCTV-15 音乐", "cctv15", "600001815", "2027249001"),
             channel("16", "CCTV-16 奥林匹克", "cctv16", "600098637", "2027249101"),
-            channel("17", "CCTV-17 农业农村", "cctv17", "600001810", "2027249401")
+            channel("17", "CCTV-17 农业农村", "cctv17", "600001810", "2027249401"),
+            channel("4欧", "CCTV-4 中文国际（欧）", "cctveurope", null, null),
+            channel("4美", "CCTV-4 中文国际（美）", "cctvamerica", null, null)
     };
 
     static final Channel[] CHANNELS = CCTV_CHANNELS;
+
+    // Keep this order and naming aligned with https://www.yangshipin.cn/tv/home.
+    // The first group above remains the smaller CCTV.com fallback catalog.
+    static final Channel[] YANGSHIPIN_CCTV_CHANNELS = new Channel[] {
+            yangshipinChannel("1", "CCTV1", "600001859", "2024078201"),
+            yangshipinChannel("2", "CCTV2", "600001800", "2024075401"),
+            yangshipinChannel("3", "CCTV3", "600001801", "2024068501"),
+            yangshipinChannel("4", "CCTV4", "600001814", "2029797101"),
+            yangshipinChannel("5", "CCTV5", "600001818", "2024078401"),
+            yangshipinChannel("6", "CCTV5+", "600001817", "2024078001"),
+            yangshipinChannel("7", "CCTV6", "600108442", "2013693901"),
+            yangshipinChannel("8", "CCTV7", "600004092", "2024072001"),
+            yangshipinChannel("9", "CCTV8", "600001803", "2029793001"),
+            yangshipinChannel("10", "CCTV9", "600004078", "2024078601"),
+            yangshipinChannel("11", "CCTV10", "600001805", "2024078701"),
+            yangshipinChannel("12", "CCTV11", "600001806", "2027248701"),
+            yangshipinChannel("13", "CCTV12", "600001807", "2027248801"),
+            yangshipinChannel("14", "CCTV13", "600001811", "2029797201"),
+            yangshipinChannel("15", "CCTV14", "600001809", "2027248901"),
+            yangshipinChannel("16", "CCTV15", "600001815", "2027249001"),
+            yangshipinChannel("17", "CCTV16-HD", "600098637", "2027249101"),
+            yangshipinChannel("18", "CCTV16(4K）", "600099502", "2027249301"),
+            yangshipinChannel("19", "CCTV17", "600001810", "2027249401"),
+            yangshipinChannel("20", "CCTV4K", "600002264", "2029810301"),
+            yangshipinChannel("21", "CCTV8K", "600156816", "2026774101"),
+            yangshipinChannel("22", "CGTN", "600014550", "2024181701"),
+            yangshipinChannel("23", "CGTN法语频道", "600084704", "2024181801"),
+            yangshipinChannel("24", "CGTN俄语频道", "600084758", "2024181901"),
+            yangshipinChannel("25", "CGTN阿拉伯语频道", "600084782", "2024182001"),
+            yangshipinChannel("26", "CGTN西班牙语频道", "600084744", "2024182101"),
+            yangshipinChannel("27", "CGTN外语纪录频道", "600084781", "2024182301")
+    };
 
     static final Channel[] SATELLITE_CHANNELS = new Channel[] {
             yangshipinChannel("1", "北京卫视", "600002309", "2024052703"),
@@ -57,19 +91,21 @@ final class ChannelCatalog {
             yangshipinChannel("22", "天津卫视", "600152137", "2019927003"),
             yangshipinChannel("23", "吉林卫视", "600190405", "2025561503"),
             yangshipinChannel("24", "陕西卫视", "600190400", "2029795103"),
-            yangshipinChannel("25", "宁夏卫视", "600190737", "2025608503"),
-            yangshipinChannel("26", "内蒙古卫视", "600190401", "2025561203"),
-            yangshipinChannel("27", "云南卫视", "600190402", "2025561303"),
-            yangshipinChannel("28", "山西卫视", "600190407", "2025560803"),
-            yangshipinChannel("29", "青海卫视", "600190406", "2025559103"),
-            yangshipinChannel("30", "西藏卫视", "600190403", "2025558003"),
-            yangshipinChannel("31", "新疆卫视", "600152138", "2019927403")
+            yangshipinChannel("25", "甘肃卫视", "600190408", "2025561703"),
+            yangshipinChannel("26", "宁夏卫视", "600190737", "2025608503"),
+            yangshipinChannel("27", "内蒙古卫视", "600190401", "2025561203"),
+            yangshipinChannel("28", "云南卫视", "600190402", "2025561303"),
+            yangshipinChannel("29", "山西卫视", "600190407", "2025560803"),
+            yangshipinChannel("30", "青海卫视", "600190406", "2025559103"),
+            yangshipinChannel("31", "西藏卫视", "600190403", "2025558003"),
+            yangshipinChannel("32", "中国教育电视台1频道", "600171827", "2022823801"),
+            yangshipinChannel("33", "新疆卫视", "600152138", "2019927403")
     };
 
     static final Group[] GROUPS = new Group[] {
-            new Group("央视网cctv", SOURCE_CCTV_WEB, CCTV_CHANNELS),
-            new Group("央视频cctv", SOURCE_YSP_CCTV, CCTV_CHANNELS),
-            new Group("央视频卫视", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
+            new Group("央视网 CCTV", SOURCE_CCTV_WEB, CCTV_CHANNELS),
+            new Group("央视频 · 央视频道", SOURCE_YSP_CCTV, YANGSHIPIN_CCTV_CHANNELS),
+            new Group("央视频 · 卫视频道", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
     };
 
     private ChannelCatalog() {
@@ -106,7 +142,19 @@ final class ChannelCatalog {
         if (group.source == SOURCE_YSP_SATELLITE) {
             return 0;
         }
+        if (group.source == SOURCE_YSP_CCTV) {
+            return indexOfPid(group.channels, "600001811");
+        }
         return indexOfNumber(group.channels, "13");
+    }
+
+    private static int indexOfPid(Channel[] channels, String pid) {
+        for (int index = 0; index < channels.length; index++) {
+            if (pid.equals(channels[index].yangshipinPid)) {
+                return index;
+            }
+        }
+        return 0;
     }
 
     static String preferHighBitrate(String url) {

@@ -33,7 +33,7 @@ function readMeta(file) {
   return meta;
 }
 
-function loadOfficialWrapper(sourcePath) {
+function loadOfficialWrapper(sourcePath, locationHref) {
   const source = fs.readFileSync(sourcePath, "utf8");
   function extractFunction(name) {
     const start = source.indexOf(`function ${name}`);
@@ -77,6 +77,7 @@ function loadOfficialWrapper(sourcePath) {
     + source.slice(0, cut)
     + ";return {fG,fg,fh,fj,fk,fm,fp,fq,fu,fv,fw,fx};};globalThis.__cmgWrapper=c();}());";
   const sandbox = {
+    __ntvNow: Date.now(),
     console: { log() {}, debug() {}, warn() {}, error() {} },
     setTimeout,
     clearTimeout,
@@ -89,16 +90,25 @@ function loadOfficialWrapper(sourcePath) {
     atob: text => Buffer.from(text, "base64").toString("binary"),
     btoa: text => Buffer.from(text, "binary").toString("base64")
   };
+  const RealDate = Date;
+  function FakeDate(...args) {
+    return args.length ? new RealDate(...args) : new RealDate(sandbox.__ntvNow);
+  }
+  FakeDate.now = () => sandbox.__ntvNow;
+  FakeDate.parse = RealDate.parse;
+  FakeDate.UTC = RealDate.UTC;
+  FakeDate.prototype = RealDate.prototype;
+  sandbox.Date = FakeDate;
   sandbox.self = sandbox;
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.location = {
     origin: "https://www.yangshipin.cn",
-    href: "https://www.yangshipin.cn/tv/home",
+    href: locationHref || "https://www.yangshipin.cn/tv/home",
     protocol: "https:",
     host: "www.yangshipin.cn"
   };
-  sandbox.activeURL = "https://www.yangshipin.cn/tv/home";
+  sandbox.activeURL = "https://www.yangshipin.cn";
   sandbox.document = {
     currentScript: null,
     location: sandbox.location,
@@ -366,9 +376,32 @@ async function main() {
   process.argv = savedArgv;
   console.error("[compare] worker ready");
   console.error("[compare] loading official wrapper");
-  const { sandbox, wrapper } = loadOfficialWrapper(hlsCmgPath);
+  const cmgActiveURL = meta.activeURL || "https://www.yangshipin.cn";
+  const { sandbox, wrapper } = loadOfficialWrapper(hlsCmgPath, meta.locationHref || "");
   const fG = wrapper.fG;
-  sandbox.activeURL = "https://www.yangshipin.cn/tv/home";
+  const initTimeMs = Number(meta.initTimeMs) || 0;
+  const updateBaseTimeMs = Number(meta.updateBaseTimeMs) || 0;
+  const updateTraceEntries = (meta.updateTrace || "")
+    .split(";")
+    .map(entry => entry.split(",", -1))
+    .filter(parts => parts.length > 0 && parts[0] !== "")
+    .map(parts => ({ delta: Number(parts[0]) || 0, tag: parts[1] || "" }));
+  let updateTraceIndex = 0;
+  function setNowForInit() {
+    if (initTimeMs > 0) {
+      sandbox.__ntvNow = initTimeMs;
+    }
+  }
+  function setNowForUpdate() {
+    let traceEntry = null;
+    if (updateBaseTimeMs > 0 && updateTraceIndex < updateTraceEntries.length) {
+      traceEntry = updateTraceEntries[updateTraceIndex];
+      sandbox.__ntvNow = updateBaseTimeMs + traceEntry.delta;
+    }
+    updateTraceIndex++;
+    return traceEntry;
+  }
+  sandbox.activeURL = cmgActiveURL;
   if (callTracePath) {
     for (const name of ["_jsmalloc", "_jsfree", "_CMG_UpdatePlayer", "_CMG_InitPlayer",
         "_CMG_jsdecLive0", "_CMG_jsdecLive1", "_CMG_jsdecLive2", "_CMG_jsdecLive3",
@@ -419,6 +452,7 @@ async function main() {
   callTraceFrees = [];
   callTraceCalls = [];
   importTraceCalls = [];
+  setNowForInit();
   fG.moduleActive(module, mediaTagId, fG.INITPLAYER);
   if (callTracePath) {
     callTraceRows.push({
@@ -491,10 +525,15 @@ async function main() {
     let beforeVmpTag = sandbox.vmpTag || null;
     let activeVmpTag = null;
     let officialDiff = 0;
+    const officialUpdateTraceEntry = setNowForUpdate();
     activeResult = fG.moduleActive(module, mediaTagId, fG.UPDATEPLAYER);
+    if (officialUpdateTraceEntry && officialUpdateTraceEntry.tag) {
+      sandbox.vmpTag = officialUpdateTraceEntry.tag;
+    }
     activeVmpTag = sandbox.vmpTag || null;
     lastVmpTag = sandbox.vmpTag || lastVmpTag;
     if (original.type === 7) {
+      sandbox.activeURL = cmgActiveURL;
       const before = new Uint8Array(original.body);
       const moduleResult = fG.moduleDecData(module, mediaTagId, before, fG.LIVEVIDEO);
       decoded = true;
@@ -511,6 +550,7 @@ async function main() {
       }
     } else if ((original.type === 1 || original.type === 5) && liveDecodeEnabled) {
       targets++;
+      sandbox.activeURL = cmgActiveURL;
       const result = fG.moduleDecData(module, mediaTagId, new Uint8Array(original.body), fG.LIVEVIDEO);
       expected = Buffer.from(result);
       decoded = true;
@@ -626,7 +666,7 @@ async function main() {
     officialDecodedNalCount: decodedCount,
     changedExpectedNalCount: changedExpected,
     changedAppNalCount: changedApp,
-    activeURL: sandbox.activeURL || null,
+    activeURL: cmgActiveURL,
     lastVmpTag,
     firstMismatch
   };

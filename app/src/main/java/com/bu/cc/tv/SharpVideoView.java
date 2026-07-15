@@ -5,6 +5,8 @@ import android.graphics.SurfaceTexture;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.os.Build;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Surface;
@@ -47,6 +49,11 @@ public final class SharpVideoView extends GLSurfaceView {
             }
         });
         requestRender();
+    }
+
+    /** Monotonic time of the most recent frame delivered by MediaCodec. */
+    public long getLastFrameAvailableAt() {
+        return renderer.getLastFrameAvailableAt();
     }
 
     @Override
@@ -116,6 +123,18 @@ public final class SharpVideoView extends GLSurfaceView {
                         + "  gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);\n"
                         + "}\n";
 
+        // KitKat-class GPUs already perform filtered scaling in the external-texture sampler.
+        // A single sample preserves the source resolution while avoiding four extra texture
+        // reads for every output pixel.
+        private static final String PERFORMANCE_FRAGMENT_SHADER =
+                "#extension GL_OES_EGL_image_external : require\n"
+                        + "precision mediump float;\n"
+                        + "uniform samplerExternalOES uTexture;\n"
+                        + "varying vec2 vTexCoord;\n"
+                        + "void main() {\n"
+                        + "  gl_FragColor = texture2D(uTexture, vTexCoord);\n"
+                        + "}\n";
+
         private final SharpVideoView view;
         private final float[] texMatrix = new float[16];
         private final FloatBuffer vertexBuffer;
@@ -135,6 +154,7 @@ public final class SharpVideoView extends GLSurfaceView {
         private int sarDen = 1;
         private float sharpness = BASE_SHARPEN_STRENGTH;
         private boolean frameAvailable;
+        private volatile long lastFrameAvailableAt;
         private SurfaceTexture surfaceTexture;
         private volatile Surface videoSurface;
 
@@ -148,13 +168,16 @@ public final class SharpVideoView extends GLSurfaceView {
         @Override
         public void onSurfaceCreated(GL10 gl, EGLConfig config) {
             GLES20.glClearColor(0f, 0f, 0f, 1f);
-            program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
+            boolean performanceShader = Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT;
+            program = createProgram(VERTEX_SHADER,
+                    performanceShader ? PERFORMANCE_FRAGMENT_SHADER : FRAGMENT_SHADER);
             positionHandle = GLES20.glGetAttribLocation(program, "aPosition");
             texCoordHandle = GLES20.glGetAttribLocation(program, "aTexCoord");
             texMatrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix");
             texelSizeHandle = GLES20.glGetUniformLocation(program, "uTexelSize");
             sharpnessHandle = GLES20.glGetUniformLocation(program, "uSharpness");
             createInputSurface();
+            Log.i(TAG, "GL performance shader=" + performanceShader);
         }
 
         @Override
@@ -204,7 +227,12 @@ public final class SharpVideoView extends GLSurfaceView {
         @Override
         public synchronized void onFrameAvailable(SurfaceTexture surfaceTexture) {
             frameAvailable = true;
+            lastFrameAvailableAt = SystemClock.elapsedRealtime();
             view.requestRender();
+        }
+
+        long getLastFrameAvailableAt() {
+            return lastFrameAvailableAt;
         }
 
         Surface getVideoSurface() {
@@ -223,6 +251,7 @@ public final class SharpVideoView extends GLSurfaceView {
         }
 
         void releaseInputSurface() {
+            lastFrameAvailableAt = 0L;
             if (videoSurface != null) {
                 videoSurface.release();
                 videoSurface = null;

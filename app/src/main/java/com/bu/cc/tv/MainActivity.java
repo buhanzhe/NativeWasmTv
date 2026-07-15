@@ -2,6 +2,7 @@ package com.bu.cc.tv;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
@@ -10,8 +11,6 @@ import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.AdapterView;
@@ -39,6 +38,9 @@ public final class MainActivity extends Activity {
     private static final long CHANNEL_BAR_TIMEOUT_MS = 3000L;
     private static final long PANEL_TIMEOUT_MS = 5000L;
     private static final long EXIT_CONFIRM_TIMEOUT_MS = 2000L;
+    private static final long CHANNEL_PREFETCH_DELAY_MS = 1500L;
+    private static final long CCTV_BUFFERING_RECOVERY_MS = 8000L;
+    private static final long CCTV_VIDEO_STALL_RECOVERY_MS = 8000L;
 
     private final Runnable hideChannelBar = new Runnable() {
         @Override
@@ -55,11 +57,14 @@ public final class MainActivity extends Activity {
 
     private View root;
     private View channelBar;
+    private View loadingPanel;
     private View channelListPanel;
     private TextView channelListTitle;
     private TextView channelName;
     private TextView statusText;
     private TextView videoInfo;
+    private TextView loadingChannel;
+    private TextView loadingStatus;
     private ListView groupList;
     private ListView channelList;
     private ChannelListAdapter groupAdapter;
@@ -68,13 +73,15 @@ public final class MainActivity extends Activity {
     private YangshipinWebResolver yangshipinResolver;
     private SharpVideoView videoView;
     private Surface videoSurface;
-    private SurfaceView plainVideoView;
-    private Surface plainVideoSurface;
     private HlsProxyServer proxy;
+    private boolean proxyStatefulCmgSource;
+    private boolean lowResourceDevice;
+    private File cmgDebugDir;
     private IjkMediaPlayer player;
     private boolean prepared;
-    private boolean usePlainSurfaceForCurrentPlayer;
     private volatile int playRequestId;
+    private int playerStartRetryCount;
+    private int bufferingEventId;
     private int currentGroupIndex;
     private int currentChannelIndex;
     private int browsingGroupIndex;
@@ -83,6 +90,12 @@ public final class MainActivity extends Activity {
     private int videoSarNum = 1;
     private int videoSarDen = 1;
     private long lastBackPressedAt;
+    private long bufferingStartedAt;
+    private long lastRenderedVideoAt;
+    private boolean buffering;
+    private boolean bufferingStatusVisible;
+    private boolean videoFpsObserved;
+    private int stallRecoveryRequestId = -1;
 
     private final Runnable updateVideoInfo = new Runnable() {
         @Override
@@ -97,23 +110,29 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        TlsCompat.install();
+        configureResourceProfile();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applySystemUiVisibility();
         setContentView(R.layout.activity_main);
 
         root = findViewById(R.id.root);
         channelBar = findViewById(R.id.channel_bar);
+        loadingPanel = findViewById(R.id.loading_panel);
         channelListPanel = findViewById(R.id.channel_list_panel);
         channelListTitle = (TextView) findViewById(R.id.channel_list_title);
         channelName = (TextView) findViewById(R.id.channel_name);
         statusText = (TextView) findViewById(R.id.status_text);
         videoInfo = (TextView) findViewById(R.id.video_info);
+        loadingChannel = (TextView) findViewById(R.id.loading_channel);
+        loadingStatus = (TextView) findViewById(R.id.loading_status);
         groupList = (ListView) findViewById(R.id.channel_group_list);
         channelList = (ListView) findViewById(R.id.channel_list);
         groupAdapter = new ChannelListAdapter(this);
         channelAdapter = new ChannelListAdapter(this);
         liveUrlResolver = new LiveUrlResolver(getSharedPreferences("live_url_resolver", MODE_PRIVATE));
-        yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root);
+        yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
+                getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         groupList.setAdapter(groupAdapter);
         channelList.setAdapter(channelAdapter);
         groupList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
@@ -130,11 +149,6 @@ public final class MainActivity extends Activity {
         });
 
         videoView = (SharpVideoView) findViewById(R.id.video_surface);
-        plainVideoView = new SurfaceView(this);
-        plainVideoView.setVisibility(View.GONE);
-        ((FrameLayout) root).addView(plainVideoView, 1,
-                new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT));
         View.OnClickListener openChannelsOnClick = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -148,9 +162,6 @@ public final class MainActivity extends Activity {
             public void onVideoSurfaceCreated(Surface surface) {
                 videoSurface = surface;
                 if (player != null) {
-                    if (usePlainSurfaceForCurrentPlayer) {
-                        return;
-                    }
                     player.setSurface(surface);
                 }
             }
@@ -163,32 +174,6 @@ public final class MainActivity extends Activity {
                 if (videoSurface == surface) {
                     videoSurface = null;
                 }
-            }
-        });
-        plainVideoView.setOnClickListener(openChannelsOnClick);
-        plainVideoView.getHolder().addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceCreated(SurfaceHolder holder) {
-                plainVideoSurface = holder.getSurface();
-                if (player != null && usePlainSurfaceForCurrentPlayer) {
-                    player.setSurface(plainVideoSurface);
-                }
-            }
-
-            @Override
-            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-                plainVideoSurface = holder.getSurface();
-                if (player != null && usePlainSurfaceForCurrentPlayer) {
-                    player.setSurface(plainVideoSurface);
-                }
-            }
-
-            @Override
-            public void surfaceDestroyed(SurfaceHolder holder) {
-                if (player != null && usePlainSurfaceForCurrentPlayer) {
-                    player.setSurface(null);
-                }
-                plainVideoSurface = null;
             }
         });
         root.requestFocus();
@@ -207,8 +192,8 @@ public final class MainActivity extends Activity {
         showChannelMenu(currentGroupIndex);
 
         try {
-            proxy = new HlsProxyServer(getExternalFilesDir("cmg-debug"));
-            proxy.start();
+            cmgDebugDir = getIntent().getBooleanExtra("cmg_debug_dump", false)
+                    ? getExternalFilesDir("cmg-debug") : null;
             switchChannel(currentChannelIndex);
         } catch (Exception error) {
             Log.e(TAG, "Unable to start player", error);
@@ -565,8 +550,18 @@ public final class MainActivity extends Activity {
             channelList.setSelection(currentChannelIndex);
         }
         final int requestId = ++playRequestId;
+        playerStartRetryCount = 0;
         releasePlayer();
         resetVideoLayout();
+        showLoading(channel.name, "正在准备直播");
+        try {
+            resetProxyForChannelSwitch();
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to reset proxy for channel switch", error);
+            hideLoading();
+            showChannelBar(channel.name, "切换失败: " + error.getMessage());
+            return;
+        }
         if (group.source == ChannelCatalog.SOURCE_CCTV_WEB) {
             resolveFallbackUrl(channel, requestId);
             return;
@@ -574,16 +569,52 @@ public final class MainActivity extends Activity {
         resolveYangshipinUrl(channel, requestId);
     }
 
+    private void configureResourceProfile() {
+        ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        int memoryClassMb = manager == null ? 0 : manager.getMemoryClass();
+        int largeMemoryClassMb = manager == null ? 0 : manager.getLargeMemoryClass();
+        boolean systemLowRam = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
+                && manager != null && manager.isLowRamDevice();
+        lowResourceDevice = Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
+                || systemLowRam
+                || (memoryClassMb > 0 && memoryClassMb <= 64);
+        Log.i(TAG, "Resource profile low=" + lowResourceDevice
+                + " memoryClassMb=" + memoryClassMb
+                + " largeMemoryClassMb=" + largeMemoryClassMb
+                + " heapLimitMb=" + (Runtime.getRuntime().maxMemory() / (1024L * 1024L)));
+    }
+
+    private void resetProxyForChannelSwitch() throws IOException {
+        boolean statefulCmgSource = currentGroup().source != ChannelCatalog.SOURCE_CCTV_WEB;
+        HlsProxyServer.resetCmgSessionForChannelSwitch();
+        HlsProxyServer previous = proxy;
+        proxy = null;
+        if (previous != null) {
+            // A CCTV proxy may still have prefetched segments queued for decryption.
+            // Closing it first cancels the old stateful H5E session before the new one starts.
+            previous.close();
+        }
+        HlsProxyServer next = new HlsProxyServer(
+                cmgDebugDir, statefulCmgSource, lowResourceDevice);
+        next.start();
+        proxy = next;
+        proxyStatefulCmgSource = statefulCmgSource;
+    }
+
     private void resolveYangshipinUrl(final Channel channel, final int requestId) {
         if (channel.yangshipinPid == null) {
             resolveFallbackUrl(channel, requestId);
             return;
         }
+        updateLoadingStatus("正在获取央视频线路");
         showChannelBar(channel.name, "正在解析央视频源");
         yangshipinResolver.resolve(requestId, channel, new YangshipinWebResolver.Callback() {
             @Override
             public void onResolved(int resolvedRequestId, String url,
-                    String cmgTag, String cmgInitialUpdateTag, String cmgUpdateTag) {
+                    String cmgTag, String cmgInitialUpdateTag, String cmgUpdateTag,
+                    int cmgUpdateWarmupCount, long cmgInitTimeMs,
+                    long cmgUpdateBaseTimeMs, String cmgUpdateTrace,
+                    String cmgNativeTrace) {
                 if (resolvedRequestId != playRequestId) {
                     return;
                 }
@@ -591,12 +622,27 @@ public final class MainActivity extends Activity {
                     int initialUpdateTag = parseHexUpdateTag(cmgInitialUpdateTag);
                     int updateTag = parseHexUpdateTag(cmgUpdateTag);
                     HlsProxyServer.configureCmgDebugContext(cmgTag,
-                            cmgInitialUpdateTag, cmgUpdateTag);
+                            cmgInitialUpdateTag, cmgUpdateTag,
+                            cmgInitTimeMs, cmgUpdateBaseTimeMs, cmgUpdateTrace);
                     HlsProxyServer.configureCmgUpdateTags(initialUpdateTag, updateTag);
+                    NativeCmgDecryptor.configureLocationForProbe(
+                            "https://www.yangshipin.cn/tv/home?pid=" + channel.yangshipinPid);
                     boolean configured = NativeCmgDecryptor.configureRuntimeForProbe(cmgTag, 0);
+                    CmgWarmupResult warmup = configured
+                            ? warmupCmgUpdateSession(cmgUpdateWarmupCount,
+                                    cmgInitTimeMs, cmgUpdateBaseTimeMs, cmgUpdateTrace,
+                                    cmgNativeTrace, initialUpdateTag, updateTag)
+                            : CmgWarmupResult.empty();
+                    HlsProxyServer.configureCmgRuntimeClock(
+                            cmgUpdateBaseTimeMs > 0L ? cmgUpdateBaseTimeMs : cmgInitTimeMs,
+                            warmup.clockOffsetMs);
                     Log.i(TAG, "Configured CMG runtime from Yangshipin tag="
                             + cmgTag + " initialTag=" + cmgInitialUpdateTag
-                            + " updateTag=" + cmgUpdateTag + " ok=" + configured);
+                            + " updateTag=" + cmgUpdateTag + " ok=" + configured
+                            + " warmup=" + warmup.count + "/" + cmgUpdateWarmupCount
+                            + " initTime=" + cmgInitTimeMs
+                            + " clockOffsetMs=" + warmup.clockOffsetMs
+                            + " traceLen=" + (cmgUpdateTrace == null ? 0 : cmgUpdateTrace.length()));
                 }
                 startResolvedPlayer(channel, url);
             }
@@ -611,6 +657,7 @@ public final class MainActivity extends Activity {
                     resolveFallbackUrl(channel, requestId);
                 } else {
                     Log.w(TAG, "YSP resolve failed for " + channel.name + ": " + reason);
+                    hideLoading();
                     showChannelBar(channel.name, "央视频源解析失败: " + reason);
                 }
             }
@@ -629,11 +676,177 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static CmgWarmupResult warmupCmgUpdateSession(int requestedCount, long initTimeMs,
+            long baseTimeMs, String trace, String nativeTrace, int targetInitTag,
+            int targetUpdateTag) {
+        int count = Math.max(0, Math.min(requestedCount, 96));
+        String[] entries = trace == null || trace.length() == 0
+                ? new String[0] : trace.split(";");
+        if (count == 0 && targetInitTag == 0 && targetUpdateTag == 0
+                && entries.length == 0
+                && (nativeTrace == null || nativeTrace.length() == 0)) {
+            return CmgWarmupResult.empty();
+        }
+        int clockOffsetMs = 0;
+        if (initTimeMs > 0L) {
+            int matchedOffset = initializeCmgAtOfficialInitTag(initTimeMs, targetInitTag);
+            clockOffsetMs = matchedOffset;
+            Log.i(TAG, "CMG native traced InitPlayer time=" + initTimeMs
+                    + " offset=" + matchedOffset
+                    + " initResult=" + String.format(Locale.US, "%08x",
+                    NativeCmgDecryptor.getPlayerInitResultForProbe()));
+        }
+        if (nativeTrace != null && nativeTrace.length() > 0) {
+            int replayTag = NativeCmgDecryptor.replayOfficialTraceForProbe(
+                    nativeTrace, trace, baseTimeMs, clockOffsetMs);
+            Log.i(TAG, "CMG native official trace replay tag="
+                    + String.format(Locale.US, "%08x", replayTag)
+                    + " target=" + String.format(Locale.US, "%08x", targetUpdateTag)
+                    + " traceLen=" + nativeTrace.length());
+            if (replayTag != 0) {
+                NativeCmgDecryptor.clearClockForProbe();
+                return new CmgWarmupResult(count, clockOffsetMs);
+            }
+        }
+        if (baseTimeMs > 0L && entries.length > 0) {
+            int tracedCount = Math.min(count, entries.length);
+            int firstMismatch = -1;
+            int lastTag = 0;
+            for (int index = 0; index < tracedCount; index++) {
+                String[] parts = entries[index].split(",", -1);
+                long deltaMs = parsePositiveLong(parts.length > 0 ? parts[0] : "");
+                String officialTagText = parts.length > 1 ? parts[1] : "";
+                NativeCmgDecryptor.setClockForProbe(baseTimeMs + deltaMs + clockOffsetMs);
+                lastTag = NativeCmgDecryptor.updateSessionForProbe();
+                int officialTag = parseHexUpdateTag(officialTagText);
+                if (firstMismatch < 0 && officialTag != 0 && lastTag != officialTag) {
+                    firstMismatch = index;
+                    Log.i(TAG, "CMG traced warmup first tag mismatch index=" + index
+                            + " nativeTag=" + String.format(Locale.US, "%08x", lastTag)
+                            + " officialTag=" + officialTagText
+                            + " deltaMs=" + deltaMs);
+                }
+            }
+            NativeCmgDecryptor.clearClockForProbe();
+            Log.i(TAG, "CMG native traced UpdatePlayer warmup count=" + tracedCount
+                    + "/" + count + " lastTag=" + String.format(Locale.US, "%08x", lastTag)
+                    + " firstMismatch=" + firstMismatch
+                    + " baseTimeMs=" + baseTimeMs);
+            return new CmgWarmupResult(tracedCount, clockOffsetMs);
+        }
+        int lastTag = 0;
+        for (int index = 0; index < count; index++) {
+            lastTag = NativeCmgDecryptor.updateSessionForProbe();
+        }
+        NativeCmgDecryptor.clearClockForProbe();
+        if (count > 0) {
+            Log.i(TAG, "CMG native UpdatePlayer warmup count=" + count
+                    + " lastTag=" + String.format(Locale.US, "%08x", lastTag));
+        }
+        return new CmgWarmupResult(count, clockOffsetMs);
+    }
+
+    private static final class CmgWarmupResult {
+        final int count;
+        final int clockOffsetMs;
+
+        CmgWarmupResult(int count, int clockOffsetMs) {
+            this.count = count;
+            this.clockOffsetMs = clockOffsetMs;
+        }
+
+        static CmgWarmupResult empty() {
+            return new CmgWarmupResult(0, 0);
+        }
+    }
+
+    private static int initializeCmgAtOfficialInitTag(long initTimeMs, int targetInitTag) {
+        int bestOffset = 0;
+        int bestResult = 0;
+        int[] offsets = new int[121];
+        offsets[0] = 0;
+        int count = 1;
+        for (int offset = 1; offset <= 60; offset++) {
+            offsets[count++] = offset;
+            offsets[count++] = -offset;
+        }
+        for (int index = 0; index < count; index++) {
+            int offset = offsets[index];
+            NativeCmgDecryptor.resetRuntimeForProbe();
+            NativeCmgDecryptor.setClockForProbe(initTimeMs + offset);
+            if (!NativeCmgDecryptor.initializeRuntimeForProbe()) {
+                continue;
+            }
+            int result = NativeCmgDecryptor.getPlayerInitResultForProbe();
+            if (index == 0) {
+                bestResult = result;
+            }
+            if (targetInitTag != 0 && result == targetInitTag) {
+                Log.i(TAG, "CMG native InitPlayer matched official tag="
+                        + String.format(Locale.US, "%08x", targetInitTag)
+                        + " offsetMs=" + offset);
+                return offset;
+            }
+            bestOffset = offset;
+        }
+        NativeCmgDecryptor.resetRuntimeForProbe();
+        NativeCmgDecryptor.setClockForProbe(initTimeMs);
+        NativeCmgDecryptor.initializeRuntimeForProbe();
+        Log.w(TAG, "CMG native InitPlayer did not match official tag target="
+                + String.format(Locale.US, "%08x", targetInitTag)
+                + " first=" + String.format(Locale.US, "%08x", bestResult)
+                + " searchedOffsetMs=" + bestOffset);
+        return 0;
+    }
+
+    private static void waitForCmgUpdateTag(int currentTag, int targetTag) {
+        if (targetTag == 0 || currentTag == targetTag) {
+            return;
+        }
+        long deadline = android.os.SystemClock.elapsedRealtime() + 1500L;
+        int lastTag = currentTag;
+        int attempts = 0;
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            attempts++;
+            lastTag = NativeCmgDecryptor.updateSessionForProbe();
+            if (lastTag == targetTag) {
+                Log.i(TAG, "CMG native reached official updateTag="
+                        + String.format(Locale.US, "%08x", targetTag)
+                        + " attempts=" + attempts);
+                return;
+            }
+            try {
+                Thread.sleep(10L);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        Log.w(TAG, "CMG native did not reach official updateTag target="
+                + String.format(Locale.US, "%08x", targetTag)
+                + " last=" + String.format(Locale.US, "%08x", lastTag)
+                + " attempts=" + attempts);
+    }
+
+    private static long parsePositiveLong(String text) {
+        if (text == null || text.length() == 0) {
+            return 0L;
+        }
+        try {
+            long value = Long.parseLong(text);
+            return Math.max(0L, value);
+        } catch (NumberFormatException error) {
+            return 0L;
+        }
+    }
+
     private void resolveFallbackUrl(final Channel channel, final int requestId) {
         if (channel.url == null) {
+            hideLoading();
             showChannelBar(channel.name, "没有可用的备用源");
             return;
         }
+        updateLoadingStatus("正在获取高清线路");
         showChannelBar(channel.name, "正在解析备用源");
         new Thread(new Runnable() {
             @Override
@@ -659,43 +872,52 @@ public final class MainActivity extends Activity {
     }
 
     private void startResolvedPlayer(Channel channel, String streamUrl) {
+        updateLoadingStatus("正在连接视频");
         try {
             startPlayer(channel, streamUrl);
         } catch (IOException error) {
             Log.e(TAG, "Unable to play " + channel.name, error);
+            hideLoading();
             showChannelBar(channel.name, "连接失败: " + error.getMessage());
         }
     }
 
-    private void startPlayer(final Channel channel, String streamUrl) throws IOException {
+    private void startPlayer(final Channel channel, final String streamUrl) throws IOException {
         releasePlayer();
         resetVideoLayout();
         IjkMediaPlayer.loadLibrariesOnce(null);
 
         final IjkMediaPlayer nextPlayer = new IjkMediaPlayer();
         player = nextPlayer;
-        boolean yangshipinSource = streamUrl != null
-                && streamUrl.toLowerCase(Locale.US).contains("ysp.cctv.cn");
-        usePlainSurfaceForCurrentPlayer = yangshipinSource;
-        videoView.setVisibility(usePlainSurfaceForCurrentPlayer ? View.GONE : View.VISIBLE);
-        plainVideoView.setVisibility(usePlainSurfaceForCurrentPlayer ? View.VISIBLE : View.GONE);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec", 1);
+        boolean softwareDecode = getIntent().getBooleanExtra("debug_software_decode", false);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec",
+                softwareDecode ? 0 : 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate", 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-handle-resolution-change", 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 0);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,
+                "mediacodec-handle-resolution-change", 1);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", 0);
+        nextPlayer.setVolume(1.0f, 1.0f);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 24 * 1024 * 1024);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", 30);
+        final boolean cctvSource = currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB;
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames",
+                cctvSource ? 100 : 60);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max_cached_duration", 30000);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "first-high-water-mark-ms",
+                cctvSource ? 5000 : 3500);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "next-high-water-mark-ms", 5000);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "last-high-water-mark-ms", 5000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 1024 * 1024);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzemaxduration", 100L * 1000L);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index", -6);
-        if (usePlainSurfaceForCurrentPlayer && plainVideoSurface != null) {
-            nextPlayer.setSurface(plainVideoSurface);
-        } else if (!usePlainSurfaceForCurrentPlayer && videoSurface != null) {
+        /* Every channel switch creates a localhost proxy on a new port. IJK 0.8.8
+         * can retain an empty localhost DNS-cache entry from the closed proxy,
+         * making the first connection to the new port fail spuriously. */
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 256 * 1024);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index", -3);
+        if (videoSurface != null) {
             nextPlayer.setSurface(videoSurface);
         }
         nextPlayer.setOnVideoSizeChangedListener(new IMediaPlayer.OnVideoSizeChangedListener() {
@@ -715,9 +937,13 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 prepared = true;
+                lastRenderedVideoAt = SystemClock.elapsedRealtime();
+                videoFpsObserved = false;
                 updateVideoLayout(mediaPlayer);
                 mediaPlayer.start();
                 scheduleVideoInfoRefresh();
+                prefetchNearbyChannels(channel);
+                hideLoading();
                 showChannelBar(channel.name, "直播播放中");
             }
         });
@@ -728,9 +954,47 @@ public final class MainActivity extends Activity {
                     return false;
                 }
                 if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                    showChannelBar(channel.name, "正在缓冲");
+                    buffering = true;
+                    bufferingStartedAt = SystemClock.elapsedRealtime();
+                    final int eventId = ++bufferingEventId;
+                    final int requestId = playRequestId;
+                    final IjkMediaPlayer watchedPlayer = nextPlayer;
+                    channelBar.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (buffering && eventId == bufferingEventId
+                                    && requestId == playRequestId) {
+                                bufferingStatusVisible = true;
+                                showChannelBar(channel.name, "正在缓冲");
+                            }
+                        }
+                    }, 400L);
+                    if (cctvSource) {
+                        channelBar.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (buffering && eventId == bufferingEventId
+                                        && requestId == playRequestId
+                                        && player == watchedPlayer) {
+                                    recoverCctvPlayback(requestId, watchedPlayer,
+                                            "buffering for " + CCTV_BUFFERING_RECOVERY_MS + "ms");
+                                }
+                            }
+                        }, CCTV_BUFFERING_RECOVERY_MS);
+                    }
                 } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                    showChannelBar(channel.name, "直播播放中");
+                    long elapsed = buffering
+                            ? SystemClock.elapsedRealtime() - bufferingStartedAt : 0L;
+                    buffering = false;
+                    bufferingEventId++;
+                    if (bufferingStatusVisible) {
+                        bufferingStatusVisible = false;
+                        showChannelBar(channel.name, "直播播放中");
+                    }
+                    if (elapsed >= 250L) {
+                        Log.i(TAG, "Buffering recovered channel=" + channel.name
+                                + " elapsedMs=" + elapsed);
+                    }
                 }
                 return false;
             }
@@ -739,6 +1003,28 @@ public final class MainActivity extends Activity {
             @Override
             public boolean onError(IMediaPlayer mediaPlayer, int what, int extra) {
                 if (player == mediaPlayer) {
+                    if (playerStartRetryCount < 2) {
+                        final int requestId = playRequestId;
+                        final IMediaPlayer failedPlayer = mediaPlayer;
+                        final int retry = ++playerStartRetryCount;
+                        Log.w(TAG, "Player start failed; retrying local proxy request "
+                                + retry + "/2 error=" + what + "/" + extra);
+                        channelBar.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (requestId != playRequestId || player != failedPlayer) {
+                                    return;
+                                }
+                                try {
+                                    startPlayer(channel, streamUrl);
+                                } catch (IOException error) {
+                                    Log.e(TAG, "Unable to retry " + channel.name, error);
+                                }
+                            }
+                        }, 500L);
+                        return true;
+                    }
+                    hideLoading();
                     showChannelBar(channel.name, "播放错误: " + what + "/" + extra);
                 }
                 return true;
@@ -746,6 +1032,58 @@ public final class MainActivity extends Activity {
         });
         nextPlayer.setDataSource(proxy.proxyUrl(streamUrl));
         nextPlayer.prepareAsync();
+    }
+
+    private void recoverCctvPlayback(int requestId, IMediaPlayer watchedPlayer, String reason) {
+        if (requestId != playRequestId || player != watchedPlayer
+                || currentGroup().source != ChannelCatalog.SOURCE_CCTV_WEB
+                || stallRecoveryRequestId == requestId) {
+            return;
+        }
+        stallRecoveryRequestId = requestId;
+        Log.w(TAG, "Recovering stalled CCTV playback at live edge: " + reason);
+        switchChannel(currentChannelIndex);
+    }
+
+    private void prefetchNearbyChannels(final Channel playingChannel) {
+        final ChannelCatalog.Group group = currentGroup();
+        if (group.source != ChannelCatalog.SOURCE_CCTV_WEB
+                || group.channels[currentChannelIndex] != playingChannel) {
+            return;
+        }
+        final Channel previous = group.channels[ChannelCatalog.wrapIndex(
+                group.channels, currentChannelIndex - 1)];
+        final Channel next = group.channels[ChannelCatalog.wrapIndex(
+                group.channels, currentChannelIndex + 1)];
+        final int requestId = playRequestId;
+        channelBar.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (requestId != playRequestId) {
+                    return;
+                }
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        prefetchChannel(next);
+                    }
+                }, "channel-url-prefetch-next").start();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        prefetchChannel(previous);
+                    }
+                }, "channel-url-prefetch-previous").start();
+            }
+        }, CHANNEL_PREFETCH_DELAY_MS);
+    }
+
+    private void prefetchChannel(Channel channel) {
+        try {
+            liveUrlResolver.resolve(channel);
+        } catch (IOException error) {
+            Log.d(TAG, "Unable to prefetch " + channel.streamId, error);
+        }
     }
 
     private void switchRelative(int offset) {
@@ -789,7 +1127,8 @@ public final class MainActivity extends Activity {
         ChannelCatalog.Group group = ChannelCatalog.GROUPS[browsingGroupIndex];
         int selectedIndex = browsingGroupIndex == currentGroupIndex
                 ? currentChannelIndex : ChannelCatalog.defaultChannelIndex(group);
-        channelListTitle.setText("频道列表");
+        channelListTitle.setText(getString(R.string.channel_panel_title,
+                group.title, group.channels.length));
         groupAdapter.showGroups(ChannelCatalog.GROUPS, browsingGroupIndex);
         channelAdapter.showChannels(group.channels, selectedIndex);
         groupList.setSelection(browsingGroupIndex);
@@ -821,8 +1160,51 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void showLoading(final String channel, final String status) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                loadingPanel.animate().cancel();
+                loadingChannel.setText(channel);
+                loadingStatus.setText(status);
+                if (loadingPanel.getVisibility() != View.VISIBLE) {
+                    loadingPanel.setAlpha(0f);
+                    loadingPanel.setScaleX(0.96f);
+                    loadingPanel.setScaleY(0.96f);
+                    loadingPanel.setVisibility(View.VISIBLE);
+                    loadingPanel.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                            .setDuration(160L).start();
+                }
+            }
+        });
+    }
+
+    private void updateLoadingStatus(final String status) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                loadingStatus.setText(status);
+            }
+        });
+    }
+
+    private void hideLoading() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                loadingPanel.animate().cancel();
+                loadingPanel.setVisibility(View.GONE);
+            }
+        });
+    }
+
     private void releasePlayer() {
         prepared = false;
+        buffering = false;
+        bufferingStatusVisible = false;
+        bufferingEventId++;
+        videoFpsObserved = false;
+        lastRenderedVideoAt = 0L;
         if (videoInfo != null) {
             videoInfo.removeCallbacks(updateVideoInfo);
         }
@@ -831,7 +1213,6 @@ public final class MainActivity extends Activity {
             player.release();
             player = null;
         }
-        usePlainSurfaceForCurrentPlayer = false;
     }
 
     private void resetVideoLayout() {
@@ -877,6 +1258,19 @@ public final class MainActivity extends Activity {
         if (player != null) {
             outputFps = player.getVideoOutputFramesPerSecond();
             decodeFps = player.getVideoDecodeFramesPerSecond();
+        }
+        if (prepared && currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
+            long now = SystemClock.elapsedRealtime();
+            long surfaceFrameAt = videoView.getLastFrameAvailableAt();
+            if (surfaceFrameAt > lastRenderedVideoAt) {
+                videoFpsObserved = true;
+                lastRenderedVideoAt = surfaceFrameAt;
+            } else if (videoFpsObserved && !buffering && lastRenderedVideoAt > 0L
+                    && now - lastRenderedVideoAt >= CCTV_VIDEO_STALL_RECOVERY_MS) {
+                recoverCctvPlayback(playRequestId, player,
+                        "no SurfaceTexture frames for "
+                                + (now - lastRenderedVideoAt) + "ms");
+            }
         }
         String fps = outputFps > 0.01f
                 ? String.format(Locale.US, "%.1f/%.1f", outputFps, decodeFps) : "--";

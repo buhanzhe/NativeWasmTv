@@ -7,3 +7,6 @@ local.properties
 *.iml
 
 /.playwright-mcp
+output/
+.playwright-cli/
+scripts/
