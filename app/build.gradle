@@ -69,7 +69,7 @@ task generateVersionFile {
                 versionName : android.defaultConfig.versionName,
                 apkUrl      : "https://github.com/buhanzhe/NativeWasmTv/releases/download/"
                         + "v${android.defaultConfig.versionName}/nTv.apk"
-                        + "?versionCode=${android.defaultConfig.versionCode}&signer=iptv",
+                        + "?versionCode=${android.defaultConfig.versionCode}&signer=iptv-v1",
                 sha256      : sha256,
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
