@@ -26,16 +26,13 @@
 #define EMBIND_STORAGE 6332000u
 #define DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS 7053264u
 #define MEMORY_EXTEND 2048u
-/* VOD8 uses the allocation tail as an internal transform workspace. Most
- * frames fit in tens of KiB, but some valid CCTV slices need close to 2 MiB;
- * sizing this like a normal output buffer causes a wasm bounds trap. The wasm
- * allocator reuses this block, so it raises one worker's high-water mark once
- * instead of allocating 2 MiB per frame. */
-#define NAL_MEMORY_EXTEND (2u * 1024u * 1024u)
-#define PLAYER_TAG "player_container_player"
-#define SPECIAL_PLAYER_TAG PLAYER_TAG "##1000000##0"
+#define NAL_MEMORY_EXTEND MEMORY_EXTEND
+/* This must match the video element id used by the current CCTV live player.
+ * It is part of the H5E key state, not merely a diagnostic label. */
+#define PLAYER_TAG "h5player_player"
 #define PAGE_HOST "https://tv.cctv.com"
-#define LOCATION_HREF "blob:https://www.cctv.com/a2a31e32-7705-4db1-b190-1bd401598188"
+#define LOCATION_HREF "blob:https://tv.cctv.com/5bca710b-9f02-41f0-a9f1-102bbc65192a"
+#define H5PLAYER_CONFIG "{\"h5player\":{\"ver\":20190904,\"md5\":\"c7ed5a71dbe4dee1a2ba171f660ee98d\",\"BTime\":\"2019-09-04 20:25:10\"}}"
 
 typedef struct w2c_env {
   u32 table_base;
@@ -104,6 +101,8 @@ static __thread size_t g_current_nal_length;
 static __thread int g_current_nal_type;
 static __thread char g_current_update_tag[16];
 static __thread int g_should_decrypt;
+static __thread u32 g_pending_fetch;
+static __thread u32 g_player_argument;
 
 static int decrypt_was_cancelled(void) {
   u32 generation = __sync_add_and_fetch(&g_cancel_generation, 0);
@@ -238,7 +237,71 @@ u32 w2c_env_p(struct w2c_env* env, u32 timeval_address, u32 timezone_address) {
   return 0;
 }
 
-void w2c_env_q(struct w2c_env* env, u32 fetch) { (void) env; (void) fetch; }
+/* InitPlayer asynchronously fetches /Library/H5player.json in the browser.
+ * Leaving this import as a no-op lets the first key window work by accident,
+ * then UpdatePlayer produces the wrong VMP tag after roughly five 4-second
+ * segments. Queue the request here and complete it after InitPlayer returns,
+ * matching the worker's asynchronous callback without a network dependency. */
+void w2c_env_q(struct w2c_env* env, u32 fetch) {
+  (void) env;
+  g_pending_fetch = fetch;
+}
+
+static void invoke_fetch_callback(w2c_env* env, u32 table_index, u32 fetch) {
+  wasm_rt_funcref_t* callback;
+  if (table_index == 0 || table_index >= env->table.size) {
+    return;
+  }
+  callback = &env->table.data[table_index];
+  if (callback->func != NULL) {
+    ((void (*)(void*, u32)) callback->func)(callback->module_instance, fetch);
+  }
+}
+
+static int complete_pending_fetch(void) {
+  const char* response = H5PLAYER_CONFIG;
+  size_t response_length = strlen(response);
+  u32 fetch = g_pending_fetch;
+  u32 response_address;
+  uint8_t* target;
+  uint32_t* word;
+  uint16_t* half;
+  u32 success_callback;
+  u32 ready_callback;
+  if (fetch == 0) {
+    return 1;
+  }
+  g_pending_fetch = 0;
+  response_address = w2c_cctv__h5e_Fa(&g_module, (u32) response_length);
+  target = env_pointer(&g_env, response_address, response_length);
+  if (response_address == 0 || target == NULL) {
+    return 0;
+  }
+  memcpy(target, response, response_length);
+  word = (uint32_t*) env_pointer(&g_env, fetch + 12, 28);
+  half = (uint16_t*) env_pointer(&g_env, fetch + 40, 4);
+  if (word == NULL || half == NULL
+      || env_pointer(&g_env, fetch + 44, 64) == NULL
+      || env_pointer(&g_env, fetch + 148, 16) == NULL) {
+    return 0;
+  }
+  word[0] = response_address;
+  word[1] = (uint32_t) response_length;
+  word[2] = 0;
+  word[3] = 0;
+  word[4] = 0;
+  word[5] = (uint32_t) response_length;
+  word[6] = 0;
+  half[0] = 4;
+  half[1] = 200;
+  memset(env_pointer(&g_env, fetch + 44, 64), 0, 64);
+  memcpy(env_pointer(&g_env, fetch + 44, 64), "OK", 2);
+  success_callback = *(uint32_t*) env_pointer(&g_env, fetch + 148, 4);
+  ready_callback = *(uint32_t*) env_pointer(&g_env, fetch + 160, 4);
+  invoke_fetch_callback(&g_env, success_callback, fetch);
+  invoke_fetch_callback(&g_env, ready_callback, fetch);
+  return 1;
+}
 
 u32 w2c_env_r(struct w2c_env* env, u32 requested_size) {
   uint64_t current_pages = env->memory.pages;
@@ -425,6 +488,8 @@ static int reset_module_state(void) {
   uint32_t* dynamic_top;
   size_t relocation_index;
   memset(&g_module, 0, sizeof(g_module));
+  g_pending_fetch = 0;
+  g_player_argument = 0;
   reset_emval_state();
   memset(g_env.memory.data, 0, g_env.memory.size);
   if (EMBIND_STORAGE + sizeof(CCTV_H5E_MEMORY_INIT) > g_env.memory.size) {
@@ -468,10 +533,8 @@ static int ensure_module_ready(void) {
     g_env.embind_storage = EMBIND_STORAGE;
     g_runtime_initialized = 1;
   }
-  /* The browser creates one H5E player for the whole live stream. Resetting the
-   * module for every .ts file loses type-25 control/key state and eventually
-   * feeds undecodable NALs to MediaCodec. Keep the module until the worker is
-   * stopped on a channel switch. */
+  /* Keep the runtime across the short VMP key window. The live decrypt path
+   * performs its controlled five-segment refresh before calling this helper. */
   if (!g_ready) {
     g_ready = reset_module_state();
   }
@@ -496,38 +559,41 @@ static u32 allocate_player_argument(void) {
 }
 
 static int begin_session(void) {
-  u32 player_argument;
   if (g_session_started) {
     return 1;
   }
-  player_argument = allocate_player_argument();
-  if (player_argument == 0) {
+  g_player_argument = allocate_player_argument();
+  if (g_player_argument == 0) {
     return 0;
   }
   g_wasm_stage = "init-player";
-  w2c_cctv__h5e_aa(&g_module, player_argument);
-  g_wasm_stage = "player-free";
-  w2c_cctv__h5e_Ca(&g_module, player_argument);
-  g_wasm_stage = "idle";
+  w2c_cctv__h5e_aa(&g_module, g_player_argument);
+  g_wasm_stage = "init-player-fetch";
+  if (!complete_pending_fetch()) {
+    g_wasm_stage = "idle";
+    return 0;
+  }
   g_session_started = 1;
-  g_should_decrypt = 0;
+  /* Current CCTV cdrmld streams may omit the legacy type-25 enable NAL while
+   * still encrypting every VCL NAL. Start enabled; an explicit type-25 control
+   * NAL, when present on older feeds, still overrides this state below. */
+  g_should_decrypt = 1;
   return 1;
 }
 
 static void end_session(void) {
-  u32 player_argument;
   if (g_session_started) {
-    player_argument = allocate_player_argument();
-    if (player_argument == 0) {
+    if (g_player_argument == 0) {
       g_session_started = 0;
       return;
     }
     g_wasm_stage = "uninit-player";
-    w2c_cctv__h5e_ba(&g_module, player_argument);
+    w2c_cctv__h5e_ba(&g_module, g_player_argument);
     g_wasm_stage = "idle";
     g_wasm_stage = "player-free";
-    w2c_cctv__h5e_Ca(&g_module, player_argument);
+    w2c_cctv__h5e_Ca(&g_module, g_player_argument);
     g_wasm_stage = "idle";
+    g_player_argument = 0;
     g_session_started = 0;
   }
 }
@@ -535,60 +601,28 @@ static void end_session(void) {
 static int decrypt_nal(const uint8_t* nal, size_t nal_length,
     uint8_t** result, size_t* result_length) {
   static decrypt_function functions[9] = {
-    w2c_cctv__h5e_ta, w2c_cctv__h5e_sa, w2c_cctv__h5e_ra,
-    w2c_cctv__h5e_qa, w2c_cctv__h5e_pa, w2c_cctv__h5e_oa,
-    w2c_cctv__h5e_na, w2c_cctv__h5e_ma, w2c_cctv__h5e_ua
+    w2c_cctv__h5e_ka, w2c_cctv__h5e_ja, w2c_cctv__h5e_ia,
+    w2c_cctv__h5e_ha, w2c_cctv__h5e_ga, w2c_cctv__h5e_fa,
+    w2c_cctv__h5e_ea, w2c_cctv__h5e_da, w2c_cctv__h5e_la
   };
   static const char host[] = PAGE_HOST;
-  const char* media_tag;
   size_t host_length = strlen(host);
-  size_t tag_length;
-  u32 tag_address;
-  uint8_t* tag_data;
   char tag[16];
   u32 output_length;
-  u32 update_argument;
   int index;
   g_current_nal_length = nal_length;
   g_current_nal_type = nal_length > 0 ? nal[0] & 0x1f : -1;
-  /* UpdatePlayer uses the 2 KiB scratch area following mediaTagID. Allocate
-   * and free a fresh argument exactly like the official worker; reusing the
-   * tiny InitPlayer string corrupts the wasm heap after enough NALs. */
-  update_argument = allocate_player_argument();
-  if (update_argument == 0) {
+  if (g_player_argument == 0) {
     return 0;
   }
+  /* The official live wrapper keeps one player argument alive for Init,
+   * Update and every jsdecLive call. UpdatePlayer mutates state associated
+   * with that exact address, so substituting a temporary or a VOD media tag
+   * eventually produces an invalid transform key. */
   g_wasm_stage = "update-player";
-  snprintf(tag, sizeof(tag), "%08x", w2c_cctv__h5e_ca(&g_module, update_argument));
-  g_wasm_stage = "player-free";
-  w2c_cctv__h5e_Ca(&g_module, update_argument);
+  snprintf(tag, sizeof(tag), "%08x", w2c_cctv__h5e_ca(&g_module, g_player_argument));
   snprintf(g_current_update_tag, sizeof(g_current_update_tag), "%s", tag);
   g_wasm_stage = "idle";
-  /* CCTV updates the player state for every NAL, not only picture NALs. NAL
-   * type 25 is an H5E control NAL: its first payload byte enables/disables
-   * decryption for the following type 1/5 pictures. Skipping either operation
-   * eventually feeds VOD8 the wrong state and can trap inside wasm. */
-  if (g_current_nal_type == 25) {
-    g_should_decrypt = nal_length > 1 && nal[1] == 1;
-    media_tag = PLAYER_TAG;
-  } else if (g_current_nal_type == 1 || g_current_nal_type == 5) {
-    if (!g_should_decrypt) {
-      return 0;
-    }
-    media_tag = SPECIAL_PLAYER_TAG;
-  } else {
-    return 0;
-  }
-  tag_length = strlen(media_tag);
-  g_wasm_stage = "tag-malloc";
-  tag_address = w2c_cctv__h5e_Da(&g_module, (u32) tag_length + 1);
-  g_wasm_stage = "idle";
-  tag_data = env_pointer(&g_env, tag_address, tag_length + 1);
-  if (tag_data == NULL) {
-    return 0;
-  }
-  memset(tag_data, 0, tag_length + 1);
-  memcpy(tag_data, media_tag, tag_length);
   g_wasm_stage = "nal-malloc";
   u32 data_address = w2c_cctv__h5e_Da(&g_module,
       (u32) nal_length + (u32) host_length + NAL_MEMORY_EXTEND);
@@ -596,9 +630,6 @@ static int decrypt_nal(const uint8_t* nal, size_t nal_length,
   uint8_t* data = env_pointer(&g_env, data_address,
       nal_length + host_length + NAL_MEMORY_EXTEND);
   if (data == NULL) {
-    g_wasm_stage = "tag-free";
-    w2c_cctv__h5e_Ca(&g_module, tag_address);
-    g_wasm_stage = "idle";
     return 0;
   }
   memcpy(data, nal, nal_length);
@@ -606,21 +637,18 @@ static int decrypt_nal(const uint8_t* nal, size_t nal_length,
   for (index = 0; index < 8; index++) {
     if (strchr("0123456", tag[index]) != NULL) {
       g_wasm_stage = "vod-step";
-      functions[index](&g_module, tag_address, data_address,
+      functions[index](&g_module, g_player_argument, data_address,
           (u32) nal_length, (u32) host_length);
       g_wasm_stage = "idle";
     }
   }
   g_wasm_stage = "vod-output";
-  output_length = functions[8](&g_module, tag_address, data_address,
+  output_length = functions[8](&g_module, g_player_argument, data_address,
       (u32) nal_length, (u32) host_length);
   g_wasm_stage = "idle";
   if (output_length > nal_length + host_length + NAL_MEMORY_EXTEND) {
     g_wasm_stage = "nal-free";
     w2c_cctv__h5e_Ca(&g_module, data_address);
-    g_wasm_stage = "idle";
-    g_wasm_stage = "tag-free";
-    w2c_cctv__h5e_Ca(&g_module, tag_address);
     g_wasm_stage = "idle";
     return 0;
   }
@@ -629,18 +657,12 @@ static int decrypt_nal(const uint8_t* nal, size_t nal_length,
     g_wasm_stage = "nal-free";
     w2c_cctv__h5e_Ca(&g_module, data_address);
     g_wasm_stage = "idle";
-    g_wasm_stage = "tag-free";
-    w2c_cctv__h5e_Ca(&g_module, tag_address);
-    g_wasm_stage = "idle";
     return 0;
   }
   memcpy(*result, data, output_length);
   *result_length = output_length;
   g_wasm_stage = "nal-free";
   w2c_cctv__h5e_Ca(&g_module, data_address);
-  g_wasm_stage = "idle";
-  g_wasm_stage = "tag-free";
-  w2c_cctv__h5e_Ca(&g_module, tag_address);
   g_wasm_stage = "idle";
   return 1;
 }
@@ -865,6 +887,17 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
   }
   gettimeofday(&g_worker_now, NULL);
   g_worker_clock_frozen = 1;
+  /* Current cdrmld live fragments are independently decryptable and omit the
+   * old type-25 cross-fragment control NAL. The browser wrapper refreshes its
+   * outer H5E state between fragments; this standalone wasm port does not, and
+   * its UpdatePlayer state starts producing corrupt slices after a few files.
+   * Reset only the native module here. This keeps ijkplayer, MediaCodec, the
+   * proxy connection and the video Surface alive across the boundary. */
+  if (g_session_started) {
+    g_session_started = 0;
+    g_should_decrypt = 0;
+    g_ready = reset_module_state();
+  }
   if (!ensure_module_ready() || !begin_session()) {
     LOGE("Unable to initialize wasm decryptor");
     g_worker_clock_frozen = 0;
@@ -931,9 +964,8 @@ static int decrypt_transport_stream(uint8_t* output, const uint8_t* input, size_
   } else {
     clear_pes(&pes);
   }
-  /* Keep the web-player session and its control state across ordered HLS
-   * segments. releaseThreadContext() tears the entire runtime down when the
-   * proxy is closed or the channel changes. */
+  /* Preserve state inside the current key window. releaseThreadContext() still
+   * tears the runtime down immediately when the channel changes. */
   g_worker_clock_frozen = 0;
   return changed;
 }
@@ -1024,6 +1056,7 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_releaseThreadContext(JNIEnv* env, jclass cl
   g_runtime_initialized = 0;
   g_ready = 0;
   g_session_started = 0;
+  g_should_decrypt = 0;
   g_worker_clock_frozen = 0;
   g_wasm_stage = "idle";
 }

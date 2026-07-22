@@ -1,4 +1,4 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
 
 final class ChannelCatalog {
     static final int SOURCE_CCTV_WEB = 0;

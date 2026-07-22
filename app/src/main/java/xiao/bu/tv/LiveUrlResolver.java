@@ -1,4 +1,4 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
 
 import android.content.SharedPreferences;
 import android.util.Base64;

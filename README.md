@@ -3,7 +3,7 @@
 `nTv` is a landscape Android TV player for 18 CCTV HLS channels: CCTV-1 through
 CCTV-17 and CCTV-5+. It targets Android 4.1 (`minSdk 16`), uses pure Java for
 the application layer, and plays through ijkplayer `0.8.8`. The application ID
-is `com.bu.cc.tv`.
+is `xiao.bu.tv`.
 
 ## Design
 

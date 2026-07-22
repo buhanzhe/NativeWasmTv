@@ -1,4 +1,4 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
 
 import android.content.Context;
 import android.graphics.SurfaceTexture;

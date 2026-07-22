@@ -1,4 +1,6 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
+
+import com.bu.cc.tv.NativeYspSigner;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;

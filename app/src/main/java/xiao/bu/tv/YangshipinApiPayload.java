@@ -1,4 +1,4 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
 
 import org.json.JSONException;
 import org.json.JSONObject;

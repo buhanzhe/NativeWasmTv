@@ -1,6 +1,6 @@
 package com.bu.cc.tv;
 
-final class NativeH5eDecryptor {
+public final class NativeH5eDecryptor {
     static {
         System.loadLibrary("cctv_h5e");
     }
@@ -8,9 +8,9 @@ final class NativeH5eDecryptor {
     private NativeH5eDecryptor() {
     }
 
-    static native byte[] decryptTransportStream(byte[] transportStream);
+    public static native byte[] decryptTransportStream(byte[] transportStream);
 
-    static native void cancelPendingDecrypts();
+    public static native void cancelPendingDecrypts();
 
-    static native void releaseThreadContext();
+    public static native void releaseThreadContext();
 }

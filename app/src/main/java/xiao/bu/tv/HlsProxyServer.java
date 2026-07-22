@@ -1,4 +1,7 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
+
+import com.bu.cc.tv.NativeCmgDecryptor;
+import com.bu.cc.tv.NativeH5eDecryptor;
 
 import android.os.SystemClock;
 import android.os.Process;
@@ -108,7 +111,7 @@ final class HlsProxyServer implements Closeable {
     private Thread acceptThread;
     private volatile boolean running;
     private final AtomicInteger cmgTsRequestIndex = new AtomicInteger();
-    private final AtomicInteger cmgDumpIndex = new AtomicInteger();
+    private static final AtomicInteger CMG_DUMP_INDEX = new AtomicInteger();
     private final Map<String, byte[]> cmgSegmentCache =
             new LinkedHashMap<String, byte[]>(16, 0.75f, true) {
                 @Override
@@ -938,14 +941,41 @@ final class HlsProxyServer implements Closeable {
         }
         byte[] decrypted = NativeH5eDecryptor.decryptTransportStream(body);
         if (decrypted == null) {
+            if (cmgDebugDir != null) {
+                int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
+                if (dumpIndex <= 8 && (cmgDebugDir.exists() || cmgDebugDir.mkdirs())) {
+                    writeFile(new File(cmgDebugDir,
+                            String.format(Locale.US, "cctv-failed-%03d.ts", dumpIndex)), body);
+                }
+            }
             throw new IOException("Native H5E decryptor rejected transport stream");
         }
+        dumpCctvSegmentIfNeeded(originUrl, body, decrypted);
         if (background) {
             Log.i(TAG, "CCTV TS decrypted " + segmentName(originUrl)
                     + " bytes=" + decrypted.length
                     + " decryptMs=" + (SystemClock.elapsedRealtime() - startedAt));
         }
         return decrypted;
+    }
+
+    private void dumpCctvSegmentIfNeeded(String originUrl, byte[] original, byte[] decrypted) {
+        if (cmgDebugDir == null) {
+            return;
+        }
+        int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
+        if (dumpIndex > 120 || (!cmgDebugDir.exists() && !cmgDebugDir.mkdirs())) {
+            return;
+        }
+        String prefix = String.format(Locale.US, "cctv-%03d", dumpIndex);
+        try {
+            writeFile(new File(cmgDebugDir, prefix + "-original.ts"), original);
+            writeFile(new File(cmgDebugDir, prefix + "-app.ts"), decrypted);
+            writeFile(new File(cmgDebugDir, prefix + "-url.txt"),
+                    originUrl.getBytes(UTF_8));
+        } catch (IOException error) {
+            Log.w(TAG, "Unable to dump CCTV TS " + prefix, error);
+        }
     }
 
     private byte[] downloadCctvSegment(String originUrl) throws IOException {
@@ -1768,7 +1798,7 @@ final class HlsProxyServer implements Closeable {
         if (cmgDebugDir == null) {
             return;
         }
-        int dumpIndex = cmgDumpIndex.incrementAndGet();
+        int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
         if (dumpIndex > 120) {
             return;
         }

@@ -1,4 +1,6 @@
-package com.bu.cc.tv;
+package xiao.bu.tv;
+
+import com.bu.cc.tv.NativeCmgDecryptor;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -71,7 +73,7 @@ public final class MainActivity extends Activity {
     private ChannelListAdapter channelAdapter;
     private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
-    private SharpVideoView videoView;
+    private DirectVideoView videoView;
     private Surface videoSurface;
     private HlsProxyServer proxy;
     private boolean proxyStatefulCmgSource;
@@ -91,10 +93,11 @@ public final class MainActivity extends Activity {
     private int videoSarDen = 1;
     private long lastBackPressedAt;
     private long bufferingStartedAt;
-    private long lastRenderedVideoAt;
+    private long lastPlaybackProgressAt;
+    private long lastPlaybackPosition = -1L;
     private boolean buffering;
     private boolean bufferingStatusVisible;
-    private boolean videoFpsObserved;
+    private boolean playbackProgressObserved;
     private int stallRecoveryRequestId = -1;
 
     private final Runnable updateVideoInfo = new Runnable() {
@@ -148,7 +151,7 @@ public final class MainActivity extends Activity {
             }
         });
 
-        videoView = (SharpVideoView) findViewById(R.id.video_surface);
+        videoView = (DirectVideoView) findViewById(R.id.video_surface);
         View.OnClickListener openChannelsOnClick = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -157,7 +160,7 @@ public final class MainActivity extends Activity {
         };
         root.setOnClickListener(openChannelsOnClick);
         videoView.setOnClickListener(openChannelsOnClick);
-        videoView.setSurfaceCallback(new SharpVideoView.SurfaceCallback() {
+        videoView.setSurfaceCallback(new DirectVideoView.SurfaceCallback() {
             @Override
             public void onVideoSurfaceCreated(Surface surface) {
                 videoSurface = surface;
@@ -916,7 +919,8 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 256 * 1024);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index", -3);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index",
+                cctvSource ? -1 : -3);
         if (videoSurface != null) {
             nextPlayer.setSurface(videoSurface);
         }
@@ -937,8 +941,9 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 prepared = true;
-                lastRenderedVideoAt = SystemClock.elapsedRealtime();
-                videoFpsObserved = false;
+                lastPlaybackProgressAt = SystemClock.elapsedRealtime();
+                lastPlaybackPosition = -1L;
+                playbackProgressObserved = false;
                 updateVideoLayout(mediaPlayer);
                 mediaPlayer.start();
                 scheduleVideoInfoRefresh();
@@ -1203,8 +1208,9 @@ public final class MainActivity extends Activity {
         buffering = false;
         bufferingStatusVisible = false;
         bufferingEventId++;
-        videoFpsObserved = false;
-        lastRenderedVideoAt = 0L;
+        playbackProgressObserved = false;
+        lastPlaybackPosition = -1L;
+        lastPlaybackProgressAt = 0L;
         if (videoInfo != null) {
             videoInfo.removeCallbacks(updateVideoInfo);
         }
@@ -1261,15 +1267,16 @@ public final class MainActivity extends Activity {
         }
         if (prepared && currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
             long now = SystemClock.elapsedRealtime();
-            long surfaceFrameAt = videoView.getLastFrameAvailableAt();
-            if (surfaceFrameAt > lastRenderedVideoAt) {
-                videoFpsObserved = true;
-                lastRenderedVideoAt = surfaceFrameAt;
-            } else if (videoFpsObserved && !buffering && lastRenderedVideoAt > 0L
-                    && now - lastRenderedVideoAt >= CCTV_VIDEO_STALL_RECOVERY_MS) {
+            long playbackPosition = player.getCurrentPosition();
+            if (playbackPosition > lastPlaybackPosition) {
+                playbackProgressObserved = true;
+                lastPlaybackPosition = playbackPosition;
+                lastPlaybackProgressAt = now;
+            } else if (playbackProgressObserved && !buffering && lastPlaybackProgressAt > 0L
+                    && now - lastPlaybackProgressAt >= CCTV_VIDEO_STALL_RECOVERY_MS) {
                 recoverCctvPlayback(playRequestId, player,
-                        "no SurfaceTexture frames for "
-                                + (now - lastRenderedVideoAt) + "ms");
+                        "playback clock stopped for "
+                                + (now - lastPlaybackProgressAt) + "ms");
             }
         }
         String fps = outputFps > 0.01f
