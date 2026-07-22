@@ -33,7 +33,7 @@ final class AutoUpdater {
     private static final String TAG = "AutoUpdater";
     private static final String GH_PROXY = "https://gh-proxy.com/";
     private static final String VERSION_URL = GH_PROXY
-            + "https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version.json";
+            + "https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;

@@ -88,7 +88,7 @@ as an installation source; that system security confirmation cannot be bypassed.
 The update endpoint is:
 
 ```text
-https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version.json
+https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json
 ```
 
 Create the release asset as `nTv.apk`, upload it to the GitHub Release whose tag
