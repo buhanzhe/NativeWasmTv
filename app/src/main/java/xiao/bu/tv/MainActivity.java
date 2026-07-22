@@ -1362,9 +1362,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (autoUpdater != null) {
-            autoUpdater.onResume();
-        }
         if (videoView != null) {
             videoView.onResume();
         }

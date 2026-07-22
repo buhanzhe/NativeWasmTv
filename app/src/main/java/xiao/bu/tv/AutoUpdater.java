@@ -7,7 +7,6 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
-import android.provider.Settings;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -44,8 +43,6 @@ final class AutoUpdater {
     private volatile boolean destroyed;
     private boolean checking;
     private boolean promptShowing;
-    private boolean waitingForUnknownSources;
-    private File pendingApk;
     private ProgressDialog progressDialog;
 
     AutoUpdater(Activity activity) {
@@ -79,19 +76,6 @@ final class AutoUpdater {
                 }
             }
         }, "update-check").start();
-    }
-
-    void onResume() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && waitingForUnknownSources
-                && activity.getPackageManager().canRequestPackageInstalls()) {
-            waitingForUnknownSources = false;
-            File apk = pendingApk;
-            pendingApk = null;
-            if (apk != null && apk.isFile()) {
-                launchInstaller(apk);
-            }
-        }
     }
 
     void destroy() {
@@ -308,27 +292,6 @@ final class AutoUpdater {
     }
 
     private void install(final File apk) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && !activity.getPackageManager().canRequestPackageInstalls()) {
-            pendingApk = apk;
-            new AlertDialog.Builder(activity)
-                    .setTitle(R.string.update_unknown_sources_title)
-                    .setMessage(R.string.update_unknown_sources_message)
-                    .setPositiveButton(R.string.update_open_settings,
-                            new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface dialog, int which) {
-                                    waitingForUnknownSources = true;
-                                    Intent settings = new Intent(
-                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                            Uri.parse("package:" + activity.getPackageName()));
-                                    activity.startActivity(settings);
-                                }
-                            })
-                    .setNegativeButton(R.string.cancel, null)
-                    .show();
-            return;
-        }
         launchInstaller(apk);
     }
 

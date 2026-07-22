@@ -80,7 +80,10 @@ The app checks `version.json` on startup. Both the manifest request and the APK
 download are sent through `https://gh-proxy.com/`. When `versionCode` is newer
 than the installed build, the app asks for confirmation, downloads the APK,
 verifies its SHA-256 when provided, and opens Android's package installer.
-Android 8.0+ may first ask the user to allow this app to install unknown apps.
+The app does not request Android's `REQUEST_INSTALL_PACKAGES` permission.
+It targets API 25 so the legacy installer intent remains available without that
+manifest permission. Android 8.0+ can still require the user to approve this app
+as an installation source; that system security confirmation cannot be bypassed.
 
 The update endpoint is:
 

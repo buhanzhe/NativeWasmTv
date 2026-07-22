@@ -10,7 +10,9 @@ android {
     defaultConfig {
         applicationId 'xiao.bu.tv'
         minSdkVersion 16
-        targetSdkVersion 27
+        // API 25 keeps the legacy package-installer flow without declaring
+        // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
+        targetSdkVersion 25
         versionCode 2
         versionName '1.1.0'
 
@@ -66,7 +68,8 @@ task generateVersionFile {
                 versionCode : android.defaultConfig.versionCode,
                 versionName : android.defaultConfig.versionName,
                 apkUrl      : "https://github.com/buhanzhe/NativeWasmTv/releases/download/"
-                        + "v${android.defaultConfig.versionName}/nTv.apk",
+                        + "v${android.defaultConfig.versionName}/nTv.apk"
+                        + "?versionCode=${android.defaultConfig.versionCode}",
                 sha256      : sha256,
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
