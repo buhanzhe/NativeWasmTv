@@ -1,7 +1,7 @@
 {
     "versionCode": 2,
     "versionName": "1.1.0",
-    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.1.0/nTv.apk?versionCode=2",
-    "sha256": "29e3cab68e58cd63f7f2a928bc364b9078ec13f49728445228dca6fea87678bd",
-    "releaseNotes": "\u79fb\u9664 REQUEST_INSTALL_PACKAGES \u6743\u9650\uff0ctargetSdk \u964d\u81f3 25\uff0c\u5e76\u6539\u5584\u9ad8\u7248\u672c Android \u7684\u66f4\u65b0\u5b89\u88c5\u517c\u5bb9\u6027\u3002"
+    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.1.0/nTv.apk?versionCode=2&signer=iptv",
+    "sha256": "df6502ea6b5f2e1b14af72d3a05e4873af2ad4084af51d1b98ef4e3ceee1d4a6",
+    "releaseNotes": "\u4f7f\u7528 IPTV \u6b63\u5f0f\u8bc1\u4e66\u7b7e\u540d\uff1b\u79fb\u9664 REQUEST_INSTALL_PACKAGES \u6743\u9650\uff0ctargetSdk \u964d\u81f3 25\uff0c\u5e76\u6539\u5584\u9ad8\u7248\u672c Android \u7684\u66f4\u65b0\u5b89\u88c5\u517c\u5bb9\u6027\u3002"
 }
