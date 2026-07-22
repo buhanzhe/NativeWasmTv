@@ -74,6 +74,40 @@ wsl -e bash -lc "cd /mnt/c/path/to/nTv && ./gradlew assembleDebug"
 
 The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
+## Automatic updates
+
+The app checks `version.json` on startup. Both the manifest request and the APK
+download are sent through `https://gh-proxy.com/`. When `versionCode` is newer
+than the installed build, the app asks for confirmation, downloads the APK,
+verifies its SHA-256 when provided, and opens Android's package installer.
+Android 8.0+ may first ask the user to allow this app to install unknown apps.
+
+The update endpoint is:
+
+```text
+https://gh-proxy.com/https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/version.json
+```
+
+Create the release asset as `nTv.apk`, upload it to the GitHub Release whose tag
+matches `v<versionName>` (for example `v1.1.0`), then generate the repository
+manifest from that exact APK:
+
+```powershell
+$env:JAVA_HOME = 'C:\path\to\jdk-8'
+.\gradlew.bat generateVersionFile `
+  '-PupdateApk=C:\path\to\nTv.apk' `
+  '-PreleaseNotes=本次更新说明'
+```
+
+Commit and push the generated `version.json` after publishing the matching APK.
+The repository and Release asset must be publicly accessible because
+`gh-proxy.com` cannot authenticate to a private GitHub repository. Always pass
+`-PupdateApk` for a published release so clients can reject corrupted downloads.
+
+Android 4.4 has TLS 1.2 support but does not enable it consistently. The app's
+TLS compatibility layer enables TLS 1.2 and compatible ECDHE/AES cipher suites
+for the update service and existing HTTPS playback requests.
+
 ## Regenerate wasm2c output
 
 The checked-in native C was generated from upstream commit

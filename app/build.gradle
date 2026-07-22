@@ -1,5 +1,8 @@
 apply plugin: 'com.android.application'
 
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+
 android {
     compileSdkVersion 27
     buildToolsVersion '27.0.3'
@@ -8,8 +11,8 @@ android {
         applicationId 'xiao.bu.tv'
         minSdkVersion 16
         targetSdkVersion 27
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1.0'
 
         ndk {
             abiFilters 'armeabi-v7a'
@@ -34,4 +37,41 @@ android {
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
     implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
+}
+
+task generateVersionFile {
+    group = 'distribution'
+    description = 'Generate the GitHub update manifest at the repository root.'
+
+    doLast {
+        File apkFile = project.hasProperty('updateApk')
+                ? rootProject.file(project.property('updateApk')) : null
+        String sha256 = ''
+        if (apkFile != null) {
+            if (!apkFile.isFile()) {
+                throw new GradleException("Update APK does not exist: ${apkFile}")
+            }
+            MessageDigest digest = MessageDigest.getInstance('SHA-256')
+            apkFile.withInputStream { input ->
+                byte[] buffer = new byte[64 * 1024]
+                int count
+                while ((count = input.read(buffer)) != -1) {
+                    digest.update(buffer, 0, count)
+                }
+            }
+            sha256 = digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+        }
+
+        def manifest = [
+                versionCode : android.defaultConfig.versionCode,
+                versionName : android.defaultConfig.versionName,
+                apkUrl      : "https://github.com/buhanzhe/NativeWasmTv/releases/download/"
+                        + "v${android.defaultConfig.versionName}/nTv.apk",
+                sha256      : sha256,
+                releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
+        ]
+        File output = rootProject.file('version.json')
+        output.setText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n', 'UTF-8')
+        logger.lifecycle("Generated ${output}" + (sha256 ? " (SHA-256: ${sha256})" : ''))
+    }
 }

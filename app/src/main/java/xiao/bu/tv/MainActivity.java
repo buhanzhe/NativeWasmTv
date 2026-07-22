@@ -99,6 +99,7 @@ public final class MainActivity extends Activity {
     private boolean bufferingStatusVisible;
     private boolean playbackProgressObserved;
     private int stallRecoveryRequestId = -1;
+    private AutoUpdater autoUpdater;
 
     private final Runnable updateVideoInfo = new Runnable() {
         @Override
@@ -180,6 +181,8 @@ public final class MainActivity extends Activity {
             }
         });
         root.requestFocus();
+        autoUpdater = new AutoUpdater(this);
+        autoUpdater.checkForUpdates();
         maybeProbeCmgRuntime();
         if (getIntent().hasExtra("cmg_compare")) {
             return;
@@ -1359,6 +1362,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (autoUpdater != null) {
+            autoUpdater.onResume();
+        }
         if (videoView != null) {
             videoView.onResume();
         }
@@ -1368,6 +1374,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         playRequestId++;
+        if (autoUpdater != null) {
+            autoUpdater.destroy();
+        }
         releasePlayer();
         if (yangshipinResolver != null) {
             yangshipinResolver.destroy();

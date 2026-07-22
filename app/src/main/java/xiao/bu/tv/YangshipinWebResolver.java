@@ -437,7 +437,11 @@ final class YangshipinWebResolver {
                     + " requestId=" + pending.apiPayload.requestId);
             String script = buildLiveRequestScript(pending, token, serverSeconds,
                     liveBody, sdkInput);
-            webView.evaluateJavascript(script, null);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                webView.evaluateJavascript(script, null);
+            } else {
+                webView.loadUrl("javascript:" + script);
+            }
         } catch (Exception error) {
             Log.e(TAG, "Unable to continue Yangshipin server-time request", error);
             fail(pending, "央视频服务器时间处理失败");

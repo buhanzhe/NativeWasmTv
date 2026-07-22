@@ -79,6 +79,28 @@ final class TlsCompat {
     private static final class ModernTlsSocketFactory extends SSLSocketFactory {
         private static final String[] MODERN_PROTOCOLS =
                 new String[] {"TLSv1.2", "TLSv1.1", "TLSv1"};
+        // Android 4.4 supports TLS 1.2 but leaves it and several ECDHE suites disabled by
+        // default. gh-proxy.com currently negotiates from this modern/common subset.
+        private static final String[] MODERN_CIPHER_SUITES = new String[] {
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+                "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+                "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+                "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+                "TLS_DHE_RSA_WITH_AES_256_CBC_SHA",
+                "TLS_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_RSA_WITH_AES_128_CBC_SHA256",
+                "TLS_RSA_WITH_AES_256_CBC_SHA256",
+                "TLS_RSA_WITH_AES_128_CBC_SHA",
+                "TLS_RSA_WITH_AES_256_CBC_SHA"
+        };
         private final SSLSocketFactory delegate;
 
         ModernTlsSocketFactory(SSLSocketFactory delegate) {
@@ -138,6 +160,24 @@ final class TlsCompat {
             }
             if (!enabled.isEmpty()) {
                 sslSocket.setEnabledProtocols(enabled.toArray(new String[enabled.size()]));
+            }
+            String[] supportedCipherSuites = sslSocket.getSupportedCipherSuites();
+            List<String> enabledCipherSuites = new ArrayList<String>(
+                    MODERN_CIPHER_SUITES.length);
+            for (String cipherSuite : MODERN_CIPHER_SUITES) {
+                if (contains(supportedCipherSuites, cipherSuite)) {
+                    enabledCipherSuites.add(cipherSuite);
+                }
+            }
+            // Preserve vendor-enabled suites as fallbacks for the existing stream hosts.
+            for (String cipherSuite : sslSocket.getEnabledCipherSuites()) {
+                if (!enabledCipherSuites.contains(cipherSuite)) {
+                    enabledCipherSuites.add(cipherSuite);
+                }
+            }
+            if (!enabledCipherSuites.isEmpty()) {
+                sslSocket.setEnabledCipherSuites(enabledCipherSuites.toArray(
+                        new String[enabledCipherSuites.size()]));
             }
             return sslSocket;
         }

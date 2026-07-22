@@ -3,4 +3,15 @@
     <string name="channel_group">网页电视</string>
     <string name="channel_panel_title">%1$s  ·  %2$d 个频道</string>
     <string name="press_back_again_to_exit">再按一次返回键退出</string>
+    <string name="update_available_title">发现新版本 %1$s</string>
+    <string name="update_available_message">当前版本：%1$s\n新版本：%2$s\n\n%3$s</string>
+    <string name="update_now">立即更新</string>
+    <string name="update_later">稍后</string>
+    <string name="update_downloading">正在下载更新</string>
+    <string name="update_download_failed">更新下载失败：%1$s</string>
+    <string name="update_install_failed">无法打开系统安装器</string>
+    <string name="update_unknown_sources_title">允许安装更新</string>
+    <string name="update_unknown_sources_message">请在系统设置中允许“网页电视”安装未知应用，返回后将继续安装。</string>
+    <string name="update_open_settings">打开设置</string>
+    <string name="cancel">取消</string>
 </resources>
