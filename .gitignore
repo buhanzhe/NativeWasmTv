@@ -4,6 +4,7 @@ build/
 app/build/
 app/src/main/jniLibs/
 local.properties
+.signing/
 *.iml
 
 /.playwright-mcp

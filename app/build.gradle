@@ -3,9 +3,39 @@ apply plugin: 'com.android.application'
 import groovy.json.JsonOutput
 import java.security.MessageDigest
 
+def releaseSigningDirectory = rootProject.file('.signing')
+def releaseKeystore = new File(releaseSigningDirectory, 'iptv-release.jks')
+def releaseSigningInfo = new File(releaseSigningDirectory, 'keystore-info.properties')
+def releaseSigningAvailable = releaseKeystore.isFile() && releaseSigningInfo.isFile()
+if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
+    throw new GradleException('Both .signing/iptv-release.jks and '
+            + '.signing/keystore-info.properties are required for release signing.')
+}
+def releaseSigningProperties = new Properties()
+if (releaseSigningAvailable) {
+    releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
+    ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
+        if (!releaseSigningProperties.getProperty(propertyName)) {
+            throw new GradleException("Missing ${propertyName} in "
+                    + '.signing/keystore-info.properties')
+        }
+    }
+}
+
 android {
     compileSdkVersion 27
     buildToolsVersion '27.0.3'
+
+    signingConfigs {
+        if (releaseSigningAvailable) {
+            iptvRelease {
+                storeFile releaseKeystore
+                storePassword releaseSigningProperties.getProperty('storePassword')
+                keyAlias releaseSigningProperties.getProperty('alias')
+                keyPassword releaseSigningProperties.getProperty('keyPassword')
+            }
+        }
+    }
 
     defaultConfig {
         applicationId 'xiao.bu.tv'
@@ -24,6 +54,9 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            if (releaseSigningAvailable) {
+                signingConfig signingConfigs.iptvRelease
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

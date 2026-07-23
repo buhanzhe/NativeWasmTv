@@ -1,9 +1,15 @@
 # nTv
 
+[简体中文](README.zh-CN.md) | English
+
 `nTv` is a landscape Android TV player for 18 CCTV HLS channels: CCTV-1 through
 CCTV-17 and CCTV-5+. It targets Android 4.1 (`minSdk 16`), uses pure Java for
 the application layer, and plays through ijkplayer `0.8.8`. The application ID
 is `xiao.bu.tv`.
+
+## Download
+
+- [Quark cloud drive](https://pan.quark.cn/s/e4db1433c7bb?pwd=KDmk) (access code: `KDmk`)
 
 ## Design
 
@@ -73,6 +79,35 @@ wsl -e bash -lc "cd /mnt/c/path/to/nTv && ./gradlew assembleDebug"
 ```
 
 The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+
+### Release signing
+
+Release builds automatically use the IPTV certificate when these local files
+exist inside the project:
+
+```text
+.signing/iptv-release.jks
+.signing/keystore-info.properties
+```
+
+The properties file uses this format (replace each placeholder locally):
+
+```properties
+keystore=iptv-release.jks
+alias=<key alias>
+storePassword=<keystore password>
+keyPassword=<key password>
+```
+
+The complete `.signing/` directory is ignored by Git because it contains the
+private key and passwords. Build the signed release APK with:
+
+```powershell
+$env:JAVA_HOME = 'C:\path\to\jdk-8'
+.\gradlew.bat assembleRelease
+```
+
+The signed APK is generated at `app/build/outputs/apk/release/app-release.apk`.
 
 ## Automatic updates
 
