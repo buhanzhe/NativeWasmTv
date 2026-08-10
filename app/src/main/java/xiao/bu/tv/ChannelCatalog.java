@@ -103,7 +103,7 @@ final class ChannelCatalog {
     };
 
     static final Group[] GROUPS = new Group[] {
-            new Group("央视网 CCTV", SOURCE_CCTV_WEB, CCTV_CHANNELS),
+            new Group("央视网 · 央视频道", SOURCE_CCTV_WEB, CCTV_CHANNELS),
             new Group("央视频 · 央视频道", SOURCE_YSP_CCTV, YANGSHIPIN_CCTV_CHANNELS),
             new Group("央视频 · 卫视频道", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
     };

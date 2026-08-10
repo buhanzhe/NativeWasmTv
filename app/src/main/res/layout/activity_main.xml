@@ -125,15 +125,33 @@
         android:paddingBottom="14dp"
         android:visibility="gone">
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="网页电视  ·  LIVE"
-            android:textAllCaps="true"
-            android:textColor="@color/accent"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            tools:ignore="HardcodedText,NewApi" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="网页电视  ·  LIVE"
+                android:textAllCaps="true"
+                android:textColor="@color/accent"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                tools:ignore="HardcodedText,NewApi" />
+
+            <TextView
+                android:id="@+id/channel_list_clock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="right"
+                android:textColor="@color/text_secondary"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                tools:ignore="RtlHardcoded" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/channel_list_title"
@@ -169,6 +187,7 @@
                 android:clipToPadding="false"
                 android:divider="@android:color/transparent"
                 android:dividerHeight="4dp"
+                android:focusableInTouchMode="true"
                 android:listSelector="@drawable/channel_item_background"
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp" />
@@ -188,6 +207,7 @@
                 android:clipToPadding="false"
                 android:divider="@android:color/transparent"
                 android:dividerHeight="4dp"
+                android:focusableInTouchMode="true"
                 android:listSelector="@drawable/channel_item_background"
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp" />

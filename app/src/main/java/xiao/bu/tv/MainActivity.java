@@ -27,6 +27,8 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 
 import tv.danmaku.ijk.media.player.IMediaPlayer;
@@ -37,6 +39,8 @@ public final class MainActivity extends Activity {
     private static final String PREFERENCES = "tv_player";
     private static final String LAST_GROUP_INDEX = "last_group_index";
     private static final String LAST_CHANNEL_INDEX = "last_channel_index";
+    private static final int FIRST_LAUNCH_GROUP_INDEX = 1;
+    private static final int FIRST_LAUNCH_CHANNEL_INDEX = 0;
     private static final long CHANNEL_BAR_TIMEOUT_MS = 3000L;
     private static final long PANEL_TIMEOUT_MS = 5000L;
     private static final long EXIT_CONFIRM_TIMEOUT_MS = 2000L;
@@ -56,12 +60,26 @@ public final class MainActivity extends Activity {
             closeChannelList();
         }
     };
+    private final SimpleDateFormat channelListClockFormat =
+            new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
+    private final Runnable updateChannelListClock = new Runnable() {
+        @Override
+        public void run() {
+            if (channelListPanel.getVisibility() != View.VISIBLE) {
+                return;
+            }
+            channelListClock.setText(channelListClockFormat.format(new Date()));
+            long now = System.currentTimeMillis();
+            channelListClock.postDelayed(this, 1000L - now % 1000L);
+        }
+    };
 
     private View root;
     private View channelBar;
     private View loadingPanel;
     private View channelListPanel;
     private TextView channelListTitle;
+    private TextView channelListClock;
     private TextView channelName;
     private TextView statusText;
     private TextView videoInfo;
@@ -125,6 +143,7 @@ public final class MainActivity extends Activity {
         loadingPanel = findViewById(R.id.loading_panel);
         channelListPanel = findViewById(R.id.channel_list_panel);
         channelListTitle = (TextView) findViewById(R.id.channel_list_title);
+        channelListClock = (TextView) findViewById(R.id.channel_list_clock);
         channelName = (TextView) findViewById(R.id.channel_name);
         statusText = (TextView) findViewById(R.id.status_text);
         videoInfo = (TextView) findViewById(R.id.video_info);
@@ -143,6 +162,19 @@ public final class MainActivity extends Activity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 showChannelMenu(position);
+            }
+        });
+        groupList.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (channelListPanel.getVisibility() == View.VISIBLE
+                        && position != browsingGroupIndex) {
+                    showChannelMenu(position);
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
             }
         });
         channelList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
@@ -189,11 +221,17 @@ public final class MainActivity extends Activity {
         }
 
         SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
-        currentGroupIndex = ChannelCatalog.wrapGroupIndex(
-                preferences.getInt(LAST_GROUP_INDEX, 0));
-        int defaultIndex = ChannelCatalog.defaultChannelIndex(currentGroup());
-        currentChannelIndex = ChannelCatalog.wrapIndex(currentGroup().channels,
-                preferences.getInt(LAST_CHANNEL_INDEX, defaultIndex));
+        boolean hasLastChannel = preferences.contains(LAST_GROUP_INDEX)
+                && preferences.contains(LAST_CHANNEL_INDEX);
+        if (hasLastChannel) {
+            currentGroupIndex = ChannelCatalog.wrapGroupIndex(
+                    preferences.getInt(LAST_GROUP_INDEX, FIRST_LAUNCH_GROUP_INDEX));
+            currentChannelIndex = ChannelCatalog.wrapIndex(currentGroup().channels,
+                    preferences.getInt(LAST_CHANNEL_INDEX, FIRST_LAUNCH_CHANNEL_INDEX));
+        } else {
+            currentGroupIndex = FIRST_LAUNCH_GROUP_INDEX;
+            currentChannelIndex = FIRST_LAUNCH_CHANNEL_INDEX;
+        }
         browsingGroupIndex = currentGroupIndex;
         showChannelMenu(currentGroupIndex);
 
@@ -1121,10 +1159,14 @@ public final class MainActivity extends Activity {
         lastBackPressedAt = 0L;
         channelListPanel.setVisibility(View.VISIBLE);
         showChannelMenu(currentGroupIndex);
-        groupList.post(new Runnable() {
+        channelListClock.removeCallbacks(updateChannelListClock);
+        updateChannelListClock.run();
+        channelList.post(new Runnable() {
             @Override
             public void run() {
-                groupList.requestFocus();
+                channelList.setSelection(currentChannelIndex);
+                channelList.requestFocusFromTouch();
+                channelList.requestFocus();
             }
         });
         scheduleChannelListDismiss();
@@ -1146,6 +1188,7 @@ public final class MainActivity extends Activity {
 
     private void closeChannelList() {
         channelListPanel.removeCallbacks(hideChannelList);
+        channelListClock.removeCallbacks(updateChannelListClock);
         channelListPanel.setVisibility(View.GONE);
         root.requestFocus();
     }
@@ -1287,34 +1330,108 @@ public final class MainActivity extends Activity {
         videoInfo.setText("源: " + resolution + "  fps: " + fps);
     }
 
+    private void moveChannelMenuSelection(int offset) {
+        if (groupList.hasFocus()) {
+            int position = groupList.getSelectedItemPosition();
+            if (position == AdapterView.INVALID_POSITION) {
+                position = browsingGroupIndex;
+            }
+            int nextPosition = Math.max(0, Math.min(
+                    ChannelCatalog.GROUPS.length - 1, position + offset));
+            if (nextPosition != browsingGroupIndex) {
+                showChannelMenu(nextPosition);
+            } else {
+                groupList.setSelection(nextPosition);
+            }
+            return;
+        }
+
+        if (!channelList.hasFocus()) {
+            channelList.requestFocus();
+        }
+        int position = channelList.getSelectedItemPosition();
+        Channel[] channels = ChannelCatalog.GROUPS[browsingGroupIndex].channels;
+        if (position == AdapterView.INVALID_POSITION) {
+            position = browsingGroupIndex == currentGroupIndex
+                    ? currentChannelIndex : ChannelCatalog.defaultChannelIndex(
+                            ChannelCatalog.GROUPS[browsingGroupIndex]);
+        }
+        int nextPosition = Math.max(0, Math.min(channels.length - 1, position + offset));
+        channelList.setSelection(nextPosition);
+    }
+
+    private static boolean isHandledRemoteKey(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_MENU:
+            case KeyEvent.KEYCODE_BACK:
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int keyCode = event.getKeyCode();
-        if (channelListPanel.getVisibility() == View.VISIBLE) {
-            scheduleChannelListDismiss();
-            if (event.getAction() == KeyEvent.ACTION_UP
-                    && (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU)) {
-                closeChannelList();
-                return true;
-            }
-            if (event.getAction() == KeyEvent.ACTION_UP
-                    && keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                groupList.requestFocus();
-                return true;
-            }
-            if (event.getAction() == KeyEvent.ACTION_UP
-                    && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                channelList.requestFocus();
-                return true;
-            }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                return true;
-            }
+        if (event.getAction() == KeyEvent.ACTION_UP && isHandledRemoteKey(keyCode)) {
+            return true;
+        }
+        if (event.getAction() != KeyEvent.ACTION_DOWN) {
             return super.dispatchKeyEvent(event);
         }
+        if (event.getRepeatCount() > 0
+                && keyCode != KeyEvent.KEYCODE_DPAD_UP
+                && keyCode != KeyEvent.KEYCODE_DPAD_DOWN
+                && isHandledRemoteKey(keyCode)) {
+            return true;
+        }
 
-        if (event.getAction() != KeyEvent.ACTION_UP) {
-            return super.dispatchKeyEvent(event);
+        if (channelListPanel.getVisibility() == View.VISIBLE) {
+            scheduleChannelListDismiss();
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_BACK:
+                case KeyEvent.KEYCODE_MENU:
+                    closeChannelList();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    groupList.requestFocus();
+                    groupList.setSelection(browsingGroupIndex);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    channelList.requestFocus();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    moveChannelMenuSelection(-1);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    moveChannelMenuSelection(1);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                    if (channelList.hasFocus()) {
+                        int position = channelList.getSelectedItemPosition();
+                        if (position != AdapterView.INVALID_POSITION) {
+                            switchBrowsingChannel(position);
+                        }
+                    } else {
+                        channelList.requestFocus();
+                    }
+                    return true;
+                default:
+                    return super.dispatchKeyEvent(event);
+            }
+        }
+
+        if (event.getRepeatCount() > 0 && (keyCode == KeyEvent.KEYCODE_DPAD_UP
+                || keyCode == KeyEvent.KEYCODE_DPAD_DOWN)) {
+            return true;
         }
         switch (keyCode) {
             case KeyEvent.KEYCODE_DPAD_UP:
@@ -1330,6 +1447,9 @@ public final class MainActivity extends Activity {
                 return true;
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                 togglePlayback();
+                return true;
+            case KeyEvent.KEYCODE_BACK:
+                onBackPressed();
                 return true;
             default:
                 return super.dispatchKeyEvent(event);
@@ -1371,6 +1491,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         playRequestId++;
+        if (channelListClock != null) {
+            channelListClock.removeCallbacks(updateChannelListClock);
+        }
         if (autoUpdater != null) {
             autoUpdater.destroy();
         }
