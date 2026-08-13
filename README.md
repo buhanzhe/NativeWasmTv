@@ -1,4 +1,7 @@
-# nTv
+# nativeWasmTv
+[**Linux.do友情链接，佬友好**](https://linux.do/u/buhanzhe)
+
+[**恩山友情链接**](https://www.right.com.cn/forum/thread-8484303-1-1.html)
 
 [简体中文](README.zh-CN.md) | English
 
