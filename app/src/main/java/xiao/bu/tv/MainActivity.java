@@ -53,6 +53,10 @@ public final class MainActivity extends Activity {
     private static final String LAST_GROUP_INDEX = "last_group_index";
     private static final String LAST_CHANNEL_INDEX = "last_channel_index";
     private static final String REVERSE_UP_DOWN = "reverse_up_down";
+    private static final String DECODE_MODE = "decode_mode";
+    private static final String DECODE_MODE_AUTO = "auto";
+    private static final String DECODE_MODE_HARDWARE = "hardware";
+    private static final String DECODE_MODE_SOFTWARE = "software";
     private static final String GITHUB_URL = "https://github.com/buhanzhe/NativeWasmTv";
     private static final int FIRST_LAUNCH_GROUP_INDEX = 1;
     private static final int FIRST_LAUNCH_CHANNEL_INDEX = 0;
@@ -65,6 +69,9 @@ public final class MainActivity extends Activity {
     private static final long CCTV_VIDEO_STALL_RECOVERY_MS = 8000L;
     private static final long CUSTOM_SOURCE_TIMEOUT_MS = 5000L;
     private static final long NUMERIC_CHANNEL_TIMEOUT_MS = 1200L;
+    private static final long VIDEO_RENDER_START_TIMEOUT_MS = 10000L;
+    // Kept local because older ijkplayer Java artifacts do not expose every info constant.
+    private static final int MEDIA_INFO_VIDEO_RENDERING_START = 3;
 
     private final Runnable hideChannelBar = new Runnable() {
         @Override
@@ -133,6 +140,9 @@ public final class MainActivity extends Activity {
     private File cmgDebugDir;
     private IjkMediaPlayer player;
     private boolean prepared;
+    private boolean videoRenderingStarted;
+    private boolean activeSoftwareDecode;
+    private boolean autoSoftwareDecode;
     private volatile int playRequestId;
     private int playerStartRetryCount;
     private int bufferingEventId;
@@ -161,6 +171,7 @@ public final class MainActivity extends Activity {
     private PlaylistManager playlistManager;
     private LocalControlServer controlServer;
     private volatile boolean reverseUpDown;
+    private volatile String decodeMode;
     private boolean remoteInputMode;
     private String numericChannelInput = "";
 
@@ -206,6 +217,7 @@ public final class MainActivity extends Activity {
         channelAdapter = new ChannelListAdapter(this);
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
         reverseUpDown = preferences.getBoolean(REVERSE_UP_DOWN, false);
+        decodeMode = sanitizeDecodeMode(preferences.getString(DECODE_MODE, DECODE_MODE_AUTO));
         remoteInputMode = hasTelevisionUi();
         playlistManager = new PlaylistManager(this);
         ChannelCatalog.setCustomGroups(playlistManager.loadCached());
@@ -452,6 +464,7 @@ public final class MainActivity extends Activity {
             root.put("groups", jsonGroups);
             root.put("settings", new JSONObject()
                     .put("reverseKeys", reverseUpDown)
+                    .put("decodeMode", decodeMode)
                     .put("playlistUrl", playlistManager.getPlaylistUrl())
                     .put("recommendedPlaylistUrl", PlaylistManager.RECOMMENDED_URL));
             return root.toString();
@@ -507,6 +520,26 @@ public final class MainActivity extends Activity {
             reverseUpDown = request.optBoolean("reverseKeys", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(REVERSE_UP_DOWN, reverseUpDown).apply();
+        }
+        if (request.has("decodeMode")) {
+            final String requestedMode = sanitizeDecodeMode(
+                    request.optString("decodeMode", DECODE_MODE_AUTO));
+            if (!requestedMode.equals(request.optString("decodeMode", DECODE_MODE_AUTO))) {
+                throw new JSONException("不支持的解码模式");
+            }
+            boolean changed = !requestedMode.equals(decodeMode);
+            decodeMode = requestedMode;
+            autoSoftwareDecode = false;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(DECODE_MODE, decodeMode).apply();
+            if (changed) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        switchChannel(currentChannelIndex);
+                    }
+                });
+            }
         }
         String message = "设置已保存";
         if (request.has("playlistUrl")) {
@@ -1297,6 +1330,11 @@ public final class MainActivity extends Activity {
     }
 
     private void startPlayer(final Channel channel, final String streamUrl) throws IOException {
+        startPlayer(channel, streamUrl, false);
+    }
+
+    private void startPlayer(final Channel channel, final String streamUrl,
+            boolean forceSoftwareDecode) throws IOException {
         releasePlayer();
         resetVideoLayout();
         IjkMediaPlayer.loadLibrariesOnce(null);
@@ -1305,15 +1343,23 @@ public final class MainActivity extends Activity {
         player = nextPlayer;
         final boolean customSource = currentGroup().source == ChannelCatalog.SOURCE_CUSTOM;
         final int sourceRequestId = playRequestId;
-        boolean softwareDecode = getIntent().getBooleanExtra("debug_software_decode", false);
+        final boolean softwareDecode = forceSoftwareDecode || shouldUseSoftwareDecode();
+        activeSoftwareDecode = softwareDecode;
+        final boolean legacyMediaCodec = Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
+                || lowResourceDevice;
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec",
                 softwareDecode ? 0 : 1);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate", 1);
+        // Several KitKat-era TV codecs fail silently when IJK asks them to reconfigure a
+        // Surface for rotation or resolution changes. TV streams are landscape and fixed-size,
+        // so keep those optional MediaCodec paths off on legacy/low-RAM devices.
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec-auto-rotate",
+                legacyMediaCodec ? 0 : 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,
-                "mediacodec-handle-resolution-change", 1);
+                "mediacodec-handle-resolution-change", legacyMediaCodec ? 0 : 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", 0);
         nextPlayer.setVolume(1.0f, 1.0f);
-        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop", 1);
+        nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop",
+                softwareDecode ? 5 : 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1);
         final boolean cctvSource = currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB;
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames",
@@ -1360,10 +1406,13 @@ public final class MainActivity extends Activity {
                 updateVideoLayout(mediaPlayer);
                 mediaPlayer.start();
                 scheduleVideoInfoRefresh();
+                scheduleVideoRenderWatchdog(channel, streamUrl, nextPlayer,
+                        sourceRequestId, softwareDecode);
                 prefetchNearbyChannels(channel);
                 hideLoading();
+                String playingStatus = softwareDecode ? "直播播放中 · 兼容软解" : "直播播放中";
                 showChannelBar(channel.name, customSource
-                        ? customSourceStatus("直播播放中 · ") : "直播播放中");
+                        ? customSourceStatus(playingStatus + " · ") : playingStatus);
             }
         });
         nextPlayer.setOnInfoListener(new IMediaPlayer.OnInfoListener() {
@@ -1372,7 +1421,12 @@ public final class MainActivity extends Activity {
                 if (player != mediaPlayer) {
                     return false;
                 }
-                if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                if (what == MEDIA_INFO_VIDEO_RENDERING_START) {
+                    videoRenderingStarted = true;
+                    Log.i(TAG, "First video frame rendered decoder="
+                            + (softwareDecode ? "software" : "hardware")
+                            + " channel=" + channel.name);
+                } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
                     buffering = true;
                     bufferingStartedAt = SystemClock.elapsedRealtime();
                     final int eventId = ++bufferingEventId;
@@ -1475,6 +1529,75 @@ public final class MainActivity extends Activity {
                 }
             }, CUSTOM_SOURCE_TIMEOUT_MS);
         }
+    }
+
+    private boolean shouldUseSoftwareDecode() {
+        if (getIntent().getBooleanExtra("debug_software_decode", false)) {
+            return true;
+        }
+        if (DECODE_MODE_SOFTWARE.equals(decodeMode)) {
+            return true;
+        }
+        return DECODE_MODE_AUTO.equals(decodeMode) && autoSoftwareDecode;
+    }
+
+    private static String sanitizeDecodeMode(String mode) {
+        if (DECODE_MODE_HARDWARE.equals(mode) || DECODE_MODE_SOFTWARE.equals(mode)) {
+            return mode;
+        }
+        return DECODE_MODE_AUTO;
+    }
+
+    private void scheduleVideoRenderWatchdog(final Channel channel, final String streamUrl,
+            final IjkMediaPlayer watchedPlayer, final int requestId,
+            final boolean softwareDecode) {
+        channelBar.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (requestId != playRequestId || player != watchedPlayer || !prepared
+                        || videoRenderingStarted) {
+                    return;
+                }
+                if (buffering) {
+                    channelBar.postDelayed(this, 3000L);
+                    return;
+                }
+                float outputFps = watchedPlayer.getVideoOutputFramesPerSecond();
+                if (outputFps > 0.01f) {
+                    videoRenderingStarted = true;
+                    return;
+                }
+                if (!watchedPlayer.isPlaying() || watchedPlayer.getVideoWidth() <= 0
+                        || watchedPlayer.getVideoHeight() <= 0) {
+                    channelBar.postDelayed(this, 3000L);
+                    return;
+                }
+                if (softwareDecode) {
+                    Log.w(TAG, "Software decoder produced no visible frame channel="
+                            + channel.name);
+                    showChannelBar(channel.name, "兼容软解仍未检测到画面");
+                    return;
+                }
+                if (!DECODE_MODE_AUTO.equals(decodeMode)) {
+                    Log.w(TAG, "Hardware decoder produced no visible frame; automatic fallback "
+                            + "disabled mode=" + decodeMode + " channel=" + channel.name);
+                    showChannelBar(channel.name, "硬解未检测到画面，可在管理页选择兼容软解");
+                    return;
+                }
+                autoSoftwareDecode = true;
+                Log.w(TAG, "Hardware decoder produced no visible frame; falling back to "
+                        + "software decoder device=" + Build.MANUFACTURER + "/" + Build.MODEL
+                        + " sdk=" + Build.VERSION.SDK_INT + " channel=" + channel.name);
+                showLoading(channel.name, "硬解未检测到画面，正在切换兼容软解");
+                try {
+                    startPlayer(channel, streamUrl, true);
+                } catch (IOException error) {
+                    Log.e(TAG, "Unable to start software decoder fallback", error);
+                    hideLoading();
+                    showChannelBar(channel.name, "兼容软解启动失败: " + error.getMessage());
+                }
+            }
+        }, VIDEO_RENDER_START_TIMEOUT_MS);
     }
 
     private void recoverCctvPlayback(int requestId, IMediaPlayer watchedPlayer, String reason) {
@@ -1694,6 +1817,8 @@ public final class MainActivity extends Activity {
 
     private void releasePlayer() {
         prepared = false;
+        videoRenderingStarted = false;
+        activeSoftwareDecode = false;
         buffering = false;
         bufferingStatusVisible = false;
         bufferingEventId++;
@@ -1770,7 +1895,8 @@ public final class MainActivity extends Activity {
         }
         String fps = outputFps > 0.01f
                 ? String.format(Locale.US, "%.1f/%.1f", outputFps, decodeFps) : "--";
-        videoInfo.setText("源: " + resolution + "  fps: " + fps);
+        videoInfo.setText("源: " + resolution + "  fps: " + fps + "  "
+                + (activeSoftwareDecode ? "软解" : "硬解"));
     }
 
     private void moveChannelMenuSelection(int offset) {
