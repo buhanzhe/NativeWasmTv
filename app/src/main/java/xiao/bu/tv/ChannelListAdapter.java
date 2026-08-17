@@ -72,7 +72,9 @@ final class ChannelListAdapter extends BaseAdapter {
         } else {
             Channel channel = channels[position];
             holder.number.setText(channel.number);
-            holder.name.setText(channel.name);
+            holder.name.setText(channel.sourceCount() > 1
+                    ? channel.name + "  ·  " + channel.sourceCount() + " 条线路"
+                    : channel.name);
         }
         convertView.setActivated(position == selectedIndex);
         return convertView;

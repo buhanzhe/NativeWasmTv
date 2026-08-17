@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>网页电视遥控器</title>
+  <style>
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html{background:#fff}
+    body{margin:0;background:#fff;color:#1d1d1f;font:15px -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue","Segoe UI",sans-serif;min-height:100vh;-webkit-font-smoothing:antialiased}
+    main{width:100%;max-width:720px;margin:auto;padding:28px 18px 56px}
+    .top{display:flex;align-items:center;justify-content:space-between;margin:0 2px 22px}
+    .brand{font-size:14px;font-weight:700;letter-spacing:.06em;color:#1d1d1f}
+    .online{display:flex;align-items:center;padding:7px 11px;background:#f5f5f7;border-radius:999px;color:#3a3a3c;font-size:12px;font-weight:600}
+    .dot{display:inline-block;width:7px;height:7px;background:#30d158;border-radius:50%;margin-right:7px}
+    .hero{padding:26px;background:#f5f5f7;border:1px solid #ededf0;border-radius:26px;box-shadow:0 12px 36px rgba(0,0,0,.06)}
+    .label{color:#6e6e73;font-size:12px;font-weight:600;letter-spacing:.04em}
+    .now{font-size:31px;font-weight:750;letter-spacing:-.035em;line-height:1.14;margin:7px 0 5px}
+    .group{color:#6e6e73;font-size:14px;line-height:1.45}
+    .remote{display:grid;grid-template-columns:1fr 1.24fr 1fr;gap:10px;margin-top:24px}
+    button,select,input{font:inherit}
+    button{min-height:48px;border:1px solid #dedee3;background:#fff;color:#1d1d1f;border-radius:15px;padding:12px 11px;font-weight:650;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.03);transition:transform .12s ease,background .12s ease}
+    button:active{transform:scale(.975);background:#ebebef}
+    .primary{background:#1d1d1f;border-color:#1d1d1f;color:#fff;box-shadow:none}
+    .primary:active{background:#000}
+    .wide{width:100%}
+    section{margin-top:14px;padding:21px;background:#f5f5f7;border:1px solid #ededf0;border-radius:24px}
+    h2{font-size:18px;line-height:1.25;letter-spacing:-.015em;margin:0 0 16px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    select,input{width:100%;min-height:48px;padding:12px 14px;border-radius:14px;color:#1d1d1f;background:#fff;border:1px solid #dedee3;outline:none;box-shadow:0 1px 2px rgba(0,0,0,.02)}
+    select:focus,input:focus{border-color:#0071e3;box-shadow:0 0 0 3px rgba(0,113,227,.12)}
+    .field{margin-top:2px}
+    .field label{display:block;color:#6e6e73;font-size:12px;font-weight:600;margin:0 0 8px}
+    .actions{display:flex;gap:10px;margin-top:10px}.actions button{flex:1}
+    .switch{display:flex;align-items:center;justify-content:space-between;gap:20px}
+    .switch h2{margin-bottom:5px!important}
+    .switch input{-webkit-appearance:none;appearance:none;position:relative;flex:0 0 auto;width:51px;height:31px;min-height:31px;padding:0;border:0;border-radius:999px;background:#d2d2d7;box-shadow:none;outline:none;transition:background .2s ease}
+    .switch input:before{content:"";position:absolute;left:2px;top:2px;width:27px;height:27px;background:#fff;border-radius:50%;box-shadow:0 2px 5px rgba(0,0,0,.24);transition:transform .2s ease}
+    .switch input:checked{background:#34c759}.switch input:checked:before{transform:translateX(20px)}
+    .hint{color:#6e6e73;font-size:12px;line-height:1.55;margin:9px 0 0}
+    .repo{display:block;color:#0071e3;text-decoration:none;word-break:break-all;font-weight:550}
+    .message{position:fixed;left:5%;right:5%;bottom:22px;max-width:520px;margin:auto;padding:13px 17px;background:#1d1d1f;color:#fff;border-radius:15px;box-shadow:0 14px 38px rgba(0,0,0,.2);display:none;text-align:center;font-weight:600}
+    .message.bad{background:#ff3b30;color:#fff}
+    @media(max-width:520px){main{padding:20px 14px 44px}.top{margin-bottom:16px}.hero{padding:21px;border-radius:23px}.now{font-size:27px}.remote{gap:8px;margin-top:20px}.remote button{font-size:13px;padding-left:6px;padding-right:6px}.grid{grid-template-columns:1fr}section{padding:18px;border-radius:21px}.actions{flex-direction:column}}
+  </style>
+</head>
+<body><main>
+  <div class="top"><div class="brand">NTV · 局域网遥控器</div><div class="online"><span class="dot"></span><span id="status">连接中</span></div></div>
+  <div class="hero"><div class="label">正在播放</div><div id="now" class="now">读取中…</div><div id="group" class="group">—</div>
+    <div class="remote"><button onclick="act('previous')">‹ 上一屏</button><button class="primary" onclick="act('toggle')">播放 / 暂停</button><button onclick="act('next')">下一屏 ›</button></div>
+  </div>
+  <section><h2>选择频道</h2><div class="grid"><select id="groups" onchange="renderChannels()"></select><select id="channels"></select></div><button class="primary wide" style="margin-top:10px" onclick="playSelected()">切换到此频道</button></section>
+  <section><div class="switch"><div><h2 style="margin-bottom:4px">反转上下键</h2><div class="hint">开启后，遥控器上键切到下一频道，下键切到上一频道。</div></div><input id="reverse" type="checkbox" onchange="saveReverse()"></div></section>
+  <section><h2>在线频道源</h2><div class="field"><label for="playlist">M3U / M3U8 / TXT 列表地址</label><input id="playlist" type="url" inputmode="url" placeholder="https://example.com/channels.m3u"></div><div class="actions"><button onclick="useRecommended()">使用内置推荐源</button><button class="primary" onclick="savePlaylist()">保存并加载</button></div><p class="hint">留空保存可移除在线频道。下载和解析可能需要十几秒，请保持此页面打开。</p></section>
+  <section><h2>开源项目</h2><a id="repo" class="repo" href="#" rel="noopener">GitHub</a></section>
+</main><div id="message" class="message"></div>
+<script>
+var state=null,recommended='',timer=null;
+function api(path,body,done){var request=new XMLHttpRequest();request.open(body?'POST':'GET',path,true);if(body)request.setRequestHeader('Content-Type','application/json');request.onreadystatechange=function(){if(request.readyState!==4)return;var data;try{data=JSON.parse(request.responseText)}catch(e){done(new Error('电视返回了无效数据'));return}if(request.status<200||request.status>=300||data.ok===false){done(new Error(data.message||'请求失败'));return}done(null,data)};request.onerror=function(){done(new Error('无法连接电视'))};request.send(body?JSON.stringify(body):null)}
+function refresh(){api('/api/state',null,function(error,data){if(error){document.getElementById('status').textContent='连接失败';toast(error.message,true);return}state=data;document.getElementById('status').textContent='电视在线';document.getElementById('now').textContent=state.current.name;document.getElementById('group').textContent=state.current.group+(state.current.sourceCount>1?' · 线路 '+(state.current.sourceIndex+1)+'/'+state.current.sourceCount:'');document.getElementById('reverse').checked=state.settings.reverseKeys;document.getElementById('playlist').value=state.settings.playlistUrl||'';recommended=state.settings.recommendedPlaylistUrl;var repo=document.getElementById('repo');repo.href=state.githubUrl;repo.textContent=state.githubUrl;renderGroups()})}
+function renderGroups(){var select=document.getElementById('groups'),old=select.value;select.innerHTML='';for(var i=0;i<state.groups.length;i++){var group=state.groups[i],option=document.createElement('option');option.value=i;option.textContent=group.name+'（'+group.channels.length+'）';select.appendChild(option)}select.value=old||String(state.current.groupIndex);renderChannels()}
+function renderChannels(){var groupIndex=Number(document.getElementById('groups').value||0),select=document.getElementById('channels'),items=state.groups[groupIndex].channels;select.innerHTML='';for(var i=0;i<items.length;i++){var option=document.createElement('option');option.value=i;option.textContent=items[i].name+(items[i].sourceCount>1?'（'+items[i].sourceCount+' 条线路）':'');select.appendChild(option)}if(groupIndex===state.current.groupIndex)select.value=String(state.current.channelIndex)}
+function act(action){api('/api/control',{action:action},function(error){if(error){toast(error.message,true);return}toast('指令已发送');setTimeout(refresh,350)})}
+function playSelected(){var groups=document.getElementById('groups'),channels=document.getElementById('channels');api('/api/control',{action:'play',group:Number(groups.value),channel:Number(channels.value)},function(error){if(error){toast(error.message,true);return}toast('正在切换频道');setTimeout(refresh,450)})}
+function saveReverse(){var reverse=document.getElementById('reverse');api('/api/settings',{reverseKeys:reverse.checked},function(error){if(error){reverse.checked=!reverse.checked;toast(error.message,true);return}toast('设置已保存')})}
+function useRecommended(){var playlist=document.getElementById('playlist');playlist.value=recommended;playlist.focus()}
+function savePlaylist(){var value=document.getElementById('playlist').value.replace(/^\s+|\s+$/g,'');toast('正在下载并解析频道源…');api('/api/settings',{playlistUrl:value},function(error,result){if(error){toast(error.message,true);return}toast(result.message||'频道源已更新');refresh()})}
+function toast(text,bad){var el=document.getElementById('message');el.textContent=text;el.className='message'+(bad?' bad':'');el.style.display='block';clearTimeout(timer);timer=setTimeout(function(){el.style.display='none'},bad?5000:2600)}
+refresh();
+</script></body></html>

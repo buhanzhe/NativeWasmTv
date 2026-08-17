@@ -32,6 +32,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ManagementActivity"
+            android:exported="false"
+            android:theme="@style/ManagementTheme" />
+
         <provider
             android:name=".ApkFileProvider"
             android:authorities="${applicationId}.apk"

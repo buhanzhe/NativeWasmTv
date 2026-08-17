@@ -13,6 +13,26 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <TextView
+        android:id="@+id/numeric_channel_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|right"
+        android:layout_marginTop="36dp"
+        android:layout_marginRight="40dp"
+        android:background="@drawable/numeric_channel_background"
+        android:gravity="center"
+        android:minWidth="104dp"
+        android:paddingLeft="22dp"
+        android:paddingTop="10dp"
+        android:paddingRight="22dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/text_primary"
+        android:textSize="52sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:ignore="RtlHardcoded" />
+
     <LinearLayout
         android:id="@+id/loading_panel"
         android:layout_width="380dp"
@@ -201,8 +221,9 @@
 
             <ListView
                 android:id="@+id/channel_list"
-                android:layout_width="339dp"
+                android:layout_width="0dp"
                 android:layout_height="match_parent"
+                android:layout_weight="1"
                 android:choiceMode="singleChoice"
                 android:clipToPadding="false"
                 android:divider="@android:color/transparent"
@@ -211,6 +232,7 @@
                 android:listSelector="@drawable/channel_item_background"
                 android:paddingTop="4dp"
                 android:paddingBottom="4dp" />
+
         </LinearLayout>
 
         <TextView
@@ -222,5 +244,100 @@
             android:textColor="@color/text_muted"
             android:textSize="12sp"
             tools:ignore="HardcodedText" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/management_panel"
+        android:layout_width="440dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/first_launch_background"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingLeft="28dp"
+        android:paddingTop="22dp"
+        android:paddingRight="28dp"
+        android:paddingBottom="20dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/management_scan_title"
+            android:textColor="@color/text_primary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <xiao.bu.tv.QrCodeView
+            android:id="@+id/management_qr"
+            android:layout_width="220dp"
+            android:layout_height="220dp"
+            android:layout_marginTop="16dp" />
+
+        <TextView
+            android:id="@+id/management_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:gravity="center"
+            android:maxLines="3"
+            android:textColor="@color/text_secondary"
+            android:textIsSelectable="true"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:text="@string/management_same_lan"
+            android:textColor="@color/text_muted"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:gravity="center"
+            android:text="返回键关闭"
+            android:textColor="@color/text_muted"
+            android:textSize="12sp"
+            tools:ignore="HardcodedText" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/back_navigation_prompt"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginLeft="20dp"
+        android:layout_marginRight="20dp"
+        android:layout_marginBottom="28dp"
+        android:background="@drawable/first_launch_background"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="22dp"
+        android:paddingTop="14dp"
+        android:paddingRight="14dp"
+        android:paddingBottom="14dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:lineSpacingExtra="3dp"
+            android:text="@string/back_navigation_prompt"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/back_prompt_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="22dp"
+            android:minWidth="92dp"
+            android:text="@string/confirm"
+            android:textSize="15sp" />
     </LinearLayout>
 </FrameLayout>

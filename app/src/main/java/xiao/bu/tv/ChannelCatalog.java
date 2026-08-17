@@ -4,6 +4,7 @@ final class ChannelCatalog {
     static final int SOURCE_CCTV_WEB = 0;
     static final int SOURCE_YSP_CCTV = 1;
     static final int SOURCE_YSP_SATELLITE = 2;
+    static final int SOURCE_CUSTOM = 3;
 
     private static final String STREAM_BASE =
             "https://ldocctvwbcdbyte.volcfcdn.com/ldocctvwbcd/";
@@ -102,13 +103,26 @@ final class ChannelCatalog {
             yangshipinChannel("33", "新疆卫视", "600152138", "2019927403")
     };
 
-    static final Group[] GROUPS = new Group[] {
+    private static final Group[] BUILT_IN_GROUPS = new Group[] {
             new Group("央视网 · 央视频道", SOURCE_CCTV_WEB, CCTV_CHANNELS),
             new Group("央视频 · 央视频道", SOURCE_YSP_CCTV, YANGSHIPIN_CCTV_CHANNELS),
             new Group("央视频 · 卫视频道", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
     };
 
+    static volatile Group[] GROUPS = BUILT_IN_GROUPS;
+
     private ChannelCatalog() {
+    }
+
+    static synchronized void setCustomGroups(Group[] customGroups) {
+        if (customGroups == null || customGroups.length == 0) {
+            GROUPS = BUILT_IN_GROUPS;
+            return;
+        }
+        Group[] groups = new Group[BUILT_IN_GROUPS.length + customGroups.length];
+        System.arraycopy(BUILT_IN_GROUPS, 0, groups, 0, BUILT_IN_GROUPS.length);
+        System.arraycopy(customGroups, 0, groups, BUILT_IN_GROUPS.length, customGroups.length);
+        GROUPS = groups;
     }
 
     static int wrapGroupIndex(int index) {
@@ -139,6 +153,9 @@ final class ChannelCatalog {
     }
 
     static int defaultChannelIndex(Group group) {
+        if (group.source == SOURCE_CUSTOM) {
+            return 0;
+        }
         if (group.source == SOURCE_YSP_SATELLITE) {
             return 0;
         }
