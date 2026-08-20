@@ -9,6 +9,10 @@ import android.app.UiModeManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.media.AudioManager;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
+import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -17,7 +21,7 @@ import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.Surface;
+import android.view.SurfaceHolder;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.AdapterView;
@@ -36,7 +40,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -57,6 +63,21 @@ public final class MainActivity extends Activity {
     private static final String DECODE_MODE_AUTO = "auto";
     private static final String DECODE_MODE_HARDWARE = "hardware";
     private static final String DECODE_MODE_SOFTWARE = "software";
+    private static final String PLAYER_BACKEND = "player_backend";
+    private static final String PLAYER_BACKEND_IJK = "ijk";
+    private static final String PLAYER_BACKEND_SYSTEM = "system";
+    private static final String HARDWARE_DECODER = "hardware_decoder";
+    private static final String HARDWARE_DECODER_AUTO = "auto";
+    private static final String MSTAR_AVC_DECODER = "OMX.MS.AVC.Decoder";
+    private static final String SURFACE_MODE = "surface_mode";
+    private static final String SURFACE_MODE_NORMAL = "normal";
+    private static final String SURFACE_MODE_LEGACY = "legacy";
+    private static final String VIDEO_SCALE_MODE = "video_scale_mode";
+    private static final String VIDEO_SCALE_FIT = "fit";
+    private static final String VIDEO_SCALE_STRETCH = "stretch";
+    private static final String CLOCK_LOCATION = "clock_location";
+    private static final String CLOCK_LOCATION_CHANNEL_LIST = "channel_list";
+    private static final String CLOCK_LOCATION_VIDEO = "video";
     private static final String GITHUB_URL = "https://github.com/buhanzhe/NativeWasmTv";
     private static final int FIRST_LAUNCH_GROUP_INDEX = 1;
     private static final int FIRST_LAUNCH_CHANNEL_INDEX = 0;
@@ -101,15 +122,23 @@ public final class MainActivity extends Activity {
     };
     private final SimpleDateFormat channelListClockFormat =
             new SimpleDateFormat("HH:mm:ss", Locale.getDefault());
-    private final Runnable updateChannelListClock = new Runnable() {
+    private final Runnable updateClock = new Runnable() {
         @Override
         public void run() {
-            if (channelListPanel.getVisibility() != View.VISIBLE) {
+            boolean clockOnVideo = CLOCK_LOCATION_VIDEO.equals(clockLocation);
+            boolean clockInChannelList = CLOCK_LOCATION_CHANNEL_LIST.equals(clockLocation)
+                    && channelListPanel.getVisibility() == View.VISIBLE;
+            if (!clockOnVideo && !clockInChannelList) {
                 return;
             }
-            channelListClock.setText(channelListClockFormat.format(new Date()));
+            String time = channelListClockFormat.format(new Date());
+            if (clockOnVideo) {
+                videoClock.setText(time);
+            } else {
+                channelListClock.setText(time);
+            }
             long now = System.currentTimeMillis();
-            channelListClock.postDelayed(this, 1000L - now % 1000L);
+            root.postDelayed(this, 1000L - now % 1000L);
         }
     };
 
@@ -119,6 +148,7 @@ public final class MainActivity extends Activity {
     private View channelListPanel;
     private TextView channelListTitle;
     private TextView channelListClock;
+    private TextView videoClock;
     private TextView channelName;
     private TextView statusText;
     private TextView videoInfo;
@@ -133,16 +163,24 @@ public final class MainActivity extends Activity {
     private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
     private DirectVideoView videoView;
-    private Surface videoSurface;
+    private SurfaceHolder videoSurfaceHolder;
     private HlsProxyServer proxy;
     private boolean proxyStatefulCmgSource;
     private boolean lowResourceDevice;
     private File cmgDebugDir;
     private IjkMediaPlayer player;
+    private MediaPlayer systemPlayer;
     private boolean prepared;
     private boolean videoRenderingStarted;
     private boolean activeSoftwareDecode;
     private boolean autoSoftwareDecode;
+    private Channel activePlayerChannel;
+    private String activePlayerStreamUrl;
+    private Channel pendingPlayerChannel;
+    private String pendingPlayerStreamUrl;
+    private boolean pendingForceSoftwareDecode;
+    private int pendingPlayerRequestId = -1;
+    private int legacyHardwareRetryRequestId = -1;
     private volatile int playRequestId;
     private int playerStartRetryCount;
     private int bufferingEventId;
@@ -172,6 +210,11 @@ public final class MainActivity extends Activity {
     private LocalControlServer controlServer;
     private volatile boolean reverseUpDown;
     private volatile String decodeMode;
+    private volatile String playerBackend;
+    private volatile String hardwareDecoder;
+    private volatile String surfaceMode;
+    private volatile String videoScaleMode;
+    private volatile String clockLocation;
     private boolean remoteInputMode;
     private String numericChannelInput = "";
 
@@ -179,7 +222,7 @@ public final class MainActivity extends Activity {
         @Override
         public void run() {
             refreshVideoInfo();
-            if (player != null) {
+            if (hasActivePlayer()) {
                 videoInfo.postDelayed(this, 1000L);
             }
         }
@@ -200,6 +243,7 @@ public final class MainActivity extends Activity {
         channelListPanel = findViewById(R.id.channel_list_panel);
         channelListTitle = (TextView) findViewById(R.id.channel_list_title);
         channelListClock = (TextView) findViewById(R.id.channel_list_clock);
+        videoClock = (TextView) findViewById(R.id.video_clock);
         channelName = (TextView) findViewById(R.id.channel_name);
         statusText = (TextView) findViewById(R.id.status_text);
         videoInfo = (TextView) findViewById(R.id.video_info);
@@ -218,6 +262,16 @@ public final class MainActivity extends Activity {
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
         reverseUpDown = preferences.getBoolean(REVERSE_UP_DOWN, false);
         decodeMode = sanitizeDecodeMode(preferences.getString(DECODE_MODE, DECODE_MODE_AUTO));
+        playerBackend = sanitizePlayerBackend(
+                preferences.getString(PLAYER_BACKEND, PLAYER_BACKEND_IJK));
+        hardwareDecoder = sanitizeHardwareDecoder(preferences.getString(
+                HARDWARE_DECODER, defaultHardwareDecoder()));
+        surfaceMode = sanitizeSurfaceMode(preferences.getString(
+                SURFACE_MODE, defaultSurfaceMode()));
+        videoScaleMode = sanitizeVideoScaleMode(
+                preferences.getString(VIDEO_SCALE_MODE, VIDEO_SCALE_FIT));
+        clockLocation = sanitizeClockLocation(
+                preferences.getString(CLOCK_LOCATION, CLOCK_LOCATION_CHANNEL_LIST));
         remoteInputMode = hasTelevisionUi();
         playlistManager = new PlaylistManager(this);
         ChannelCatalog.setCustomGroups(playlistManager.loadCached());
@@ -253,6 +307,7 @@ public final class MainActivity extends Activity {
         });
 
         videoView = (DirectVideoView) findViewById(R.id.video_surface);
+        applyDisplaySettings();
         View.OnClickListener openChannelsOnClick = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -269,21 +324,36 @@ public final class MainActivity extends Activity {
         });
         videoView.setSurfaceCallback(new DirectVideoView.SurfaceCallback() {
             @Override
-            public void onVideoSurfaceCreated(Surface surface) {
-                videoSurface = surface;
-                if (player != null) {
-                    player.setSurface(surface);
+            public void onVideoSurfaceCreated(SurfaceHolder holder) {
+                videoSurfaceHolder = holder;
+                Log.i(TAG, "Video surface created size=" + videoView.getWidth()
+                        + "x" + videoView.getHeight() + " sdk=" + Build.VERSION.SDK_INT);
+                if (pendingPlayerRequestId == playRequestId && pendingPlayerChannel != null) {
+                    startPendingPlayer();
+                } else if (player != null) {
+                    player.setDisplay(holder);
+                } else if (systemPlayer != null) {
+                    systemPlayer.setDisplay(holder);
                 }
             }
 
             @Override
-            public void onVideoSurfaceDestroyed(Surface surface) {
-                if (player != null && videoSurface == surface) {
-                    player.setSurface(null);
+            public void onVideoSurfaceDestroyed(SurfaceHolder holder) {
+                if (videoSurfaceHolder != holder) {
+                    return;
                 }
-                if (videoSurface == surface) {
-                    videoSurface = null;
+                Log.i(TAG, "Video surface destroyed sdk=" + Build.VERSION.SDK_INT);
+                if (hasActivePlayer() && Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                        && activePlayerChannel != null && activePlayerStreamUrl != null) {
+                    queuePendingPlayer(activePlayerChannel, activePlayerStreamUrl,
+                            activeSoftwareDecode);
+                    releasePlayer();
+                } else if (player != null) {
+                    player.setDisplay(null);
+                } else if (systemPlayer != null) {
+                    systemPlayer.setDisplay(null);
                 }
+                videoSurfaceHolder = null;
             }
         });
         root.requestFocus();
@@ -465,6 +535,12 @@ public final class MainActivity extends Activity {
             root.put("settings", new JSONObject()
                     .put("reverseKeys", reverseUpDown)
                     .put("decodeMode", decodeMode)
+                    .put("playerBackend", playerBackend)
+                    .put("hardwareDecoder", hardwareDecoder)
+                    .put("hardwareDecoders", availableHardwareDecodersJson())
+                    .put("surfaceMode", surfaceMode)
+                    .put("videoScaleMode", videoScaleMode)
+                    .put("clockLocation", clockLocation)
                     .put("playlistUrl", playlistManager.getPlaylistUrl())
                     .put("recommendedPlaylistUrl", PlaylistManager.RECOMMENDED_URL));
             return root.toString();
@@ -516,6 +592,8 @@ public final class MainActivity extends Activity {
     }
 
     private String handleWebSettings(JSONObject request) throws Exception {
+        boolean restartPlayback = false;
+        boolean recreateSurface = false;
         if (request.has("reverseKeys")) {
             reverseUpDown = request.optBoolean("reverseKeys", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
@@ -532,14 +610,95 @@ public final class MainActivity extends Activity {
             autoSoftwareDecode = false;
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putString(DECODE_MODE, decodeMode).apply();
-            if (changed) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        switchChannel(currentChannelIndex);
-                    }
-                });
+            restartPlayback |= changed;
+        }
+        if (request.has("playerBackend")) {
+            String rawBackend = request.optString("playerBackend", PLAYER_BACKEND_IJK);
+            String requestedBackend = sanitizePlayerBackend(rawBackend);
+            if (!requestedBackend.equals(rawBackend)) {
+                throw new JSONException("不支持的播放器后端");
             }
+            restartPlayback |= !requestedBackend.equals(playerBackend);
+            playerBackend = requestedBackend;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(PLAYER_BACKEND, playerBackend).apply();
+        }
+        if (request.has("hardwareDecoder")) {
+            String rawDecoder = request.optString(
+                    "hardwareDecoder", HARDWARE_DECODER_AUTO);
+            String requestedDecoder = sanitizeHardwareDecoder(rawDecoder);
+            if (!requestedDecoder.equals(rawDecoder)) {
+                throw new JSONException("所选硬解解码器不可用");
+            }
+            restartPlayback |= !requestedDecoder.equals(hardwareDecoder);
+            hardwareDecoder = requestedDecoder;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(HARDWARE_DECODER, hardwareDecoder).apply();
+        }
+        if (request.has("surfaceMode")) {
+            String rawSurfaceMode = request.optString(
+                    "surfaceMode", SURFACE_MODE_NORMAL);
+            String requestedSurfaceMode = sanitizeSurfaceMode(rawSurfaceMode);
+            if (!requestedSurfaceMode.equals(rawSurfaceMode)) {
+                throw new JSONException("不支持的 Surface 模式");
+            }
+            recreateSurface |= !requestedSurfaceMode.equals(surfaceMode);
+            surfaceMode = requestedSurfaceMode;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(SURFACE_MODE, surfaceMode).apply();
+        }
+        if (request.has("videoScaleMode")) {
+            String rawMode = request.optString("videoScaleMode", VIDEO_SCALE_FIT);
+            final String requestedMode = sanitizeVideoScaleMode(rawMode);
+            if (!requestedMode.equals(rawMode)) {
+                throw new JSONException("不支持的视频画面模式");
+            }
+            videoScaleMode = requestedMode;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(VIDEO_SCALE_MODE, videoScaleMode).apply();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    applyDisplaySettings();
+                }
+            });
+        }
+        if (request.has("clockLocation")) {
+            String rawLocation = request.optString(
+                    "clockLocation", CLOCK_LOCATION_CHANNEL_LIST);
+            final String requestedLocation = sanitizeClockLocation(rawLocation);
+            if (!requestedLocation.equals(rawLocation)) {
+                throw new JSONException("不支持的时间显示位置");
+            }
+            clockLocation = requestedLocation;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(CLOCK_LOCATION, clockLocation).apply();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    applyClockLocation();
+                }
+            });
+        }
+        if (recreateSurface) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    root.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            recreate();
+                        }
+                    }, 500L);
+                }
+            });
+        } else if (restartPlayback) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    switchChannel(currentChannelIndex);
+                }
+            });
         }
         String message = "设置已保存";
         if (request.has("playlistUrl")) {
@@ -940,6 +1099,8 @@ public final class MainActivity extends Activity {
         }
         final int requestId = ++playRequestId;
         playerStartRetryCount = 0;
+        legacyHardwareRetryRequestId = -1;
+        clearPendingPlayer();
         releasePlayer();
         resetVideoLayout();
         showLoading(channel.name, group.source == ChannelCatalog.SOURCE_CUSTOM
@@ -1335,6 +1496,23 @@ public final class MainActivity extends Activity {
 
     private void startPlayer(final Channel channel, final String streamUrl,
             boolean forceSoftwareDecode) throws IOException {
+        boolean softwareDecode = forceSoftwareDecode || shouldUseSoftwareDecode();
+        if (PLAYER_BACKEND_SYSTEM.equals(playerBackend) && !softwareDecode) {
+            startSystemPlayer(channel, streamUrl);
+            return;
+        }
+        startIjkPlayer(channel, streamUrl, forceSoftwareDecode);
+    }
+
+    private void startIjkPlayer(final Channel channel, final String streamUrl,
+            boolean forceSoftwareDecode) throws IOException {
+        if (!videoView.isSurfaceReady()) {
+            queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
+            updateLoadingStatus("等待视频输出界面");
+            Log.i(TAG, "Deferring player until Surface is ready channel=" + channel.name);
+            return;
+        }
+        clearPendingPlayer();
         releasePlayer();
         resetVideoLayout();
         IjkMediaPlayer.loadLibrariesOnce(null);
@@ -1345,10 +1523,33 @@ public final class MainActivity extends Activity {
         final int sourceRequestId = playRequestId;
         final boolean softwareDecode = forceSoftwareDecode || shouldUseSoftwareDecode();
         activeSoftwareDecode = softwareDecode;
+        activePlayerChannel = channel;
+        activePlayerStreamUrl = streamUrl;
         final boolean legacyMediaCodec = Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
                 || lowResourceDevice;
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "mediacodec",
                 softwareDecode ? 0 : 1);
+        if (!softwareDecode) {
+            nextPlayer.setOnMediaCodecSelectListener(
+                    new IjkMediaPlayer.OnMediaCodecSelectListener() {
+                        @Override
+                        public String onMediaCodecSelect(IMediaPlayer mediaPlayer,
+                                String mimeType, int profile, int level) {
+                            if (!HARDWARE_DECODER_AUTO.equals(hardwareDecoder)
+                                    && "video/avc".equalsIgnoreCase(mimeType)) {
+                                Log.i(TAG, "Forcing MediaCodec=" + hardwareDecoder
+                                        + " mime=" + mimeType + " profile=" + profile
+                                        + " level=" + level);
+                                return hardwareDecoder;
+                            }
+                            String selected = IjkMediaPlayer.DefaultMediaCodecSelector.sInstance
+                                    .onMediaCodecSelect(mediaPlayer, mimeType, profile, level);
+                            Log.i(TAG, "Default MediaCodec=" + selected + " mime=" + mimeType
+                                    + " profile=" + profile + " level=" + level);
+                            return selected;
+                        }
+                    });
+        }
         // Several KitKat-era TV codecs fail silently when IJK asks them to reconfigure a
         // Surface for rotation or resolution changes. TV streams are landscape and fixed-size,
         // so keep those optional MediaCodec paths off on legacy/low-RAM devices.
@@ -1380,9 +1581,16 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 256 * 1024);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index",
                 cctvSource ? -1 : -3);
-        if (videoSurface != null) {
-            nextPlayer.setSurface(videoSurface);
+        videoSurfaceHolder = videoView.getVideoSurfaceHolder();
+        if (videoSurfaceHolder == null) {
+            queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
+            nextPlayer.release();
+            player = null;
+            return;
         }
+        // Bind the holder before prepareAsync. API 18 vendor codecs cannot reliably retarget
+        // an already configured decoder to a Surface that appears later.
+        nextPlayer.setDisplay(videoSurfaceHolder);
         nextPlayer.setOnVideoSizeChangedListener(new IMediaPlayer.OnVideoSizeChangedListener() {
             @Override
             public void onVideoSizeChanged(IMediaPlayer mediaPlayer, int width, int height,
@@ -1531,6 +1739,223 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void startSystemPlayer(final Channel channel, final String streamUrl)
+            throws IOException {
+        if (!videoView.isSurfaceReady()) {
+            queuePendingPlayer(channel, streamUrl, false);
+            updateLoadingStatus("等待视频输出界面");
+            Log.i(TAG, "Deferring system player until Surface is ready channel=" + channel.name);
+            return;
+        }
+        clearPendingPlayer();
+        releasePlayer();
+        resetVideoLayout();
+
+        final MediaPlayer nextPlayer = new MediaPlayer();
+        systemPlayer = nextPlayer;
+        final boolean customSource = currentGroup().source == ChannelCatalog.SOURCE_CUSTOM;
+        final boolean cctvSource = currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB;
+        final int sourceRequestId = playRequestId;
+        activeSoftwareDecode = false;
+        activePlayerChannel = channel;
+        activePlayerStreamUrl = streamUrl;
+        videoSurfaceHolder = videoView.getVideoSurfaceHolder();
+        if (videoSurfaceHolder == null) {
+            queuePendingPlayer(channel, streamUrl, false);
+            nextPlayer.release();
+            systemPlayer = null;
+            return;
+        }
+
+        Log.i(TAG, "Starting Android system player surface=" + surfaceMode
+                + " device=" + Build.MANUFACTURER + "/" + Build.MODEL
+                + " sdk=" + Build.VERSION.SDK_INT);
+        nextPlayer.setDisplay(videoSurfaceHolder);
+        nextPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+        nextPlayer.setScreenOnWhilePlaying(true);
+        nextPlayer.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
+            @Override
+            public void onVideoSizeChanged(MediaPlayer mediaPlayer, int width, int height) {
+                if (systemPlayer != mediaPlayer) {
+                    return;
+                }
+                updateSystemVideoLayout(mediaPlayer);
+            }
+        });
+        nextPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            @Override
+            public void onPrepared(MediaPlayer mediaPlayer) {
+                if (systemPlayer != mediaPlayer) {
+                    return;
+                }
+                prepared = true;
+                lastPlaybackProgressAt = SystemClock.elapsedRealtime();
+                lastPlaybackPosition = -1L;
+                playbackProgressObserved = false;
+                updateSystemVideoLayout(mediaPlayer);
+                mediaPlayer.start();
+                scheduleVideoInfoRefresh();
+                scheduleSystemVideoRenderWatchdog(
+                        channel, streamUrl, nextPlayer, sourceRequestId);
+                prefetchNearbyChannels(channel);
+                hideLoading();
+                String playingStatus = "直播播放中 · 系统播放器";
+                showChannelBar(channel.name, customSource
+                        ? customSourceStatus(playingStatus + " · ") : playingStatus);
+            }
+        });
+        nextPlayer.setOnInfoListener(new MediaPlayer.OnInfoListener() {
+            @Override
+            public boolean onInfo(MediaPlayer mediaPlayer, int what, int extra) {
+                if (systemPlayer != mediaPlayer) {
+                    return false;
+                }
+                if (what == MEDIA_INFO_VIDEO_RENDERING_START) {
+                    videoRenderingStarted = true;
+                    Log.i(TAG, "First video frame rendered decoder=system channel="
+                            + channel.name);
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                    buffering = true;
+                    bufferingStartedAt = SystemClock.elapsedRealtime();
+                    final int eventId = ++bufferingEventId;
+                    channelBar.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (buffering && eventId == bufferingEventId
+                                    && sourceRequestId == playRequestId
+                                    && systemPlayer == nextPlayer) {
+                                bufferingStatusVisible = true;
+                                showChannelBar(channel.name, "正在缓冲 · 系统播放器");
+                            }
+                        }
+                    }, 400L);
+                    if (cctvSource) {
+                        channelBar.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (buffering && eventId == bufferingEventId
+                                        && sourceRequestId == playRequestId
+                                        && systemPlayer == nextPlayer) {
+                                    recoverSystemCctvPlayback(sourceRequestId, nextPlayer,
+                                            "system buffering for "
+                                                    + CCTV_BUFFERING_RECOVERY_MS + "ms");
+                                }
+                            }
+                        }, CCTV_BUFFERING_RECOVERY_MS);
+                    }
+                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                    buffering = false;
+                    bufferingEventId++;
+                    if (bufferingStatusVisible) {
+                        bufferingStatusVisible = false;
+                        showChannelBar(channel.name, customSource
+                                ? customSourceStatus("直播播放中 · 系统播放器 · ")
+                                : "直播播放中 · 系统播放器");
+                    }
+                }
+                return false;
+            }
+        });
+        nextPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            @Override
+            public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+                if (systemPlayer != mediaPlayer) {
+                    return true;
+                }
+                Log.w(TAG, "System player error=" + what + "/" + extra
+                        + " channel=" + channel.name);
+                if (customSource) {
+                    channelBar.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (sourceRequestId == playRequestId
+                                    && systemPlayer == nextPlayer) {
+                                switchCustomSource(1, true, "系统播放器线路失败");
+                            }
+                        }
+                    });
+                    return true;
+                }
+                if (playerStartRetryCount < 1) {
+                    final int retry = ++playerStartRetryCount;
+                    channelBar.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (sourceRequestId != playRequestId
+                                    || systemPlayer != nextPlayer) {
+                                return;
+                            }
+                            try {
+                                Log.i(TAG, "Retrying system player " + retry + "/1");
+                                startSystemPlayer(channel, streamUrl);
+                            } catch (IOException error) {
+                                Log.e(TAG, "Unable to retry system player", error);
+                            }
+                        }
+                    }, 500L);
+                    return true;
+                }
+                fallbackSystemPlayer(channel, streamUrl,
+                        "系统播放器错误 " + what + "/" + extra);
+                return true;
+            }
+        });
+        nextPlayer.setDataSource(proxy.proxyUrl(streamUrl));
+        nextPlayer.prepareAsync();
+        if (customSource) {
+            channelBar.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (sourceRequestId == playRequestId
+                            && systemPlayer == nextPlayer && !prepared) {
+                        switchCustomSource(1, true, "系统播放器连接超过 5 秒");
+                    }
+                }
+            }, CUSTOM_SOURCE_TIMEOUT_MS);
+        }
+    }
+
+    private void scheduleSystemVideoRenderWatchdog(final Channel channel,
+            final String streamUrl, final MediaPlayer watchedPlayer, final int requestId) {
+        channelBar.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (requestId != playRequestId || systemPlayer != watchedPlayer || !prepared
+                        || videoRenderingStarted) {
+                    return;
+                }
+                if (buffering) {
+                    channelBar.postDelayed(this, 3000L);
+                    return;
+                }
+                if (!watchedPlayer.isPlaying() || watchedPlayer.getVideoWidth() <= 0
+                        || watchedPlayer.getVideoHeight() <= 0) {
+                    channelBar.postDelayed(this, 3000L);
+                    return;
+                }
+                Log.w(TAG, "System player produced no visible frame channel=" + channel.name);
+                fallbackSystemPlayer(channel, streamUrl, "系统硬解未检测到画面");
+            }
+        }, VIDEO_RENDER_START_TIMEOUT_MS);
+    }
+
+    private void fallbackSystemPlayer(Channel channel, String streamUrl, String reason) {
+        if (!DECODE_MODE_AUTO.equals(decodeMode)) {
+            hideLoading();
+            showChannelBar(channel.name, reason + "，可切换 IJK 或兼容软解");
+            return;
+        }
+        autoSoftwareDecode = true;
+        showLoading(channel.name, reason + "，正在切换兼容软解");
+        try {
+            startIjkPlayer(channel, streamUrl, true);
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to start software fallback from system player", error);
+            hideLoading();
+            showChannelBar(channel.name, "兼容软解启动失败: " + error.getMessage());
+        }
+    }
+
     private boolean shouldUseSoftwareDecode() {
         if (getIntent().getBooleanExtra("debug_software_decode", false)) {
             return true;
@@ -1548,6 +1973,109 @@ public final class MainActivity extends Activity {
         return DECODE_MODE_AUTO;
     }
 
+    private static String sanitizePlayerBackend(String backend) {
+        return PLAYER_BACKEND_SYSTEM.equals(backend)
+                ? PLAYER_BACKEND_SYSTEM : PLAYER_BACKEND_IJK;
+    }
+
+    private String defaultHardwareDecoder() {
+        Set<String> decoders = availableHardwareDecoderNames();
+        return decoders.contains(MSTAR_AVC_DECODER)
+                ? MSTAR_AVC_DECODER : HARDWARE_DECODER_AUTO;
+    }
+
+    private String sanitizeHardwareDecoder(String decoder) {
+        if (decoder == null || decoder.length() == 0
+                || HARDWARE_DECODER_AUTO.equals(decoder)) {
+            return HARDWARE_DECODER_AUTO;
+        }
+        return availableHardwareDecoderNames().contains(decoder)
+                ? decoder : HARDWARE_DECODER_AUTO;
+    }
+
+    private Set<String> availableHardwareDecoderNames() {
+        Set<String> decoders = new LinkedHashSet<String>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN) {
+            return decoders;
+        }
+        try {
+            int codecCount = MediaCodecList.getCodecCount();
+            for (int index = 0; index < codecCount; index++) {
+                MediaCodecInfo codecInfo = MediaCodecList.getCodecInfoAt(index);
+                if (codecInfo == null || codecInfo.isEncoder()) {
+                    continue;
+                }
+                String name = codecInfo.getName();
+                if (name == null || isSoftwareCodecName(name)) {
+                    continue;
+                }
+                for (String type : codecInfo.getSupportedTypes()) {
+                    if ("video/avc".equalsIgnoreCase(type)) {
+                        decoders.add(name);
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to enumerate AVC hardware decoders", error);
+        }
+        return decoders;
+    }
+
+    private static boolean isSoftwareCodecName(String codecName) {
+        String lower = codecName.toLowerCase(Locale.US);
+        return lower.startsWith("omx.google.")
+                || lower.startsWith("omx.pv.")
+                || lower.startsWith("omx.ffmpeg.")
+                || lower.startsWith("omx.avcodec.")
+                || lower.startsWith("c2.android.")
+                || lower.contains(".software.")
+                || lower.contains(".sw.");
+    }
+
+    private JSONArray availableHardwareDecodersJson() {
+        JSONArray result = new JSONArray();
+        for (String decoder : availableHardwareDecoderNames()) {
+            result.put(decoder);
+        }
+        return result;
+    }
+
+    private static String defaultSurfaceMode() {
+        return Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
+                ? SURFACE_MODE_LEGACY : SURFACE_MODE_NORMAL;
+    }
+
+    private static String sanitizeSurfaceMode(String mode) {
+        return SURFACE_MODE_LEGACY.equals(mode)
+                ? SURFACE_MODE_LEGACY : SURFACE_MODE_NORMAL;
+    }
+
+    private static String sanitizeVideoScaleMode(String mode) {
+        return VIDEO_SCALE_STRETCH.equals(mode) ? VIDEO_SCALE_STRETCH : VIDEO_SCALE_FIT;
+    }
+
+    private static String sanitizeClockLocation(String location) {
+        return CLOCK_LOCATION_VIDEO.equals(location)
+                ? CLOCK_LOCATION_VIDEO : CLOCK_LOCATION_CHANNEL_LIST;
+    }
+
+    private void applyDisplaySettings() {
+        videoView.setLegacySurfaceMode(SURFACE_MODE_LEGACY.equals(surfaceMode));
+        videoView.setStretchVideo(VIDEO_SCALE_STRETCH.equals(videoScaleMode));
+        applyClockLocation();
+    }
+
+    private void applyClockLocation() {
+        root.removeCallbacks(updateClock);
+        boolean clockOnVideo = CLOCK_LOCATION_VIDEO.equals(clockLocation);
+        videoClock.setVisibility(clockOnVideo ? View.VISIBLE : View.GONE);
+        channelListClock.setVisibility(clockOnVideo ? View.GONE : View.VISIBLE);
+        if (clockOnVideo || channelListPanel.getVisibility() == View.VISIBLE) {
+            root.post(updateClock);
+        }
+    }
+
     private void scheduleVideoRenderWatchdog(final Channel channel, final String streamUrl,
             final IjkMediaPlayer watchedPlayer, final int requestId,
             final boolean softwareDecode) {
@@ -1562,11 +2090,6 @@ public final class MainActivity extends Activity {
                     channelBar.postDelayed(this, 3000L);
                     return;
                 }
-                float outputFps = watchedPlayer.getVideoOutputFramesPerSecond();
-                if (outputFps > 0.01f) {
-                    videoRenderingStarted = true;
-                    return;
-                }
                 if (!watchedPlayer.isPlaying() || watchedPlayer.getVideoWidth() <= 0
                         || watchedPlayer.getVideoHeight() <= 0) {
                     channelBar.postDelayed(this, 3000L);
@@ -1576,6 +2099,24 @@ public final class MainActivity extends Activity {
                     Log.w(TAG, "Software decoder produced no visible frame channel="
                             + channel.name);
                     showChannelBar(channel.name, "兼容软解仍未检测到画面");
+                    return;
+                }
+                boolean legacyCodec = Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT
+                        || lowResourceDevice;
+                if (legacyCodec && legacyHardwareRetryRequestId != requestId) {
+                    legacyHardwareRetryRequestId = requestId;
+                    Log.w(TAG, "No rendered frame; recreating legacy hardware decoder with "
+                            + "ready Surface device=" + Build.MANUFACTURER + "/" + Build.MODEL
+                            + " sdk=" + Build.VERSION.SDK_INT + " outputFps="
+                            + watchedPlayer.getVideoOutputFramesPerSecond());
+                    showLoading(channel.name, "正在重新连接兼容硬解");
+                    try {
+                        startPlayer(channel, streamUrl, false);
+                    } catch (IOException error) {
+                        Log.e(TAG, "Unable to restart legacy hardware decoder", error);
+                        hideLoading();
+                        showChannelBar(channel.name, "兼容硬解重试失败: " + error.getMessage());
+                    }
                     return;
                 }
                 if (!DECODE_MODE_AUTO.equals(decodeMode)) {
@@ -1608,6 +2149,18 @@ public final class MainActivity extends Activity {
         }
         stallRecoveryRequestId = requestId;
         Log.w(TAG, "Recovering stalled CCTV playback at live edge: " + reason);
+        switchChannel(currentChannelIndex);
+    }
+
+    private void recoverSystemCctvPlayback(int requestId, MediaPlayer watchedPlayer,
+            String reason) {
+        if (requestId != playRequestId || systemPlayer != watchedPlayer
+                || currentGroup().source != ChannelCatalog.SOURCE_CCTV_WEB
+                || stallRecoveryRequestId == requestId) {
+            return;
+        }
+        stallRecoveryRequestId = requestId;
+        Log.w(TAG, "Recovering stalled system playback at live edge: " + reason);
         switchChannel(currentChannelIndex);
     }
 
@@ -1700,14 +2253,24 @@ public final class MainActivity extends Activity {
 
     private void togglePlayback() {
         Channel channel = currentChannel();
-        if (player == null || !prepared) {
+        if (!hasActivePlayer() || !prepared) {
             switchChannel(currentChannelIndex);
-        } else if (player.isPlaying()) {
-            player.pause();
-            showChannelBar(channel.name, "已暂停");
+        } else if (player != null) {
+            if (player.isPlaying()) {
+                player.pause();
+                showChannelBar(channel.name, "已暂停");
+            } else {
+                player.start();
+                showChannelBar(channel.name, "直播播放中");
+            }
         } else {
-            player.start();
-            showChannelBar(channel.name, "直播播放中");
+            if (systemPlayer.isPlaying()) {
+                systemPlayer.pause();
+                showChannelBar(channel.name, "已暂停 · 系统播放器");
+            } else {
+                systemPlayer.start();
+                showChannelBar(channel.name, "直播播放中 · 系统播放器");
+            }
         }
     }
 
@@ -1725,8 +2288,7 @@ public final class MainActivity extends Activity {
         closeManagementPanel();
         channelListPanel.setVisibility(View.VISIBLE);
         showChannelMenu(currentGroupIndex);
-        channelListClock.removeCallbacks(updateChannelListClock);
-        updateChannelListClock.run();
+        applyClockLocation();
         channelList.post(new Runnable() {
             @Override
             public void run() {
@@ -1754,8 +2316,8 @@ public final class MainActivity extends Activity {
 
     private void closeChannelList() {
         channelListPanel.removeCallbacks(hideChannelList);
-        channelListClock.removeCallbacks(updateChannelListClock);
         channelListPanel.setVisibility(View.GONE);
+        applyClockLocation();
         root.requestFocus();
     }
 
@@ -1829,9 +2391,54 @@ public final class MainActivity extends Activity {
             videoInfo.removeCallbacks(updateVideoInfo);
         }
         if (player != null) {
-            player.setSurface(null);
+            player.setDisplay(null);
             player.release();
             player = null;
+        }
+        if (systemPlayer != null) {
+            systemPlayer.setDisplay(null);
+            systemPlayer.release();
+            systemPlayer = null;
+        }
+        activePlayerChannel = null;
+        activePlayerStreamUrl = null;
+    }
+
+    private boolean hasActivePlayer() {
+        return player != null || systemPlayer != null;
+    }
+
+    private void queuePendingPlayer(Channel channel, String streamUrl,
+            boolean forceSoftwareDecode) {
+        pendingPlayerChannel = channel;
+        pendingPlayerStreamUrl = streamUrl;
+        pendingForceSoftwareDecode = forceSoftwareDecode;
+        pendingPlayerRequestId = playRequestId;
+    }
+
+    private void clearPendingPlayer() {
+        pendingPlayerChannel = null;
+        pendingPlayerStreamUrl = null;
+        pendingForceSoftwareDecode = false;
+        pendingPlayerRequestId = -1;
+    }
+
+    private void startPendingPlayer() {
+        if (pendingPlayerRequestId != playRequestId || pendingPlayerChannel == null
+                || pendingPlayerStreamUrl == null) {
+            clearPendingPlayer();
+            return;
+        }
+        Channel channel = pendingPlayerChannel;
+        String streamUrl = pendingPlayerStreamUrl;
+        boolean forceSoftwareDecode = pendingForceSoftwareDecode;
+        clearPendingPlayer();
+        try {
+            startPlayer(channel, streamUrl, forceSoftwareDecode);
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to resume player after Surface creation", error);
+            hideLoading();
+            showChannelBar(channel.name, "视频界面恢复失败: " + error.getMessage());
         }
     }
 
@@ -1861,6 +2468,16 @@ public final class MainActivity extends Activity {
                 + " sar=" + videoSarNum + "/" + videoSarDen);
     }
 
+    private void updateSystemVideoLayout(MediaPlayer mediaPlayer) {
+        videoWidth = mediaPlayer.getVideoWidth();
+        videoHeight = mediaPlayer.getVideoHeight();
+        videoSarNum = 1;
+        videoSarDen = 1;
+        videoView.setVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen);
+        refreshVideoInfo();
+        Log.i(TAG, "System video source=" + videoWidth + "x" + videoHeight);
+    }
+
     private void scheduleVideoInfoRefresh() {
         videoInfo.removeCallbacks(updateVideoInfo);
         videoInfo.post(updateVideoInfo);
@@ -1881,22 +2498,38 @@ public final class MainActivity extends Activity {
         }
         if (prepared && currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
             long now = SystemClock.elapsedRealtime();
-            long playbackPosition = player.getCurrentPosition();
+            long playbackPosition = player != null
+                    ? player.getCurrentPosition() : systemPlayer.getCurrentPosition();
             if (playbackPosition > lastPlaybackPosition) {
                 playbackProgressObserved = true;
                 lastPlaybackPosition = playbackPosition;
                 lastPlaybackProgressAt = now;
             } else if (playbackProgressObserved && !buffering && lastPlaybackProgressAt > 0L
                     && now - lastPlaybackProgressAt >= CCTV_VIDEO_STALL_RECOVERY_MS) {
-                recoverCctvPlayback(playRequestId, player,
-                        "playback clock stopped for "
-                                + (now - lastPlaybackProgressAt) + "ms");
+                if (player != null) {
+                    recoverCctvPlayback(playRequestId, player,
+                            "playback clock stopped for "
+                                    + (now - lastPlaybackProgressAt) + "ms");
+                } else {
+                    recoverSystemCctvPlayback(playRequestId, systemPlayer,
+                            "playback clock stopped for "
+                                    + (now - lastPlaybackProgressAt) + "ms");
+                }
             }
         }
         String fps = outputFps > 0.01f
                 ? String.format(Locale.US, "%.1f/%.1f", outputFps, decodeFps) : "--";
-        videoInfo.setText("源: " + resolution + "  fps: " + fps + "  "
-                + (activeSoftwareDecode ? "软解" : "硬解"));
+        String decoderStatus;
+        if (systemPlayer != null) {
+            decoderStatus = "系统播放器";
+        } else if (activeSoftwareDecode) {
+            decoderStatus = "IJK软解";
+        } else if (!HARDWARE_DECODER_AUTO.equals(hardwareDecoder)) {
+            decoderStatus = hardwareDecoder;
+        } else {
+            decoderStatus = "IJK硬解";
+        }
+        videoInfo.setText("源: " + resolution + "  fps: " + fps + "  " + decoderStatus);
     }
 
     private void moveChannelMenuSelection(int offset) {
@@ -2142,8 +2775,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         playRequestId++;
-        if (channelListClock != null) {
-            channelListClock.removeCallbacks(updateChannelListClock);
+        if (root != null) {
+            root.removeCallbacks(updateClock);
         }
         if (backPrompt != null) {
             backPrompt.removeCallbacks(hideBackPrompt);
