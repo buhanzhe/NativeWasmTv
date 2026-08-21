@@ -69,9 +69,16 @@ final class HlsProxyServer implements Closeable {
     private static final int CMG_INITIAL_PREWARM_SEGMENTS = 0;
     private static final int CMG_MAX_VCL_PER_RUNTIME = 150;
     private static final int UPSTREAM_MAX_ATTEMPTS = 3;
+    private static final int CCTV_EDGE_MAX_ATTEMPTS = 5;
     private static final int UPSTREAM_CONNECT_TIMEOUT_MS = 3500;
     private static final int UPSTREAM_READ_TIMEOUT_MS = 5500;
     private static final int UPSTREAM_RETRY_DELAY_MS = 250;
+    private static final int CCTV_EDGE_RETRY_DELAY_MS = 400;
+    // CCTV web playlists normally expose only three 4-second segments. Hide one segment on
+    // the first response and two once history has caught up, keeping playback 4-8 seconds
+    // behind a CDN edge that may advertise a segment before every node can serve it.
+    private static final int CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS = 2;
+    private static final int CCTV_MIN_PLAYABLE_SEGMENTS = 2;
     private static final int TS_RESOLUTION_PROBE_BYTES = 384 * 1024;
     private static final int MAX_PREALLOCATED_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final String DEFAULT_USER_AGENT = "nTv/1.0";
@@ -341,24 +348,31 @@ final class HlsProxyServer implements Closeable {
 
     private ProxyResponse fetch(String originUrl) throws IOException {
         IOException lastError = null;
-        for (int attempt = 1; attempt <= UPSTREAM_MAX_ATTEMPTS; attempt++) {
+        for (int attempt = 1; attempt <= CCTV_EDGE_MAX_ATTEMPTS; attempt++) {
             try {
                 return fetchOnce(originUrl);
             } catch (IOException error) {
                 lastError = error;
-                if (attempt == UPSTREAM_MAX_ATTEMPTS || !isRetryableUpstreamError(error)) {
+                boolean edgeNotReady = isCctvEdgeNotReady(error, originUrl);
+                int maxAttempts = edgeNotReady
+                        ? CCTV_EDGE_MAX_ATTEMPTS : UPSTREAM_MAX_ATTEMPTS;
+                if (attempt == maxAttempts
+                        || !isRetryableUpstreamError(error, originUrl)) {
                     throw error;
                 }
                 Log.w(TAG, "Retrying upstream request attempt=" + (attempt + 1)
-                        + "/" + UPSTREAM_MAX_ATTEMPTS + " " + segmentName(originUrl)
-                        + " after " + error.getClass().getSimpleName());
-                SystemClock.sleep((long) UPSTREAM_RETRY_DELAY_MS * attempt);
+                        + "/" + maxAttempts + " " + segmentName(originUrl)
+                        + " after " + error.getClass().getSimpleName()
+                        + (edgeNotReady ? " edge-not-ready" : ""));
+                int delayMs = edgeNotReady
+                        ? CCTV_EDGE_RETRY_DELAY_MS : UPSTREAM_RETRY_DELAY_MS;
+                SystemClock.sleep((long) delayMs * attempt);
             }
         }
         throw lastError == null ? new IOException("Upstream request failed") : lastError;
     }
 
-    private static boolean isRetryableUpstreamError(IOException error) {
+    private static boolean isRetryableUpstreamError(IOException error, String originUrl) {
         Throwable cause = error;
         while (cause != null) {
             if (cause instanceof SocketTimeoutException
@@ -371,7 +385,19 @@ final class HlsProxyServer implements Closeable {
             cause = cause.getCause();
         }
         String message = error.getMessage();
-        return message != null && message.startsWith("Upstream HTTP 5");
+        return message != null && (message.startsWith("Upstream HTTP 5")
+                || isCctvEdgeNotReady(error, originUrl));
+    }
+
+    private static boolean isCctvEdgeNotReady(IOException error, String originUrl) {
+        if (!needsH5eDecrypt(originUrl) || !isTransportStream(originUrl, null)) {
+            return false;
+        }
+        String message = error.getMessage();
+        return message != null && (message.startsWith("Upstream HTTP 404")
+                || message.startsWith("Upstream HTTP 408")
+                || message.startsWith("Upstream HTTP 425")
+                || message.startsWith("Upstream HTTP 429"));
     }
 
     private ProxyResponse fetchOnce(String originUrl) throws IOException {
@@ -546,12 +572,16 @@ final class HlsProxyServer implements Closeable {
                     String first = cctvNextSegments.keySet().iterator().next();
                     cctvNextSegments.remove(first);
                 }
-                prefetchWindow = buildCctvPrefetchWindowLocked(merged);
+                prefetchWindow = buildCctvPrefetchWindowLocked(
+                        merged, needsH5eDecrypt(playlistUrl));
             }
             prefetchCctvSegments(prefetchWindow);
             startCctvPlaylistMonitor(playlistUrl);
         }
-        long firstSequence = merged.get(0).sequence;
+        int holdBackSegments = cctvLiveEdgeHoldBack(playlistUrl, merged.size());
+        List<PlaylistSegment> playable = holdBackSegments == 0 ? merged
+                : merged.subList(0, merged.size() - holdBackSegments);
+        long firstSequence = playable.get(0).sequence;
         StringBuilder result = new StringBuilder(lines.length * 64);
         boolean wroteSequence = false;
         for (String line : header) {
@@ -564,7 +594,7 @@ final class HlsProxyServer implements Closeable {
         if (!wroteSequence) {
             result.append("#EXT-X-MEDIA-SEQUENCE:").append(firstSequence).append('\n');
         }
-        for (PlaylistSegment segment : merged) {
+        for (PlaylistSegment segment : playable) {
             for (String tag : segment.tags) {
                 result.append(tag).append('\n');
             }
@@ -572,10 +602,20 @@ final class HlsProxyServer implements Closeable {
         }
         Log.i(TAG, "Buffered media playlist segments current=" + currentSegments.size()
                 + " merged=" + merged.size()
-                + " seq=" + firstSequence + "-" + merged.get(merged.size() - 1).sequence
-                + " " + segmentName(merged.get(0).url)
-                + ".." + segmentName(merged.get(merged.size() - 1).url));
+                + " playable=" + playable.size()
+                + " holdBack=" + holdBackSegments
+                + " seq=" + firstSequence + "-"
+                + playable.get(playable.size() - 1).sequence
+                + " " + segmentName(playable.get(0).url)
+                + ".." + segmentName(playable.get(playable.size() - 1).url));
         return result.toString();
+    }
+
+    private static int cctvLiveEdgeHoldBack(String playlistUrl, int segmentCount) {
+        if (!needsH5eDecrypt(playlistUrl)) {
+            return 0;
+        }
+        return cctvLiveEdgeHoldBackForSegmentCount(segmentCount);
     }
 
     private byte[] getCctvSegment(final String originUrl) throws IOException {
@@ -746,7 +786,8 @@ final class HlsProxyServer implements Closeable {
                 }
                 prefetchWindow = yangshipin
                         ? buildCmgPrefetchWindowFromUrlsLocked(segments)
-                        : buildCctvPrefetchWindowFromUrlsLocked(segments);
+                        : buildCctvPrefetchWindowFromUrlsLocked(
+                                segments, needsH5eDecrypt(playlistUrl));
             }
             if (yangshipin) {
                 prefetchCmgSegments(prefetchWindow);
@@ -839,25 +880,35 @@ final class HlsProxyServer implements Closeable {
         return result;
     }
 
-    private List<String> buildCctvPrefetchWindowLocked(List<PlaylistSegment> segments) {
+    private List<String> buildCctvPrefetchWindowLocked(List<PlaylistSegment> segments,
+            boolean protectLiveEdge) {
         List<String> urls = new ArrayList<String>(segments.size());
         for (PlaylistSegment segment : segments) {
             urls.add(segment.url);
         }
-        return buildCctvPrefetchWindowFromUrlsLocked(urls);
+        return buildCctvPrefetchWindowFromUrlsLocked(urls, protectLiveEdge);
     }
 
-    private List<String> buildCctvPrefetchWindowFromUrlsLocked(List<String> segments) {
+    private List<String> buildCctvPrefetchWindowFromUrlsLocked(List<String> segments,
+            boolean protectLiveEdge) {
         int count = parallelCctvDecrypt ? CCTV_PARALLEL_PREFETCH_WINDOW : 1;
         List<String> result = new ArrayList<String>(count);
+        int holdBackSegments = protectLiveEdge
+                ? cctvLiveEdgeHoldBackForSegmentCount(segments.size()) : 0;
+        int initialIndex = Math.max(0, segments.size() - holdBackSegments - 1);
         String next = lastCctvRequestedUrl == null
-                ? (segments.isEmpty() ? null : segments.get(0))
+                ? (segments.isEmpty() ? null : segments.get(initialIndex))
                 : cctvNextSegments.get(lastCctvRequestedUrl);
         while (next != null && result.size() < count) {
             result.add(next);
             next = cctvNextSegments.get(next);
         }
         return result;
+    }
+
+    private static int cctvLiveEdgeHoldBackForSegmentCount(int segmentCount) {
+        return Math.min(CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS,
+                Math.max(0, segmentCount - CCTV_MIN_PLAYABLE_SEGMENTS));
     }
 
     private static ExecutorService newCctvPrefetchExecutor(final int threadCount) {
