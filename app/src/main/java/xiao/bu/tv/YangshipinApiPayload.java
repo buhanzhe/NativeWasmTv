@@ -48,6 +48,11 @@ final class YangshipinApiPayload {
     }
 
     static YangshipinApiPayload create(Channel channel, long serverTimeMs) throws Exception {
+        return create(channel, serverTimeMs, "fhd");
+    }
+
+    static YangshipinApiPayload create(Channel channel, long serverTimeMs,
+            String definition) throws Exception {
         String guid = createGuid(serverTimeMs);
         String authRandom = randomText(10);
         String liveRandom = randomText(10);
@@ -66,7 +71,7 @@ final class YangshipinApiPayload {
                 + "&signature=" + authSignature;
 
         String liveBody = createLiveBody(channel, guid, liveRandom,
-                System.currentTimeMillis() / 1000L);
+                System.currentTimeMillis() / 1000L, definition);
         String requestId = "999999" + randomText(10) + serverTimeMs;
         return new YangshipinApiPayload(guid, ticketRandom, requestId, liveRandom,
                 authBody, liveBody);
@@ -74,6 +79,11 @@ final class YangshipinApiPayload {
 
     static String createLiveBody(Channel channel, String guid, String liveRandom,
             long serverSeconds) throws Exception {
+        return createLiveBody(channel, guid, liveRandom, serverSeconds, "fhd");
+    }
+
+    static String createLiveBody(Channel channel, String guid, String liveRandom,
+            long serverSeconds, String definition) throws Exception {
         TreeMap<String, String> live = new TreeMap<String, String>();
         live.put("cnlid", channel.yangshipinStreamId);
         live.put("livepid", channel.yangshipinPid);
@@ -91,7 +101,7 @@ final class YangshipinApiPayload {
         live.put("appVer", APP_VERSION);
         live.put("app_version", APP_VERSION);
         live.put("channel", "ysp_tx");
-        live.put("defn", "fhd");
+        live.put("defn", sanitizeDefinition(definition));
         live.put("rand_str", liveRandom);
         String liveSignature = md5(joinForSignature(live) + LIVE_SALT);
 
@@ -100,6 +110,13 @@ final class YangshipinApiPayload {
         json.put("adjust", 1);
         json.put("signature", liveSignature);
         return json.toString();
+    }
+
+    private static String sanitizeDefinition(String definition) {
+        if ("shd".equals(definition) || "sd".equals(definition)) {
+            return definition;
+        }
+        return "fhd";
     }
 
     static String createSdkInput(String liveBody) throws Exception {

@@ -11,6 +11,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -26,7 +27,8 @@ final class LocalControlServer implements Closeable {
     }
 
     private static final String TAG = "LocalControlServer";
-    private static final int PREFERRED_PORT = 9978;
+    static final int PREFERRED_PORT = 9966;
+    static final int MAX_PORT = 9975;
     private static final int MAX_REQUEST_BYTES = 64 * 1024;
     private final byte[] indexHtml;
     private final Listener listener;
@@ -40,10 +42,29 @@ final class LocalControlServer implements Closeable {
     }
 
     void start() throws IOException {
-        try {
-            serverSocket = new ServerSocket(PREFERRED_PORT);
-        } catch (IOException occupied) {
-            serverSocket = new ServerSocket(0);
+        IOException lastError = null;
+        for (int port = PREFERRED_PORT; port <= MAX_PORT; port++) {
+            ServerSocket socket = new ServerSocket();
+            try {
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(port));
+                serverSocket = socket;
+                if (port != PREFERRED_PORT) {
+                    Log.w(TAG, "Management port " + PREFERRED_PORT
+                            + " occupied; using " + port);
+                }
+                break;
+            } catch (IOException error) {
+                lastError = error;
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+        if (serverSocket == null) {
+            throw new IOException("Management ports " + PREFERRED_PORT + "-" + MAX_PORT
+                    + " are unavailable", lastError);
         }
         running = true;
         acceptThread = new Thread(new Runnable() {

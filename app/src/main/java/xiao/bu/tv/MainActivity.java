@@ -1,6 +1,18 @@
 package xiao.bu.tv;
 
 import com.bu.cc.tv.NativeCmgDecryptor;
+import com.google.android.exoplayer2.DefaultLoadControl;
+import com.google.android.exoplayer2.DefaultRenderersFactory;
+import com.google.android.exoplayer2.ExoPlaybackException;
+import com.google.android.exoplayer2.Format;
+import com.google.android.exoplayer2.MediaItem;
+import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.SimpleExoPlayer;
+import com.google.android.exoplayer2.mediacodec.MediaCodecSelector;
+import com.google.android.exoplayer2.mediacodec.MediaCodecUtil;
+import com.google.android.exoplayer2.source.hls.HlsMediaSource;
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSourceFactory;
+import com.google.android.exoplayer2.video.VideoListener;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -12,12 +24,14 @@ import android.content.res.Configuration;
 import android.media.AudioManager;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
+import android.media.MediaFormat;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -40,7 +54,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -51,14 +67,16 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import tv.danmaku.ijk.media.player.IMediaPlayer;
+import tv.danmaku.ijk.media.player.IjkMediaMeta;
 import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 
 public final class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
-    private static final String PREFERENCES = "tv_player";
+    static final String PREFERENCES = "tv_player";
     private static final String LAST_GROUP_INDEX = "last_group_index";
     private static final String LAST_CHANNEL_INDEX = "last_channel_index";
     private static final String REVERSE_UP_DOWN = "reverse_up_down";
+    static final String AUTO_START = "auto_start";
     private static final String DECODE_MODE = "decode_mode";
     private static final String DECODE_MODE_AUTO = "auto";
     private static final String DECODE_MODE_HARDWARE = "hardware";
@@ -66,6 +84,9 @@ public final class MainActivity extends Activity {
     private static final String PLAYER_BACKEND = "player_backend";
     private static final String PLAYER_BACKEND_IJK = "ijk";
     private static final String PLAYER_BACKEND_SYSTEM = "system";
+    private static final String PLAYER_BACKEND_CSD = "csd";
+    private static final String H264_SPS_COMPATIBILITY = "h264_sps_compatibility";
+    private static final String HARDDECODE_AB_MIGRATION = "harddecode_ab_migration_v1";
     private static final String HARDWARE_DECODER = "hardware_decoder";
     private static final String HARDWARE_DECODER_AUTO = "auto";
     private static final String MSTAR_AVC_DECODER = "OMX.MS.AVC.Decoder";
@@ -75,9 +96,18 @@ public final class MainActivity extends Activity {
     private static final String VIDEO_SCALE_MODE = "video_scale_mode";
     private static final String VIDEO_SCALE_FIT = "fit";
     private static final String VIDEO_SCALE_STRETCH = "stretch";
+    private static final String RESOLUTION_MODE = "resolution_mode";
+    private static final String RESOLUTION_MODE_HIGH = "high";
+    private static final String RESOLUTION_MODE_MEDIUM = "medium";
+    private static final String RESOLUTION_MODE_LOW = "low";
     private static final String CLOCK_LOCATION = "clock_location";
     private static final String CLOCK_LOCATION_CHANNEL_LIST = "channel_list";
     private static final String CLOCK_LOCATION_VIDEO = "video";
+    private static final String SHOW_DEBUG_INFO = "show_debug_info";
+    private static final String LIVE_DELAY_MODE = "live_delay_mode";
+    private static final String LIVE_DELAY_LOW = "low";
+    private static final String LIVE_DELAY_BALANCED = "balanced";
+    private static final String LIVE_DELAY_STABLE = "stable";
     private static final String GITHUB_URL = "https://github.com/buhanzhe/NativeWasmTv";
     private static final int FIRST_LAUNCH_GROUP_INDEX = 1;
     private static final int FIRST_LAUNCH_CHANNEL_INDEX = 0;
@@ -86,8 +116,12 @@ public final class MainActivity extends Activity {
     private static final long BACK_PROMPT_TIMEOUT_MS = 5000L;
     private static final long EXIT_CONFIRM_TIMEOUT_MS = BACK_PROMPT_TIMEOUT_MS;
     private static final long CHANNEL_PREFETCH_DELAY_MS = 1500L;
-    private static final long CCTV_BUFFERING_RECOVERY_MS = 8000L;
+    private static final long CCTV_BUFFERING_RECOVERY_MS = 15000L;
     private static final long CCTV_VIDEO_STALL_RECOVERY_MS = 8000L;
+    private static final int CCTV_CSD_MIN_BUFFER_MS = 20000;
+    private static final int CCTV_CSD_MAX_BUFFER_MS = 60000;
+    private static final int CCTV_CSD_START_BUFFER_MS = 7500;
+    private static final int CCTV_CSD_REBUFFER_MS = 10000;
     private static final long CUSTOM_SOURCE_TIMEOUT_MS = 5000L;
     private static final long NUMERIC_CHANNEL_TIMEOUT_MS = 1200L;
     private static final long VIDEO_RENDER_START_TIMEOUT_MS = 10000L;
@@ -149,6 +183,7 @@ public final class MainActivity extends Activity {
     private TextView channelListTitle;
     private TextView channelListClock;
     private TextView videoClock;
+    private TextView debugInfoOverlay;
     private TextView channelName;
     private TextView statusText;
     private TextView videoInfo;
@@ -170,6 +205,7 @@ public final class MainActivity extends Activity {
     private File cmgDebugDir;
     private IjkMediaPlayer player;
     private MediaPlayer systemPlayer;
+    private SimpleExoPlayer csdPlayer;
     private boolean prepared;
     private boolean videoRenderingStarted;
     private boolean activeSoftwareDecode;
@@ -197,7 +233,10 @@ public final class MainActivity extends Activity {
     private long bufferingStartedAt;
     private long lastPlaybackProgressAt;
     private long lastPlaybackPosition = -1L;
+    private long lastSystemCpuTotalJiffies;
+    private long lastSystemCpuIdleJiffies;
     private boolean buffering;
+    private boolean csdLiveRecoverySeeking;
     private boolean bufferingStatusVisible;
     private boolean playbackProgressObserved;
     private int stallRecoveryRequestId = -1;
@@ -209,12 +248,19 @@ public final class MainActivity extends Activity {
     private PlaylistManager playlistManager;
     private LocalControlServer controlServer;
     private volatile boolean reverseUpDown;
+    private volatile boolean autoStart;
     private volatile String decodeMode;
     private volatile String playerBackend;
     private volatile String hardwareDecoder;
     private volatile String surfaceMode;
+    private volatile boolean h264SpsCompatibility;
     private volatile String videoScaleMode;
+    private volatile String resolutionMode;
     private volatile String clockLocation;
+    private volatile boolean showDebugInfo;
+    private volatile String liveDelayMode;
+    private int clockViewportWidth;
+    private int clockViewportHeight;
     private boolean remoteInputMode;
     private String numericChannelInput = "";
 
@@ -244,6 +290,7 @@ public final class MainActivity extends Activity {
         channelListTitle = (TextView) findViewById(R.id.channel_list_title);
         channelListClock = (TextView) findViewById(R.id.channel_list_clock);
         videoClock = (TextView) findViewById(R.id.video_clock);
+        debugInfoOverlay = (TextView) findViewById(R.id.debug_info_overlay);
         channelName = (TextView) findViewById(R.id.channel_name);
         statusText = (TextView) findViewById(R.id.status_text);
         videoInfo = (TextView) findViewById(R.id.video_info);
@@ -255,23 +302,55 @@ public final class MainActivity extends Activity {
         managementPanel = findViewById(R.id.management_panel);
         backPrompt = findViewById(R.id.back_navigation_prompt);
         backPromptOk = (Button) findViewById(R.id.back_prompt_ok);
+        root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View view, int left, int top, int right, int bottom,
+                    int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                int width = right - left;
+                int height = bottom - top;
+                if (width != clockViewportWidth || height != clockViewportHeight) {
+                    configureVideoClockForViewport(width, height);
+                }
+            }
+        });
         groupList = (ListView) findViewById(R.id.channel_group_list);
         channelList = (ListView) findViewById(R.id.channel_list);
         groupAdapter = new ChannelListAdapter(this);
         channelAdapter = new ChannelListAdapter(this);
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
+        String detectedDefaultDecoder = defaultHardwareDecoder();
+        if (MSTAR_AVC_DECODER.equals(detectedDefaultDecoder)
+                && !preferences.getBoolean(HARDDECODE_AB_MIGRATION, false)) {
+            // Select the complete compatibility path once when this test build is installed.
+            // Every individual variable remains available on the management page for A/B.
+            preferences.edit()
+                    .putString(PLAYER_BACKEND, PLAYER_BACKEND_CSD)
+                    .putString(DECODE_MODE, DECODE_MODE_HARDWARE)
+                    .putString(HARDWARE_DECODER, MSTAR_AVC_DECODER)
+                    .putString(SURFACE_MODE, SURFACE_MODE_LEGACY)
+                    .putBoolean(H264_SPS_COMPATIBILITY, true)
+                    .putBoolean(HARDDECODE_AB_MIGRATION, true)
+                    .apply();
+        }
         reverseUpDown = preferences.getBoolean(REVERSE_UP_DOWN, false);
+        autoStart = preferences.getBoolean(AUTO_START, false);
         decodeMode = sanitizeDecodeMode(preferences.getString(DECODE_MODE, DECODE_MODE_AUTO));
         playerBackend = sanitizePlayerBackend(
                 preferences.getString(PLAYER_BACKEND, PLAYER_BACKEND_IJK));
         hardwareDecoder = sanitizeHardwareDecoder(preferences.getString(
-                HARDWARE_DECODER, defaultHardwareDecoder()));
+                HARDWARE_DECODER, detectedDefaultDecoder));
         surfaceMode = sanitizeSurfaceMode(preferences.getString(
                 SURFACE_MODE, defaultSurfaceMode()));
+        h264SpsCompatibility = preferences.getBoolean(H264_SPS_COMPATIBILITY, true);
         videoScaleMode = sanitizeVideoScaleMode(
                 preferences.getString(VIDEO_SCALE_MODE, VIDEO_SCALE_FIT));
+        resolutionMode = sanitizeResolutionMode(
+                preferences.getString(RESOLUTION_MODE, RESOLUTION_MODE_HIGH));
         clockLocation = sanitizeClockLocation(
                 preferences.getString(CLOCK_LOCATION, CLOCK_LOCATION_CHANNEL_LIST));
+        showDebugInfo = preferences.getBoolean(SHOW_DEBUG_INFO, false);
+        liveDelayMode = sanitizeLiveDelayMode(
+                preferences.getString(LIVE_DELAY_MODE, LIVE_DELAY_STABLE));
         remoteInputMode = hasTelevisionUi();
         playlistManager = new PlaylistManager(this);
         ChannelCatalog.setCustomGroups(playlistManager.loadCached());
@@ -334,6 +413,8 @@ public final class MainActivity extends Activity {
                     player.setDisplay(holder);
                 } else if (systemPlayer != null) {
                     systemPlayer.setDisplay(holder);
+                } else if (csdPlayer != null) {
+                    csdPlayer.setVideoSurfaceHolder(holder);
                 }
             }
 
@@ -352,6 +433,8 @@ public final class MainActivity extends Activity {
                     player.setDisplay(null);
                 } else if (systemPlayer != null) {
                     systemPlayer.setDisplay(null);
+                } else if (csdPlayer != null) {
+                    csdPlayer.clearVideoSurfaceHolder(holder);
                 }
                 videoSurfaceHolder = null;
             }
@@ -471,7 +554,9 @@ public final class MainActivity extends Activity {
             refreshManagementAddress();
         } catch (IOException error) {
             Log.e(TAG, "Unable to start management server", error);
-            managementUrl.setText("局域网管理服务启动失败");
+            managementUrl.setText("局域网管理服务启动失败：端口 "
+                    + LocalControlServer.PREFERRED_PORT + "-"
+                    + LocalControlServer.MAX_PORT + " 均不可用");
             managementQr.setText(null);
         }
     }
@@ -534,13 +619,18 @@ public final class MainActivity extends Activity {
             root.put("groups", jsonGroups);
             root.put("settings", new JSONObject()
                     .put("reverseKeys", reverseUpDown)
+                    .put("autoStart", autoStart)
                     .put("decodeMode", decodeMode)
                     .put("playerBackend", playerBackend)
                     .put("hardwareDecoder", hardwareDecoder)
                     .put("hardwareDecoders", availableHardwareDecodersJson())
                     .put("surfaceMode", surfaceMode)
+                    .put("h264SpsCompatibility", h264SpsCompatibility)
                     .put("videoScaleMode", videoScaleMode)
+                    .put("resolutionMode", resolutionMode)
                     .put("clockLocation", clockLocation)
+                    .put("showDebugInfo", showDebugInfo)
+                    .put("liveDelayMode", liveDelayMode)
                     .put("playlistUrl", playlistManager.getPlaylistUrl())
                     .put("recommendedPlaylistUrl", PlaylistManager.RECOMMENDED_URL));
             return root.toString();
@@ -599,6 +689,12 @@ public final class MainActivity extends Activity {
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(REVERSE_UP_DOWN, reverseUpDown).apply();
         }
+        if (request.has("autoStart")) {
+            autoStart = request.optBoolean("autoStart", false);
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putBoolean(AUTO_START, autoStart).apply();
+            Log.i(TAG, "Boot auto start=" + autoStart);
+        }
         if (request.has("decodeMode")) {
             final String requestedMode = sanitizeDecodeMode(
                     request.optString("decodeMode", DECODE_MODE_AUTO));
@@ -647,6 +743,14 @@ public final class MainActivity extends Activity {
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putString(SURFACE_MODE, surfaceMode).apply();
         }
+        if (request.has("h264SpsCompatibility")) {
+            boolean requestedCompatibility = request.optBoolean(
+                    "h264SpsCompatibility", true);
+            restartPlayback |= requestedCompatibility != h264SpsCompatibility;
+            h264SpsCompatibility = requestedCompatibility;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putBoolean(H264_SPS_COMPATIBILITY, h264SpsCompatibility).apply();
+        }
         if (request.has("videoScaleMode")) {
             String rawMode = request.optString("videoScaleMode", VIDEO_SCALE_FIT);
             final String requestedMode = sanitizeVideoScaleMode(rawMode);
@@ -662,6 +766,17 @@ public final class MainActivity extends Activity {
                     applyDisplaySettings();
                 }
             });
+        }
+        if (request.has("resolutionMode")) {
+            String rawMode = request.optString("resolutionMode", RESOLUTION_MODE_HIGH);
+            String requestedMode = sanitizeResolutionMode(rawMode);
+            if (!requestedMode.equals(rawMode)) {
+                throw new JSONException("不支持的分辨率档位");
+            }
+            restartPlayback |= !requestedMode.equals(resolutionMode);
+            resolutionMode = requestedMode;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(RESOLUTION_MODE, resolutionMode).apply();
         }
         if (request.has("clockLocation")) {
             String rawLocation = request.optString(
@@ -679,6 +794,28 @@ public final class MainActivity extends Activity {
                     applyClockLocation();
                 }
             });
+        }
+        if (request.has("showDebugInfo")) {
+            showDebugInfo = request.optBoolean("showDebugInfo", false);
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putBoolean(SHOW_DEBUG_INFO, showDebugInfo).apply();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    applyDebugInfoVisibility();
+                }
+            });
+        }
+        if (request.has("liveDelayMode")) {
+            String rawMode = request.optString("liveDelayMode", LIVE_DELAY_STABLE);
+            String requestedMode = sanitizeLiveDelayMode(rawMode);
+            if (!requestedMode.equals(rawMode)) {
+                throw new JSONException("不支持的直播延迟模式");
+            }
+            restartPlayback |= !requestedMode.equals(liveDelayMode);
+            liveDelayMode = requestedMode;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(LIVE_DELAY_MODE, liveDelayMode).apply();
         }
         if (recreateSurface) {
             runOnUiThread(new Runnable() {
@@ -1192,7 +1329,9 @@ public final class MainActivity extends Activity {
             previous.close();
         }
         HlsProxyServer next = new HlsProxyServer(
-                cmgDebugDir, statefulCmgSource, lowResourceDevice);
+                cmgDebugDir, statefulCmgSource, lowResourceDevice,
+                h264SpsCompatibility, cctvLiveEdgeHoldBackSegments(),
+                currentGroup().source != ChannelCatalog.SOURCE_CUSTOM, resolutionMode);
         next.start();
         proxy = next;
         proxyStatefulCmgSource = statefulCmgSource;
@@ -1205,7 +1344,8 @@ public final class MainActivity extends Activity {
         }
         updateLoadingStatus("正在获取央视频线路");
         showChannelBar(channel.name, "正在解析央视频源");
-        yangshipinResolver.resolve(requestId, channel, new YangshipinWebResolver.Callback() {
+        yangshipinResolver.resolve(requestId, channel, yangshipinDefinition(),
+                new YangshipinWebResolver.Callback() {
             @Override
             public void onResolved(int resolvedRequestId, String url,
                     String cmgTag, String cmgInitialUpdateTag, String cmgUpdateTag,
@@ -1497,6 +1637,10 @@ public final class MainActivity extends Activity {
     private void startPlayer(final Channel channel, final String streamUrl,
             boolean forceSoftwareDecode) throws IOException {
         boolean softwareDecode = forceSoftwareDecode || shouldUseSoftwareDecode();
+        if (PLAYER_BACKEND_CSD.equals(playerBackend) && !softwareDecode) {
+            startCsdPlayer(channel, streamUrl);
+            return;
+        }
         if (PLAYER_BACKEND_SYSTEM.equals(playerBackend) && !softwareDecode) {
             startSystemPlayer(channel, streamUrl);
             return;
@@ -1582,8 +1726,12 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 256 * 1024);
+        /* The CCTV proxy deliberately publishes two fully downloaded/decrypted startup
+         * segments. Starting at -1 discards the first segment and leaves only about four
+         * seconds before the next playlist refresh, causing the visible one-time stall.
+         * Start at the first of the prepared pair so IJK really gets the intended ~8s. */
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index",
-                cctvSource ? -1 : -3);
+                cctvSource ? -2 : -3);
         videoSurfaceHolder = videoView.getVideoSurfaceHolder();
         if (videoSurfaceHolder == null) {
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
@@ -1649,7 +1797,11 @@ public final class MainActivity extends Activity {
                             if (buffering && eventId == bufferingEventId
                                     && requestId == playRequestId) {
                                 bufferingStatusVisible = true;
-                                showChannelBar(channel.name, "正在缓冲");
+                                if (cctvSource) {
+                                    showLoading(channel.name, "正在缓冲，请稍候");
+                                } else {
+                                    showChannelBar(channel.name, "正在缓冲");
+                                }
                             }
                         }
                     }, 400L);
@@ -1673,6 +1825,9 @@ public final class MainActivity extends Activity {
                     bufferingEventId++;
                     if (bufferingStatusVisible) {
                         bufferingStatusVisible = false;
+                        if (cctvSource) {
+                            hideLoading();
+                        }
                         showChannelBar(channel.name, customSource
                                 ? customSourceStatus("直播播放中 · ") : "直播播放中");
                     }
@@ -1828,7 +1983,11 @@ public final class MainActivity extends Activity {
                                     && sourceRequestId == playRequestId
                                     && systemPlayer == nextPlayer) {
                                 bufferingStatusVisible = true;
-                                showChannelBar(channel.name, "正在缓冲 · 系统播放器");
+                                if (cctvSource) {
+                                    showLoading(channel.name, "正在缓冲，请稍候");
+                                } else {
+                                    showChannelBar(channel.name, "正在缓冲 · 系统播放器");
+                                }
                             }
                         }
                     }, 400L);
@@ -1851,6 +2010,9 @@ public final class MainActivity extends Activity {
                     bufferingEventId++;
                     if (bufferingStatusVisible) {
                         bufferingStatusVisible = false;
+                        if (cctvSource) {
+                            hideLoading();
+                        }
                         showChannelBar(channel.name, customSource
                                 ? customSourceStatus("直播播放中 · 系统播放器 · ")
                                 : "直播播放中 · 系统播放器");
@@ -1918,6 +2080,252 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void startCsdPlayer(final Channel channel, final String streamUrl)
+            throws IOException {
+        if (!videoView.isSurfaceReady()) {
+            queuePendingPlayer(channel, streamUrl, false);
+            updateLoadingStatus("等待视频输出界面");
+            Log.i(TAG, "Deferring CSD player until Surface is ready channel=" + channel.name);
+            return;
+        }
+        clearPendingPlayer();
+        releasePlayer();
+        resetVideoLayout();
+
+        final String requestedDecoder = hardwareDecoder;
+        MediaCodecSelector selector = new MediaCodecSelector() {
+            @Override
+            public List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> getDecoderInfos(
+                    String mimeType, boolean requiresSecureDecoder,
+                    boolean requiresTunnelingDecoder)
+                    throws MediaCodecUtil.DecoderQueryException {
+                List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> available =
+                        MediaCodecUtil.getDecoderInfos(mimeType, requiresSecureDecoder,
+                                requiresTunnelingDecoder);
+                if (!"video/avc".equalsIgnoreCase(mimeType)
+                        || HARDWARE_DECODER_AUTO.equals(requestedDecoder)) {
+                    return available;
+                }
+                List<com.google.android.exoplayer2.mediacodec.MediaCodecInfo> forced =
+                        new ArrayList<com.google.android.exoplayer2.mediacodec.MediaCodecInfo>();
+                for (com.google.android.exoplayer2.mediacodec.MediaCodecInfo info : available) {
+                    if (requestedDecoder.equals(info.name)) {
+                        forced.add(info);
+                    }
+                }
+                if (!forced.isEmpty()) {
+                    Log.i(TAG, "CSD backend forcing MediaCodec=" + requestedDecoder
+                            + " candidates=" + available.size());
+                    return forced;
+                }
+                Log.w(TAG, "CSD backend did not find forced codec=" + requestedDecoder
+                        + "; using platform order");
+                return available;
+            }
+        };
+        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+                .setMediaCodecSelector(selector)
+                .setEnableDecoderFallback(true);
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(CCTV_CSD_MIN_BUFFER_MS, CCTV_CSD_MAX_BUFFER_MS,
+                        CCTV_CSD_START_BUFFER_MS, CCTV_CSD_REBUFFER_MS)
+                .build();
+        final SimpleExoPlayer nextPlayer = new SimpleExoPlayer.Builder(this, renderersFactory)
+                .setLoadControl(loadControl)
+                .build();
+        final int sourceRequestId = playRequestId;
+        csdPlayer = nextPlayer;
+        activeSoftwareDecode = false;
+        activePlayerChannel = channel;
+        activePlayerStreamUrl = streamUrl;
+        videoSurfaceHolder = videoView.getVideoSurfaceHolder();
+        if (videoSurfaceHolder == null) {
+            queuePendingPlayer(channel, streamUrl, false);
+            nextPlayer.release();
+            csdPlayer = null;
+            return;
+        }
+
+        Log.i(TAG, "Starting explicit-CSD hardware backend decoder=" + requestedDecoder
+                + " spsCompatibility=" + h264SpsCompatibility
+                + " liveDelay=" + liveDelayMode
+                + " targetOffsetMs=" + cctvLiveTargetOffsetMs()
+                + " startBufferMs=" + CCTV_CSD_START_BUFFER_MS
+                + " rebufferMs=" + CCTV_CSD_REBUFFER_MS
+                + " surface=" + surfaceMode + " device=" + Build.MANUFACTURER + "/"
+                + Build.MODEL + " sdk=" + Build.VERSION.SDK_INT);
+        nextPlayer.setVideoSurfaceHolder(videoSurfaceHolder);
+        nextPlayer.addVideoListener(new VideoListener() {
+            @Override
+            public void onVideoSizeChanged(int width, int height,
+                    int unappliedRotationDegrees, float pixelWidthHeightRatio) {
+                if (csdPlayer != nextPlayer) {
+                    return;
+                }
+                videoWidth = width;
+                videoHeight = height;
+                videoSarNum = pixelWidthHeightRatio > 0f
+                        ? Math.max(1, Math.round(pixelWidthHeightRatio * 1000f)) : 1;
+                videoSarDen = pixelWidthHeightRatio > 0f ? 1000 : 1;
+                videoView.setVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen);
+                refreshVideoInfo();
+                Log.i(TAG, "CSD video source=" + width + "x" + height
+                        + " pixelRatio=" + pixelWidthHeightRatio);
+            }
+
+            @Override
+            public void onRenderedFirstFrame() {
+                if (csdPlayer != nextPlayer) {
+                    return;
+                }
+                videoRenderingStarted = true;
+                Log.i(TAG, "First video frame rendered decoder=explicit-csd channel="
+                        + channel.name);
+            }
+        });
+        nextPlayer.addListener(new Player.EventListener() {
+            @Override
+            public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
+                if (csdPlayer != nextPlayer) {
+                    return;
+                }
+                if (playbackState == Player.STATE_READY) {
+                    if (buffering && prepared) {
+                        Log.i(TAG, "Explicit-CSD buffering recovered after "
+                                + (SystemClock.elapsedRealtime() - bufferingStartedAt)
+                                + "ms channel=" + channel.name);
+                    }
+                    prepared = true;
+                    buffering = false;
+                    bufferingEventId++;
+                    lastPlaybackProgressAt = SystemClock.elapsedRealtime();
+                    playbackProgressObserved = false;
+                    hideLoading();
+                    showChannelBar(channel.name, "直播播放中 · 兼容CSD硬解");
+                    scheduleVideoInfoRefresh();
+                    scheduleCsdVideoRenderWatchdog(channel, streamUrl, nextPlayer,
+                            sourceRequestId);
+                    prefetchNearbyChannels(channel);
+                } else if (playbackState == Player.STATE_BUFFERING) {
+                    if (!buffering) {
+                        buffering = true;
+                        bufferingStartedAt = SystemClock.elapsedRealtime();
+                        final int eventId = ++bufferingEventId;
+                        Log.w(TAG, "Explicit-CSD buffering started channel=" + channel.name);
+                        channelBar.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (buffering && eventId == bufferingEventId
+                                        && sourceRequestId == playRequestId
+                                        && csdPlayer == nextPlayer
+                                        && currentGroup().source
+                                                == ChannelCatalog.SOURCE_CCTV_WEB) {
+                                    recoverCsdCctvPlayback(sourceRequestId, nextPlayer,
+                                            "CSD buffering for "
+                                                    + CCTV_BUFFERING_RECOVERY_MS + "ms");
+                                }
+                            }
+                        }, CCTV_BUFFERING_RECOVERY_MS);
+                    }
+                    if (currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
+                        showLoading(channel.name, "正在缓冲，请稍候");
+                    } else {
+                        showChannelBar(channel.name, "正在缓冲 · 兼容CSD硬解");
+                    }
+                    if (prepared && playWhenReady && !csdLiveRecoverySeeking
+                            && currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
+                        csdLiveRecoverySeeking = true;
+                        long windowDurationMs = nextPlayer.getDuration();
+                        long currentPositionMs = nextPlayer.getCurrentPosition();
+                        long targetPositionMs = windowDurationMs > 0L
+                                ? Math.max(0L, windowDurationMs - cctvLiveTargetOffsetMs())
+                                : Math.max(0L, currentPositionMs - cctvLiveTargetOffsetMs());
+                        if (targetPositionMs + 2000L < currentPositionMs) {
+                            Log.i(TAG, "Seeking CCTV playback to configured live offset mode="
+                                    + liveDelayMode + " currentMs=" + currentPositionMs
+                                    + " durationMs=" + windowDurationMs
+                                    + " targetMs=" + targetPositionMs);
+                            nextPlayer.seekTo(targetPositionMs);
+                            channelBar.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (csdPlayer == nextPlayer) {
+                                        csdLiveRecoverySeeking = false;
+                                    }
+                                }
+                            }, 1000L);
+                        } else {
+                            csdLiveRecoverySeeking = false;
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void onPlayerError(ExoPlaybackException error) {
+                if (csdPlayer != nextPlayer) {
+                    return;
+                }
+                Log.e(TAG, "Explicit-CSD player error type=" + error.type
+                        + " channel=" + channel.name, error);
+                fallbackCsdPlayer(channel, streamUrl,
+                        "兼容CSD硬解错误 " + error.type);
+            }
+        });
+        MediaItem mediaItem = new MediaItem.Builder()
+                .setUri(proxy.proxyUrl(streamUrl))
+                .setLiveTargetOffsetMs(cctvLiveTargetOffsetMs())
+                .setLiveMinOffsetMs(cctvLiveMinOffsetMs())
+                .setLiveMaxOffsetMs(cctvLiveMaxOffsetMs())
+                .setLiveMinPlaybackSpeed(0.90f)
+                .setLiveMaxPlaybackSpeed(1.0f)
+                .build();
+        HlsMediaSource mediaSource = new HlsMediaSource.Factory(
+                new DefaultHttpDataSourceFactory("nTv-CSD/1.0"))
+                .createMediaSource(mediaItem);
+        nextPlayer.setMediaSource(mediaSource);
+        nextPlayer.setPlayWhenReady(true);
+        nextPlayer.prepare();
+    }
+
+    private void scheduleCsdVideoRenderWatchdog(final Channel channel,
+            final String streamUrl, final SimpleExoPlayer watchedPlayer, final int requestId) {
+        channelBar.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (requestId != playRequestId || csdPlayer != watchedPlayer || !prepared
+                        || videoRenderingStarted) {
+                    return;
+                }
+                if (buffering) {
+                    channelBar.postDelayed(this, 3000L);
+                    return;
+                }
+                Log.w(TAG, "Explicit-CSD decoder produced no visible frame channel="
+                        + channel.name + " decoder=" + hardwareDecoder
+                        + " spsCompatibility=" + h264SpsCompatibility);
+                fallbackCsdPlayer(channel, streamUrl, "兼容CSD硬解未检测到画面");
+            }
+        }, VIDEO_RENDER_START_TIMEOUT_MS);
+    }
+
+    private void fallbackCsdPlayer(Channel channel, String streamUrl, String reason) {
+        if (!DECODE_MODE_AUTO.equals(decodeMode)) {
+            hideLoading();
+            showChannelBar(channel.name, reason + "，请保留配置并反馈日志");
+            return;
+        }
+        autoSoftwareDecode = true;
+        showLoading(channel.name, reason + "，正在切换兼容软解");
+        try {
+            startIjkPlayer(channel, streamUrl, true);
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to start software fallback from CSD backend", error);
+            hideLoading();
+            showChannelBar(channel.name, "兼容软解启动失败: " + error.getMessage());
+        }
+    }
+
     private void scheduleSystemVideoRenderWatchdog(final Channel channel,
             final String streamUrl, final MediaPlayer watchedPlayer, final int requestId) {
         channelBar.postDelayed(new Runnable() {
@@ -1977,8 +2385,10 @@ public final class MainActivity extends Activity {
     }
 
     private static String sanitizePlayerBackend(String backend) {
-        return PLAYER_BACKEND_SYSTEM.equals(backend)
-                ? PLAYER_BACKEND_SYSTEM : PLAYER_BACKEND_IJK;
+        if (PLAYER_BACKEND_SYSTEM.equals(backend) || PLAYER_BACKEND_CSD.equals(backend)) {
+            return backend;
+        }
+        return PLAYER_BACKEND_IJK;
     }
 
     private String defaultHardwareDecoder() {
@@ -2058,9 +2468,57 @@ public final class MainActivity extends Activity {
         return VIDEO_SCALE_STRETCH.equals(mode) ? VIDEO_SCALE_STRETCH : VIDEO_SCALE_FIT;
     }
 
+    private static String sanitizeResolutionMode(String mode) {
+        if (RESOLUTION_MODE_MEDIUM.equals(mode) || RESOLUTION_MODE_LOW.equals(mode)) {
+            return mode;
+        }
+        return RESOLUTION_MODE_HIGH;
+    }
+
     private static String sanitizeClockLocation(String location) {
         return CLOCK_LOCATION_VIDEO.equals(location)
                 ? CLOCK_LOCATION_VIDEO : CLOCK_LOCATION_CHANNEL_LIST;
+    }
+
+    private static String sanitizeLiveDelayMode(String mode) {
+        if (LIVE_DELAY_LOW.equals(mode) || LIVE_DELAY_BALANCED.equals(mode)) {
+            return mode;
+        }
+        return LIVE_DELAY_STABLE;
+    }
+
+    private long cctvLiveTargetOffsetMs() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 8000L;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 12000L;
+        }
+        return 20000L;
+    }
+
+    private long cctvLiveMinOffsetMs() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 6000L;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 9000L;
+        }
+        return 16000L;
+    }
+
+    private long cctvLiveMaxOffsetMs() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 14000L;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 22000L;
+        }
+        return 30000L;
+    }
+
+    private int cctvLiveEdgeHoldBackSegments() {
+        return LIVE_DELAY_LOW.equals(liveDelayMode) ? 1 : 2;
     }
 
     private void applyDisplaySettings() {
@@ -2072,10 +2530,84 @@ public final class MainActivity extends Activity {
     private void applyClockLocation() {
         root.removeCallbacks(updateClock);
         boolean clockOnVideo = CLOCK_LOCATION_VIDEO.equals(clockLocation);
+        configureVideoClockForViewport(root.getWidth(), root.getHeight());
         videoClock.setVisibility(clockOnVideo ? View.VISIBLE : View.GONE);
         channelListClock.setVisibility(clockOnVideo ? View.GONE : View.VISIBLE);
+        applyDebugInfoVisibility();
         if (clockOnVideo || channelListPanel.getVisibility() == View.VISIBLE) {
             root.post(updateClock);
+        }
+    }
+
+    private void configureVideoClockForViewport(int viewportWidth, int viewportHeight) {
+        if (videoClock == null) {
+            return;
+        }
+        if (viewportWidth <= 0 || viewportHeight <= 0) {
+            viewportWidth = getResources().getDisplayMetrics().widthPixels;
+            viewportHeight = getResources().getDisplayMetrics().heightPixels;
+        }
+        int shortSide = Math.min(viewportWidth, viewportHeight);
+        float textSizePx = Math.max(24f, Math.min(96f, shortSide * 0.042f));
+        float shadowRadiusPx = Math.max(2f, textSizePx * 0.09f);
+        float shadowOffsetPx = Math.max(1f, textSizePx * 0.045f);
+        videoClock.setTextSize(TypedValue.COMPLEX_UNIT_PX, textSizePx);
+        videoClock.setShadowLayer(shadowRadiusPx, shadowOffsetPx, shadowOffsetPx,
+                0xe6000000);
+
+        android.graphics.Paint.FontMetrics metrics = videoClock.getPaint().getFontMetrics();
+        int textWidth = (int) Math.ceil(videoClock.getPaint().measureText("88:88:88"));
+        int textHeight = (int) Math.ceil(metrics.descent - metrics.ascent);
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) videoClock.getLayoutParams();
+        params.width = textWidth + (int) Math.ceil(shadowRadiusPx * 2f);
+        params.height = textHeight + (int) Math.ceil(shadowRadiusPx * 2f);
+        params.topMargin = Math.max(4, Math.round(viewportHeight * 0.0125f));
+        params.rightMargin = Math.max(6, Math.round(viewportWidth * 0.01f));
+        videoClock.setLayoutParams(params);
+        configureDebugInfoForViewport(viewportWidth, viewportHeight,
+                CLOCK_LOCATION_VIDEO.equals(clockLocation), params);
+        clockViewportWidth = viewportWidth;
+        clockViewportHeight = viewportHeight;
+        Log.i(TAG, "Video clock layout viewport=" + viewportWidth + "x" + viewportHeight
+                + " textPx=" + Math.round(textSizePx)
+                + " size=" + params.width + "x" + params.height
+                + " margins=" + params.rightMargin + "," + params.topMargin);
+    }
+
+    private void configureDebugInfoForViewport(int viewportWidth, int viewportHeight,
+            boolean clockOnVideo, FrameLayout.LayoutParams clockParams) {
+        if (debugInfoOverlay == null) {
+            return;
+        }
+        int shortSide = Math.min(viewportWidth, viewportHeight);
+        float textSizePx = Math.max(14f, Math.min(48f, shortSide * 0.022f));
+        float shadowRadiusPx = Math.max(1.5f, textSizePx * 0.09f);
+        float shadowOffsetPx = Math.max(1f, textSizePx * 0.045f);
+        debugInfoOverlay.setTextSize(TypedValue.COMPLEX_UNIT_PX, textSizePx);
+        debugInfoOverlay.setShadowLayer(shadowRadiusPx, shadowOffsetPx, shadowOffsetPx,
+                0xe6000000);
+        debugInfoOverlay.setLineSpacing(0f, 1.08f);
+
+        FrameLayout.LayoutParams params =
+                (FrameLayout.LayoutParams) debugInfoOverlay.getLayoutParams();
+        params.width = FrameLayout.LayoutParams.WRAP_CONTENT;
+        params.height = FrameLayout.LayoutParams.WRAP_CONTENT;
+        params.rightMargin = clockParams.rightMargin;
+        params.topMargin = clockOnVideo
+                ? clockParams.topMargin + clockParams.height
+                        + Math.max(3, Math.round(viewportHeight * 0.004f))
+                : clockParams.topMargin;
+        debugInfoOverlay.setLayoutParams(params);
+    }
+
+    private void applyDebugInfoVisibility() {
+        if (debugInfoOverlay == null) {
+            return;
+        }
+        debugInfoOverlay.setVisibility(showDebugInfo ? View.VISIBLE : View.GONE);
+        if (showDebugInfo) {
+            configureVideoClockForViewport(root.getWidth(), root.getHeight());
+            refreshVideoInfo();
         }
     }
 
@@ -2164,6 +2696,18 @@ public final class MainActivity extends Activity {
         }
         stallRecoveryRequestId = requestId;
         Log.w(TAG, "Recovering stalled system playback at live edge: " + reason);
+        switchChannel(currentChannelIndex);
+    }
+
+    private void recoverCsdCctvPlayback(int requestId, SimpleExoPlayer watchedPlayer,
+            String reason) {
+        if (requestId != playRequestId || csdPlayer != watchedPlayer
+                || currentGroup().source != ChannelCatalog.SOURCE_CCTV_WEB
+                || stallRecoveryRequestId == requestId) {
+            return;
+        }
+        stallRecoveryRequestId = requestId;
+        Log.w(TAG, "Recovering stalled CSD playback at live edge: " + reason);
         switchChannel(currentChannelIndex);
     }
 
@@ -2266,7 +2810,7 @@ public final class MainActivity extends Activity {
                 player.start();
                 showChannelBar(channel.name, "直播播放中");
             }
-        } else {
+        } else if (systemPlayer != null) {
             if (systemPlayer.isPlaying()) {
                 systemPlayer.pause();
                 showChannelBar(channel.name, "已暂停 · 系统播放器");
@@ -2274,6 +2818,11 @@ public final class MainActivity extends Activity {
                 systemPlayer.start();
                 showChannelBar(channel.name, "直播播放中 · 系统播放器");
             }
+        } else if (csdPlayer != null) {
+            boolean nextPlayWhenReady = !csdPlayer.getPlayWhenReady();
+            csdPlayer.setPlayWhenReady(nextPlayWhenReady);
+            showChannelBar(channel.name, nextPlayWhenReady
+                    ? "直播播放中 · 兼容CSD硬解" : "已暂停");
         }
     }
 
@@ -2342,6 +2891,14 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private String yangshipinDefinition() {
+        if (RESOLUTION_MODE_MEDIUM.equals(resolutionMode)
+                || RESOLUTION_MODE_LOW.equals(resolutionMode)) {
+            return "shd";
+        }
+        return "fhd";
+    }
+
     private void showLoading(final String channel, final String status) {
         runOnUiThread(new Runnable() {
             @Override
@@ -2385,6 +2942,7 @@ public final class MainActivity extends Activity {
         videoRenderingStarted = false;
         activeSoftwareDecode = false;
         buffering = false;
+        csdLiveRecoverySeeking = false;
         bufferingStatusVisible = false;
         bufferingEventId++;
         playbackProgressObserved = false;
@@ -2403,12 +2961,17 @@ public final class MainActivity extends Activity {
             systemPlayer.release();
             systemPlayer = null;
         }
+        if (csdPlayer != null) {
+            csdPlayer.clearVideoSurface();
+            csdPlayer.release();
+            csdPlayer = null;
+        }
         activePlayerChannel = null;
         activePlayerStreamUrl = null;
     }
 
     private boolean hasActivePlayer() {
-        return player != null || systemPlayer != null;
+        return player != null || systemPlayer != null || csdPlayer != null;
     }
 
     private void queuePendingPlayer(Channel channel, String streamUrl,
@@ -2488,7 +3051,7 @@ public final class MainActivity extends Activity {
 
     @SuppressLint("SetTextI18n")
     private void refreshVideoInfo() {
-        if (videoInfo == null) {
+        if (videoInfo == null && debugInfoOverlay == null) {
             return;
         }
         String resolution = videoWidth > 0 && videoHeight > 0
@@ -2502,8 +3065,14 @@ public final class MainActivity extends Activity {
         if (prepared && currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB) {
             long now = SystemClock.elapsedRealtime();
             long playbackPosition = player != null
-                    ? player.getCurrentPosition() : systemPlayer.getCurrentPosition();
-            if (playbackPosition > lastPlaybackPosition) {
+                    ? player.getCurrentPosition()
+                    : (systemPlayer != null ? systemPlayer.getCurrentPosition()
+                    : (csdPlayer != null ? csdPlayer.getCurrentPosition() : -1L));
+            // A live HLS window can rebase ExoPlayer's reported position when older
+            // segments leave the manifest.  A backwards jump is still playback
+            // progress; treating it as a stall causes a false reconnect roughly once
+            // per playlist-history window.
+            if (playbackPosition >= 0L && playbackPosition != lastPlaybackPosition) {
                 playbackProgressObserved = true;
                 lastPlaybackPosition = playbackPosition;
                 lastPlaybackProgressAt = now;
@@ -2513,10 +3082,14 @@ public final class MainActivity extends Activity {
                     recoverCctvPlayback(playRequestId, player,
                             "playback clock stopped for "
                                     + (now - lastPlaybackProgressAt) + "ms");
-                } else {
+                } else if (systemPlayer != null) {
                     recoverSystemCctvPlayback(playRequestId, systemPlayer,
                             "playback clock stopped for "
                                     + (now - lastPlaybackProgressAt) + "ms");
+                } else if (csdPlayer != null) {
+                    Log.w(TAG, "Explicit-CSD playback clock stopped; reconnecting channel="
+                            + currentChannel().name);
+                    switchChannel(currentChannelIndex);
                 }
             }
         }
@@ -2525,6 +3098,9 @@ public final class MainActivity extends Activity {
         String decoderStatus;
         if (systemPlayer != null) {
             decoderStatus = "系统播放器";
+        } else if (csdPlayer != null) {
+            decoderStatus = HARDWARE_DECODER_AUTO.equals(hardwareDecoder)
+                    ? "兼容CSD硬解" : hardwareDecoder + " · CSD";
         } else if (activeSoftwareDecode) {
             decoderStatus = "IJK软解";
         } else if (!HARDWARE_DECODER_AUTO.equals(hardwareDecoder)) {
@@ -2532,7 +3108,263 @@ public final class MainActivity extends Activity {
         } else {
             decoderStatus = "IJK硬解";
         }
-        videoInfo.setText("源: " + resolution + "  fps: " + fps + "  " + decoderStatus);
+        if (videoInfo != null) {
+            videoInfo.setText("源: " + resolution + "  fps: " + fps + "  " + decoderStatus);
+        }
+        if (debugInfoOverlay != null && showDebugInfo) {
+            PlaybackDebugStats stats = collectPlaybackDebugStats(outputFps);
+            String debugResolution = stats.width > 0 && stats.height > 0
+                    ? stats.width + "×" + stats.height : "--";
+            String debugFps = stats.frameRate > 0.01f
+                    ? String.format(Locale.US, "%.1ffps", stats.frameRate) : "--fps";
+            debugInfoOverlay.setText("视频 " + debugResolution + " · " + debugFps
+                    + " · " + stats.videoCodec + " · " + formatBitrate(stats.videoBitrate)
+                    + "\n音频 " + stats.audioCodec + " · "
+                    + formatBitrate(stats.audioBitrate)
+                    + "\nCPU（系统） " + formatCpuUsage(stats.cpuUsage));
+        }
+    }
+
+    private PlaybackDebugStats collectPlaybackDebugStats(float measuredOutputFps) {
+        PlaybackDebugStats stats = new PlaybackDebugStats();
+        stats.width = videoWidth;
+        stats.height = videoHeight;
+        stats.frameRate = measuredOutputFps;
+        stats.cpuUsage = sampleSystemCpuUsage();
+        if (csdPlayer != null) {
+            applyExoFormat(stats, csdPlayer.getVideoFormat(), true);
+            applyExoFormat(stats, csdPlayer.getAudioFormat(), false);
+        } else if (player != null) {
+            applyIjkMetadata(stats);
+        } else if (systemPlayer != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            applySystemTrackFormats(stats);
+        }
+        return stats;
+    }
+
+    private float sampleSystemCpuUsage() {
+        FileInputStream input = null;
+        try {
+            input = new FileInputStream("/proc/stat");
+            byte[] buffer = new byte[512];
+            int length = input.read(buffer);
+            if (length <= 0) {
+                return -1f;
+            }
+            int lineEnd = 0;
+            while (lineEnd < length && buffer[lineEnd] != '\n') {
+                lineEnd++;
+            }
+            String[] fields = new String(buffer, 0, lineEnd, "US-ASCII")
+                    .trim().split("\\s+");
+            if (fields.length < 5 || !"cpu".equals(fields[0])) {
+                return -1f;
+            }
+            /* /proc/stat: user nice system idle iowait irq softirq steal ...
+             * guest values are already included in user/nice, so do not count them twice. */
+            int lastField = Math.min(fields.length - 1, 8);
+            long total = 0L;
+            for (int index = 1; index <= lastField; index++) {
+                total += Long.parseLong(fields[index]);
+            }
+            long idle = Long.parseLong(fields[4]);
+            if (fields.length > 5) {
+                idle += Long.parseLong(fields[5]);
+            }
+            float usage = -1f;
+            long totalDelta = total - lastSystemCpuTotalJiffies;
+            long idleDelta = idle - lastSystemCpuIdleJiffies;
+            if (lastSystemCpuTotalJiffies > 0L && totalDelta > 0L
+                    && idleDelta >= 0L) {
+                usage = Math.max(0f, Math.min(100f,
+                        (totalDelta - idleDelta) * 100f / totalDelta));
+            }
+            lastSystemCpuTotalJiffies = total;
+            lastSystemCpuIdleJiffies = idle;
+            return usage;
+        } catch (IOException error) {
+            return -1f;
+        } catch (NumberFormatException error) {
+            return -1f;
+        } catch (SecurityException error) {
+            return -1f;
+        } finally {
+            if (input != null) {
+                try {
+                    input.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+    }
+
+    private static void applyExoFormat(PlaybackDebugStats stats, Format format,
+            boolean video) {
+        if (format == null) {
+            return;
+        }
+        String codec = readableCodec(format.sampleMimeType, format.codecs);
+        long bitrate = format.averageBitrate > 0 ? format.averageBitrate
+                : (format.bitrate > 0 ? format.bitrate : format.peakBitrate);
+        if (video) {
+            if (format.width > 0 && format.height > 0) {
+                stats.width = format.width;
+                stats.height = format.height;
+            }
+            if (format.frameRate > 0f) {
+                stats.frameRate = format.frameRate;
+            }
+            stats.videoCodec = codec;
+            stats.videoBitrate = bitrate;
+        } else {
+            stats.audioCodec = codec;
+            stats.audioBitrate = bitrate;
+        }
+    }
+
+    private void applyIjkMetadata(PlaybackDebugStats stats) {
+        try {
+            IjkMediaMeta meta = IjkMediaMeta.parse(player.getMediaMeta());
+            if (meta == null) {
+                return;
+            }
+            IjkMediaMeta.IjkStreamMeta video = meta.mVideoStream;
+            if (video != null) {
+                if (video.mWidth > 0 && video.mHeight > 0) {
+                    stats.width = video.mWidth;
+                    stats.height = video.mHeight;
+                }
+                if (stats.frameRate <= 0.01f && video.mFpsNum > 0 && video.mFpsDen > 0) {
+                    stats.frameRate = (float) video.mFpsNum / video.mFpsDen;
+                }
+                stats.videoCodec = readableCodec(video.mCodecName, null);
+                stats.videoBitrate = video.mBitrate;
+            }
+            IjkMediaMeta.IjkStreamMeta audio = meta.mAudioStream;
+            if (audio != null) {
+                stats.audioCodec = readableCodec(audio.mCodecName, null);
+                stats.audioBitrate = audio.mBitrate;
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read IJK stream metadata", error);
+        }
+    }
+
+    private void applySystemTrackFormats(PlaybackDebugStats stats) {
+        try {
+            MediaPlayer.TrackInfo[] tracks = systemPlayer.getTrackInfo();
+            if (tracks == null) {
+                return;
+            }
+            for (MediaPlayer.TrackInfo track : tracks) {
+                int type = track.getTrackType();
+                if (type != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO
+                        && type != MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) {
+                    continue;
+                }
+                MediaFormat format = track.getFormat();
+                if (format == null) {
+                    continue;
+                }
+                String mime = format.getString(MediaFormat.KEY_MIME);
+                long bitrate = format.containsKey(MediaFormat.KEY_BIT_RATE)
+                        ? format.getInteger(MediaFormat.KEY_BIT_RATE) : -1L;
+                if (type == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO) {
+                    stats.videoCodec = readableCodec(mime, null);
+                    stats.videoBitrate = bitrate;
+                    if (format.containsKey(MediaFormat.KEY_WIDTH)
+                            && format.containsKey(MediaFormat.KEY_HEIGHT)) {
+                        stats.width = format.getInteger(MediaFormat.KEY_WIDTH);
+                        stats.height = format.getInteger(MediaFormat.KEY_HEIGHT);
+                    }
+                    if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+                        stats.frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE);
+                    }
+                } else {
+                    stats.audioCodec = readableCodec(mime, null);
+                    stats.audioBitrate = bitrate;
+                }
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read system player track formats", error);
+        }
+    }
+
+    private static String readableCodec(String mimeOrCodec, String codecs) {
+        String value = mimeOrCodec;
+        if (value == null || value.trim().length() == 0) {
+            value = codecs;
+        }
+        if (value == null || value.trim().length() == 0) {
+            return "--";
+        }
+        String lower = value.toLowerCase(Locale.US);
+        if (lower.contains("avc") || lower.contains("h264") || lower.contains("h.264")) {
+            return "H.264";
+        }
+        if (lower.contains("hevc") || lower.contains("h265") || lower.contains("h.265")
+                || lower.contains("hvc1") || lower.contains("hev1")) {
+            return "H.265";
+        }
+        if (lower.contains("mpeg2video") || lower.contains("video/mpeg2")) {
+            return "MPEG-2";
+        }
+        if (lower.contains("mp4v") || lower.contains("mpeg4")) {
+            return "MPEG-4";
+        }
+        if (lower.contains("mp4a") || lower.contains("aac")) {
+            return "AAC";
+        }
+        if (lower.contains("eac3") || lower.contains("e-ac-3")) {
+            return "E-AC-3";
+        }
+        if (lower.contains("ac3") || lower.contains("ac-3")) {
+            return "AC-3";
+        }
+        if (lower.contains("opus")) {
+            return "Opus";
+        }
+        if (lower.contains("vorbis")) {
+            return "Vorbis";
+        }
+        if (lower.contains("audio/mpeg") || lower.equals("mp3")) {
+            return "MP3";
+        }
+        int slash = value.lastIndexOf('/');
+        String shortName = slash >= 0 ? value.substring(slash + 1) : value;
+        int comma = shortName.indexOf(',');
+        if (comma > 0) {
+            shortName = shortName.substring(0, comma);
+        }
+        return shortName.length() > 16 ? shortName.substring(0, 16) : shortName;
+    }
+
+    private static String formatBitrate(long bitsPerSecond) {
+        if (bitsPerSecond <= 0L) {
+            return "--";
+        }
+        if (bitsPerSecond >= 1000000L) {
+            return String.format(Locale.US, "%.1fMbps", bitsPerSecond / 1000000f);
+        }
+        if (bitsPerSecond >= 1000L) {
+            return Math.round(bitsPerSecond / 1000f) + "kbps";
+        }
+        return bitsPerSecond + "bps";
+    }
+
+    private static String formatCpuUsage(float usage) {
+        return usage >= 0f ? String.format(Locale.US, "%.0f%%", usage) : "--";
+    }
+
+    private static final class PlaybackDebugStats {
+        int width;
+        int height;
+        float frameRate;
+        String videoCodec = "--";
+        long videoBitrate = -1L;
+        String audioCodec = "--";
+        long audioBitrate = -1L;
+        float cpuUsage = -1f;
     }
 
     private void moveChannelMenuSelection(int offset) {

@@ -26,7 +26,10 @@
 #define EMBIND_STORAGE 6332000u
 #define DYNAMIC_TOP_AFTER_SHELL_ALLOCATIONS 7053264u
 #define MEMORY_EXTEND 2048u
-#define NAL_MEMORY_EXTEND MEMORY_EXTEND
+/* The wasm VOD output function uses the allocation tail as transform scratch.
+ * Valid CCTV slices can require close to 2 MiB even when the NAL itself is only
+ * a few KiB. A 2 KiB tail causes deterministic wasm bounds traps after startup. */
+#define NAL_MEMORY_EXTEND (2u * 1024u * 1024u)
 /* This must match the video element id used by the current CCTV live player.
  * It is part of the H5E key state, not merely a diagnostic label. */
 #define PLAYER_TAG "h5player_player"
@@ -95,6 +98,8 @@ static __thread const char* g_wasm_stage = "idle";
 static __thread struct timeval g_worker_now;
 static __thread int g_worker_clock_frozen;
 static volatile u32 g_cancel_generation;
+static volatile int g_sps_compatibility_mode = 1;
+static volatile int g_sps_compatibility_log_count;
 static __thread u32 g_decrypt_generation;
 static __thread int g_decrypt_cancelled;
 static __thread size_t g_current_nal_length;
@@ -806,6 +811,7 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
     uint8_t* replacement = NULL;
     size_t replacement_length = 0;
     int type;
+    size_t output_nal_start;
     size_t required;
     if (decrypt_was_cancelled()) {
       free(decrypted);
@@ -816,6 +822,7 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
       continue;
     }
     type = pes->bytes[nal_start] & 0x1f;
+    output_nal_start = decrypted_length + prefix_length;
     required = decrypted_length + prefix_length + nal_length + MEMORY_EXTEND;
     if (required > decrypted_capacity) {
       size_t capacity = decrypted_capacity == 0 ? pes->length + MEMORY_EXTEND : decrypted_capacity * 2;
@@ -842,6 +849,22 @@ static int decrypt_pes(uint8_t* output, pes_stream* pes) {
     } else {
       memcpy(decrypted + decrypted_length, pes->bytes + nal_start, nal_length);
       decrypted_length += nal_length;
+    }
+    /* CCTV and CMG use reserved_zero_2bits in the SPS constraint byte as a
+     * private encryption marker. FFmpeg ignores it, while old MStar OMX
+     * implementations can reject the codec configuration. Consume the marker
+     * before exposing the decrypted elementary stream to MediaCodec. */
+    if (g_sps_compatibility_mode && type == 7
+        && decrypted_length >= output_nal_start + 3) {
+      uint8_t before = decrypted[output_nal_start + 2];
+      decrypted[output_nal_start + 2] = before & 0xfc;
+      if (before != decrypted[output_nal_start + 2]) {
+        changed = 1;
+        if (__sync_fetch_and_add(&g_sps_compatibility_log_count, 1) < 8) {
+          LOGI("Sanitized H264 SPS private marker %02x -> %02x",
+              before, decrypted[output_nal_start + 2]);
+        }
+      }
     }
     position = next;
   }
@@ -1028,6 +1051,15 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_decryptTransportStream(
   (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
   free(output);
   return transport_stream;
+}
+
+JNIEXPORT void JNICALL
+Java_com_bu_cc_tv_NativeH5eDecryptor_setSpsCompatibilityMode(
+    JNIEnv* env, jclass clazz, jboolean enabled) {
+  (void) env;
+  (void) clazz;
+  g_sps_compatibility_mode = enabled ? 1 : 0;
+  LOGI("H264 SPS compatibility mode=%d", g_sps_compatibility_mode);
 }
 
 JNIEXPORT void JNICALL

@@ -319,7 +319,8 @@ final class YangshipinWebResolver {
         });
     }
 
-    void resolve(final int requestId, final Channel channel, final Callback callback) {
+    void resolve(final int requestId, final Channel channel, final String definition,
+            final Callback callback) {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -328,11 +329,12 @@ final class YangshipinWebResolver {
                     callback.onFailed(requestId, "频道缺少央视频 pid");
                     return;
                 }
-                pendingRequest = new Pending(requestId, channel, callback);
+                pendingRequest = new Pending(requestId, channel, definition, callback);
                 webView.setVisibility(View.VISIBLE);
-                CachedUrl cached = apiCache.get(channel.yangshipinPid);
+                String cacheKey = pendingRequest.cacheKey();
+                CachedUrl cached = apiCache.get(cacheKey);
                 if (cached == null) {
-                    String key = "url_" + channel.yangshipinPid;
+                    String key = "url_" + cacheKey;
                     String persistedUrl = resolverPrefs.getString(key, "");
                     long persistedAt = resolverPrefs.getLong(key + "_at", 0L);
                     if (persistedUrl.length() > 0) {
@@ -342,7 +344,8 @@ final class YangshipinWebResolver {
                 long cacheAge = cached == null ? Long.MAX_VALUE
                         : System.currentTimeMillis() - cached.createdAt;
                 if (cached != null && cacheAge >= 0L && cacheAge < API_CACHE_MS) {
-                    Log.i(TAG, "Using cached Yangshipin FHD URL for " + channel.name);
+                    Log.i(TAG, "Using cached Yangshipin " + pendingRequest.definition
+                            + " URL for " + channel.name);
                     completeApi(pendingRequest, cached.url);
                     return;
                 }
@@ -351,14 +354,16 @@ final class YangshipinWebResolver {
                     long guidTimeMs = clockKnown
                             ? System.currentTimeMillis() + serverClockOffsetMs
                             : System.currentTimeMillis();
-                    YangshipinApiPayload payload = YangshipinApiPayload.create(channel, guidTimeMs);
+                    YangshipinApiPayload payload = YangshipinApiPayload.create(
+                            channel, guidTimeMs, pendingRequest.definition);
                     String html = buildApiPage(channel, payload);
                     pendingRequest.apiHtml = html;
                     pendingRequest.apiPayload = payload;
                     pendingRequest.clockSynced = clockKnown;
                     pendingRequest.bootstrapScript = buildOfficialBootstrapScript(payload);
                     installApiCookies(payload);
-                    Log.i(TAG, "Resolving Yangshipin FHD API for " + channel.name);
+                    Log.i(TAG, "Resolving Yangshipin " + pendingRequest.definition
+                            + " API for " + channel.name);
                     webView.onResume();
                     webView.loadUrl("https://www.yangshipin.cn/");
                     webView.postDelayed(timeout, 15000L);
@@ -410,7 +415,7 @@ final class YangshipinWebResolver {
                     .apply();
             if (!pending.clockSynced) {
                 YangshipinApiPayload corrected = YangshipinApiPayload.create(
-                        pending.channel, serverSeconds * 1000L);
+                        pending.channel, serverSeconds * 1000L, pending.definition);
                 pending.apiPayload = corrected;
                 pending.clockSynced = true;
                 pending.apiHtml = buildApiPage(pending.channel, corrected);
@@ -430,7 +435,8 @@ final class YangshipinWebResolver {
                 return true;
             }
             String liveBody = YangshipinApiPayload.createLiveBody(pending.channel,
-                    pending.apiPayload.guid, pending.apiPayload.liveRandom, serverSeconds);
+                    pending.apiPayload.guid, pending.apiPayload.liveRandom, serverSeconds,
+                    pending.definition);
             String sdkInput = YangshipinApiPayload.createSdkInput(liveBody);
             Log.i(TAG, "Yangshipin live request serverSeconds=" + serverSeconds
                     + " guid=" + pending.apiPayload.guid
@@ -596,15 +602,15 @@ final class YangshipinWebResolver {
                 Log.w(TAG, "Yangshipin live response code=" + root.optInt("code", -1)
                         + " msg=" + root.optString("msg", "")
                         + " urlLength=" + url.length());
-                fail(pending, "央视频接口未返回高清线路");
+                fail(pending, "央视频接口未返回可用线路");
                 return true;
             }
             if (extended.length() > 0 && url.indexOf(extended) < 0) {
                 url += extended;
             }
-            apiCache.put(pending.channel.yangshipinPid,
+            apiCache.put(pending.cacheKey(),
                     new CachedUrl(url, System.currentTimeMillis()));
-            String key = "url_" + pending.channel.yangshipinPid;
+            String key = "url_" + pending.cacheKey();
             resolverPrefs.edit()
                     .putString(key, url)
                     .putLong(key + "_at", System.currentTimeMillis())
@@ -637,7 +643,8 @@ final class YangshipinWebResolver {
         pending.cmgInitTimeMs = now;
         pending.cmgUpdateBaseTimeMs = now;
         pending.cmgUpdateTrace = "";
-        Log.i(TAG, "Resolved Yangshipin FHD API for " + pending.channel.name
+        Log.i(TAG, "Resolved Yangshipin " + pending.definition + " API for "
+                + pending.channel.name
                 + " in native-light mode");
         complete(pending);
     }
@@ -982,6 +989,7 @@ final class YangshipinWebResolver {
     private static final class Pending {
         final int requestId;
         final Channel channel;
+        final String definition;
         final Callback callback;
         String resolvedUrl;
         String cmgTag;
@@ -1002,10 +1010,16 @@ final class YangshipinWebResolver {
         String bootstrapScript;
         boolean bootstrapAttempted;
 
-        Pending(int requestId, Channel channel, Callback callback) {
+        Pending(int requestId, Channel channel, String definition, Callback callback) {
             this.requestId = requestId;
             this.channel = channel;
+            this.definition = "shd".equals(definition) || "sd".equals(definition)
+                    ? definition : "fhd";
             this.callback = callback;
+        }
+
+        String cacheKey() {
+            return channel.yangshipinPid + "_" + definition;
         }
     }
 
