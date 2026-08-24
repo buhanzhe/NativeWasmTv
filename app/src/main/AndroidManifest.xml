@@ -48,6 +48,12 @@
             </intent-filter>
         </receiver>
 
+        <service
+            android:name=".CrashRecoveryService"
+            android:exported="false"
+            android:process=":crash_watchdog"
+            android:stopWithTask="false" />
+
         <provider
             android:name=".ApkFileProvider"
             android:authorities="${applicationId}.apk"

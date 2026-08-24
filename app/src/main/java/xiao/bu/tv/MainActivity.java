@@ -19,6 +19,9 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.UiModeManager;
 import android.content.Intent;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.media.AudioManager;
@@ -28,6 +31,9 @@ import android.media.MediaFormat;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CpuUsageInfo;
+import android.os.HardwarePropertiesManager;
+import android.os.IBinder;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
@@ -112,6 +118,7 @@ public final class MainActivity extends Activity {
     private static final int FIRST_LAUNCH_GROUP_INDEX = 1;
     private static final int FIRST_LAUNCH_CHANNEL_INDEX = 0;
     private static final long CHANNEL_BAR_TIMEOUT_MS = 3000L;
+    private static final long CHANNEL_SWITCH_DEBOUNCE_MS = 250L;
     private static final long PANEL_TIMEOUT_MS = 5000L;
     private static final long BACK_PROMPT_TIMEOUT_MS = 5000L;
     private static final long EXIT_CONFIRM_TIMEOUT_MS = BACK_PROMPT_TIMEOUT_MS;
@@ -225,6 +232,8 @@ public final class MainActivity extends Activity {
     private int currentSourceIndex;
     private int triedCustomSources;
     private int browsingGroupIndex;
+    private int pendingRelativeGroupIndex = -1;
+    private int pendingRelativeChannelIndex = -1;
     private int videoWidth;
     private int videoHeight;
     private int videoSarNum = 1;
@@ -235,6 +244,16 @@ public final class MainActivity extends Activity {
     private long lastPlaybackPosition = -1L;
     private long lastSystemCpuTotalJiffies;
     private long lastSystemCpuIdleJiffies;
+    private long lastHardwareCpuActiveMillis;
+    private long lastHardwareCpuTotalMillis;
+    private long lastSysfsCpuIdleMicros;
+    private long lastSysfsCpuSampleElapsedMillis;
+    private int lastSysfsCpuCount;
+    private boolean procStatCpuUnavailable;
+    private boolean hardwareCpuUnavailable;
+    private boolean sysfsCpuUnavailable;
+    private String systemCpuMetricLabel = "CPU（系统）";
+    private String systemCpuMetricSource = "";
     private boolean buffering;
     private boolean csdLiveRecoverySeeking;
     private boolean bufferingStatusVisible;
@@ -263,6 +282,36 @@ public final class MainActivity extends Activity {
     private int clockViewportHeight;
     private boolean remoteInputMode;
     private String numericChannelInput = "";
+    private ServiceConnection crashRecoveryConnection;
+    private boolean crashRecoveryBound;
+
+    private final Runnable commitRelativeChannelSwitch = new Runnable() {
+        @Override
+        public void run() {
+            int groupIndex = pendingRelativeGroupIndex;
+            int channelIndex = pendingRelativeChannelIndex;
+            pendingRelativeGroupIndex = -1;
+            pendingRelativeChannelIndex = -1;
+            if (groupIndex != currentGroupIndex || channelIndex < 0) {
+                return;
+            }
+            Channel[] channels = currentGroup().channels;
+            if (channels == null || channels.length == 0) {
+                Log.w(TAG, "Ignoring channel switch because group is empty index="
+                        + groupIndex);
+                return;
+            }
+            channelIndex = ChannelCatalog.wrapIndex(channels, channelIndex);
+            if (channelIndex == currentChannelIndex) {
+                // An immediate UP/DOWN or DOWN/UP pair has returned to the active
+                // channel. Avoid tearing down and recreating the decoder/proxy.
+                showChannelBar(channels[channelIndex].name,
+                        prepared ? "直播播放中" : "正在准备直播");
+                return;
+            }
+            switchChannel(channelIndex);
+        }
+    };
 
     private final Runnable updateVideoInfo = new Runnable() {
         @Override
@@ -277,6 +326,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashReporter.install(this);
+        showCrashRecoveryNotice();
         TlsCompat.install();
         configureResourceProfile();
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -1214,6 +1265,7 @@ public final class MainActivity extends Activity {
     }
 
     private void switchChannel(int index) {
+        cancelPendingRelativeSwitch();
         clearNumericChannelInput();
         currentSourceIndex = 0;
         triedCustomSources = 1;
@@ -1221,13 +1273,10 @@ public final class MainActivity extends Activity {
     }
 
     private void startChannel(int index) {
+        armCrashRecovery();
         final ChannelCatalog.Group group = currentGroup();
         currentChannelIndex = ChannelCatalog.wrapIndex(group.channels, index);
         final Channel channel = group.channels[currentChannelIndex];
-        getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
-                .putInt(LAST_GROUP_INDEX, currentGroupIndex)
-                .putInt(LAST_CHANNEL_INDEX, currentChannelIndex)
-                .apply();
         if (channelListPanel.getVisibility() == View.VISIBLE) {
             groupAdapter.setSelectedIndex(currentGroupIndex);
             channelAdapter.setSelectedIndex(currentChannelIndex);
@@ -1265,6 +1314,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean switchCustomSource(int offset, boolean automatic, String reason) {
+        cancelPendingRelativeSwitch();
         if (currentGroup().source != ChannelCatalog.SOURCE_CUSTOM) {
             return false;
         }
@@ -1320,7 +1370,6 @@ public final class MainActivity extends Activity {
     private void resetProxyForChannelSwitch() throws IOException {
         boolean statefulCmgSource = currentGroup().source != ChannelCatalog.SOURCE_CCTV_WEB
                 && currentGroup().source != ChannelCatalog.SOURCE_CUSTOM;
-        HlsProxyServer.resetCmgSessionForChannelSwitch();
         HlsProxyServer previous = proxy;
         proxy = null;
         if (previous != null) {
@@ -1328,10 +1377,15 @@ public final class MainActivity extends Activity {
             // Closing it first cancels the old stateful H5E session before the new one starts.
             previous.close();
         }
+        // Reset shared CMG state only after every old proxy decrypt task has been
+        // cancelled. Otherwise a late old task can repopulate the just-reset runtime
+        // while the next source is being initialized.
+        HlsProxyServer.resetCmgSessionForChannelSwitch();
         HlsProxyServer next = new HlsProxyServer(
                 cmgDebugDir, statefulCmgSource, lowResourceDevice,
                 h264SpsCompatibility, cctvLiveEdgeHoldBackSegments(),
-                currentGroup().source != ChannelCatalog.SOURCE_CUSTOM, resolutionMode);
+                currentGroup().source != ChannelCatalog.SOURCE_CUSTOM, resolutionMode,
+                cctvStartupDownloadSegments(), cctvStartupDecryptSegments());
         next.start();
         proxy = next;
         proxyStatefulCmgSource = statefulCmgSource;
@@ -1344,7 +1398,7 @@ public final class MainActivity extends Activity {
         }
         updateLoadingStatus("正在获取央视频线路");
         showChannelBar(channel.name, "正在解析央视频源");
-        yangshipinResolver.resolve(requestId, channel, yangshipinDefinition(),
+        yangshipinResolver.resolve(requestId, channel, yangshipinDefinition(channel),
                 new YangshipinWebResolver.Callback() {
             @Override
             public void onResolved(int resolvedRequestId, String url,
@@ -1708,13 +1762,13 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering", 1);
         final boolean cctvSource = currentGroup().source == ChannelCatalog.SOURCE_CCTV_WEB;
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames",
-                cctvSource ? 140 : 60);
+                cctvSource ? cctvIjkMinFrames() : 60);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "infbuf", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "sync-av-start", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max_cached_duration",
                 cctvSource ? 45000 : 30000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "first-high-water-mark-ms",
-                cctvSource ? 6000 : 3500);
+                cctvSource ? cctvIjkFirstBufferMs() : 3500);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "next-high-water-mark-ms",
                 cctvSource ? 8000 : 5000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "last-high-water-mark-ms",
@@ -1726,12 +1780,10 @@ public final class MainActivity extends Activity {
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", 256 * 1024);
-        /* The CCTV proxy deliberately publishes two fully downloaded/decrypted startup
-         * segments. Starting at -1 discards the first segment and leaves only about four
-         * seconds before the next playlist refresh, causing the visible one-time stall.
-         * Start at the first of the prepared pair so IJK really gets the intended ~8s. */
+        /* Start at the first segment exposed by the selected startup policy. Using a
+         * negative index would discard already prepared data in the two-segment modes. */
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "live_start_index",
-                cctvSource ? -2 : -3);
+                cctvSource ? 0 : -3);
         videoSurfaceHolder = videoView.getVideoSurfaceHolder();
         if (videoSurfaceHolder == null) {
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
@@ -1782,6 +1834,7 @@ public final class MainActivity extends Activity {
                 }
                 if (what == MEDIA_INFO_VIDEO_RENDERING_START) {
                     videoRenderingStarted = true;
+                    persistPlayingChannel(channel, sourceRequestId);
                     Log.i(TAG, "First video frame rendered decoder="
                             + (softwareDecode ? "software" : "hardware")
                             + " channel=" + channel.name);
@@ -1970,6 +2023,7 @@ public final class MainActivity extends Activity {
                 }
                 if (what == MEDIA_INFO_VIDEO_RENDERING_START) {
                     videoRenderingStarted = true;
+                    persistPlayingChannel(channel, sourceRequestId);
                     Log.i(TAG, "First video frame rendered decoder=system channel="
                             + channel.name);
                 } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
@@ -2128,7 +2182,7 @@ public final class MainActivity extends Activity {
                 .setEnableDecoderFallback(true);
         DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(CCTV_CSD_MIN_BUFFER_MS, CCTV_CSD_MAX_BUFFER_MS,
-                        CCTV_CSD_START_BUFFER_MS, CCTV_CSD_REBUFFER_MS)
+                        cctvCsdStartBufferMs(), CCTV_CSD_REBUFFER_MS)
                 .build();
         final SimpleExoPlayer nextPlayer = new SimpleExoPlayer.Builder(this, renderersFactory)
                 .setLoadControl(loadControl)
@@ -2150,7 +2204,7 @@ public final class MainActivity extends Activity {
                 + " spsCompatibility=" + h264SpsCompatibility
                 + " liveDelay=" + liveDelayMode
                 + " targetOffsetMs=" + cctvLiveTargetOffsetMs()
-                + " startBufferMs=" + CCTV_CSD_START_BUFFER_MS
+                + " startBufferMs=" + cctvCsdStartBufferMs()
                 + " rebufferMs=" + CCTV_CSD_REBUFFER_MS
                 + " surface=" + surfaceMode + " device=" + Build.MANUFACTURER + "/"
                 + Build.MODEL + " sdk=" + Build.VERSION.SDK_INT);
@@ -2179,6 +2233,7 @@ public final class MainActivity extends Activity {
                     return;
                 }
                 videoRenderingStarted = true;
+                persistPlayingChannel(channel, sourceRequestId);
                 Log.i(TAG, "First video frame rendered decoder=explicit-csd channel="
                         + channel.name);
             }
@@ -2521,6 +2576,44 @@ public final class MainActivity extends Activity {
         return LIVE_DELAY_LOW.equals(liveDelayMode) ? 1 : 2;
     }
 
+    private int cctvStartupDownloadSegments() {
+        return LIVE_DELAY_LOW.equals(liveDelayMode) ? 1 : 2;
+    }
+
+    private int cctvStartupDecryptSegments() {
+        return LIVE_DELAY_STABLE.equals(liveDelayMode) ? 2 : 1;
+    }
+
+    private int cctvIjkMinFrames() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 40;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 80;
+        }
+        return 140;
+    }
+
+    private int cctvIjkFirstBufferMs() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 1000;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 3000;
+        }
+        return 6000;
+    }
+
+    private int cctvCsdStartBufferMs() {
+        if (LIVE_DELAY_LOW.equals(liveDelayMode)) {
+            return 1500;
+        }
+        if (LIVE_DELAY_BALANCED.equals(liveDelayMode)) {
+            return 3500;
+        }
+        return CCTV_CSD_START_BUFFER_MS;
+    }
+
     private void applyDisplaySettings() {
         videoView.setLegacySurfaceMode(SURFACE_MODE_LEGACY.equals(surfaceMode));
         videoView.setStretchVideo(VIDEO_SCALE_STRETCH.equals(videoScaleMode));
@@ -2744,6 +2837,79 @@ public final class MainActivity extends Activity {
         }, CHANNEL_PREFETCH_DELAY_MS);
     }
 
+    private void persistPlayingChannel(Channel channel, int requestId) {
+        if (requestId != playRequestId || currentGroupIndex < 0
+                || currentGroupIndex >= ChannelCatalog.GROUPS.length) {
+            return;
+        }
+        Channel[] channels = currentGroup().channels;
+        if (currentChannelIndex < 0 || currentChannelIndex >= channels.length
+                || channels[currentChannelIndex] != channel) {
+            return;
+        }
+        getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                .putInt(LAST_GROUP_INDEX, currentGroupIndex)
+                .putInt(LAST_CHANNEL_INDEX, currentChannelIndex)
+                .apply();
+        // The risky decoder/proxy transition is over once a real frame is rendered.
+        // Stop the separate watchdog process so stable playback has no extra memory cost.
+        releaseCrashRecovery(true);
+    }
+
+    private void armCrashRecovery() {
+        final Intent watchdog = new Intent(this, CrashRecoveryService.class)
+                .setAction(CrashRecoveryService.ACTION_ARM);
+        try {
+            startService(watchdog);
+            if (!crashRecoveryBound) {
+                if (crashRecoveryConnection == null) {
+                    crashRecoveryConnection = new ServiceConnection() {
+                        @Override
+                        public void onServiceConnected(ComponentName name, IBinder service) {
+                            crashRecoveryBound = true;
+                        }
+
+                        @Override
+                        public void onServiceDisconnected(ComponentName name) {
+                            crashRecoveryBound = false;
+                        }
+                    };
+                }
+                crashRecoveryBound = bindService(watchdog,
+                        crashRecoveryConnection, Context.BIND_AUTO_CREATE);
+            }
+        } catch (RuntimeException error) {
+            crashRecoveryBound = false;
+            Log.w(TAG, "Unable to arm crash recovery watchdog", error);
+        }
+    }
+
+    private void showCrashRecoveryNotice() {
+        if (getIntent().getBooleanExtra(CrashRecoveryService.EXTRA_RECOVERED, false)) {
+            getIntent().removeExtra(CrashRecoveryService.EXTRA_RECOVERED);
+            Toast.makeText(this, "检测到异常退出，已自动恢复", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void releaseCrashRecovery(boolean normalExit) {
+        if (normalExit) {
+            try {
+                startService(new Intent(this, CrashRecoveryService.class)
+                        .setAction(CrashRecoveryService.ACTION_DISARM));
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to disarm crash recovery watchdog", error);
+            }
+        }
+        if (crashRecoveryBound && crashRecoveryConnection != null) {
+            try {
+                unbindService(crashRecoveryConnection);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to unbind crash recovery watchdog", error);
+            }
+        }
+        crashRecoveryBound = false;
+    }
+
     private void prefetchChannel(Channel channel) {
         try {
             liveUrlResolver.resolve(channel);
@@ -2753,7 +2919,29 @@ public final class MainActivity extends Activity {
     }
 
     private void switchRelative(int offset) {
-        switchChannel(currentChannelIndex + offset);
+        ChannelCatalog.Group group = currentGroup();
+        Channel[] channels = group.channels;
+        if (channels == null || channels.length == 0) {
+            Log.w(TAG, "Ignoring relative switch for empty group=" + currentGroupIndex);
+            return;
+        }
+        int baseIndex = pendingRelativeGroupIndex == currentGroupIndex
+                && pendingRelativeChannelIndex >= 0
+                ? pendingRelativeChannelIndex : currentChannelIndex;
+        int targetIndex = ChannelCatalog.wrapIndex(channels, baseIndex + offset);
+        pendingRelativeGroupIndex = currentGroupIndex;
+        pendingRelativeChannelIndex = targetIndex;
+        channelBar.removeCallbacks(commitRelativeChannelSwitch);
+        showChannelBar(channels[targetIndex].name, "正在切换频道");
+        channelBar.postDelayed(commitRelativeChannelSwitch, CHANNEL_SWITCH_DEBOUNCE_MS);
+    }
+
+    private void cancelPendingRelativeSwitch() {
+        if (channelBar != null) {
+            channelBar.removeCallbacks(commitRelativeChannelSwitch);
+        }
+        pendingRelativeGroupIndex = -1;
+        pendingRelativeChannelIndex = -1;
     }
 
     private void enterNumericChannel(int digit) {
@@ -2799,6 +2987,7 @@ public final class MainActivity extends Activity {
     }
 
     private void togglePlayback() {
+        cancelPendingRelativeSwitch();
         Channel channel = currentChannel();
         if (!hasActivePlayer() || !prepared) {
             switchChannel(currentChannelIndex);
@@ -2833,6 +3022,7 @@ public final class MainActivity extends Activity {
     }
 
     private void openChannelList() {
+        cancelPendingRelativeSwitch();
         clearNumericChannelInput();
         lastBackPressedAt = 0L;
         backPrompt.removeCallbacks(hideBackPrompt);
@@ -2891,9 +3081,12 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private String yangshipinDefinition() {
+    private String yangshipinDefinition(Channel channel) {
+        if (RESOLUTION_MODE_LOW.equals(resolutionMode)) {
+            return "sd";
+        }
         if (RESOLUTION_MODE_MEDIUM.equals(resolutionMode)
-                || RESOLUTION_MODE_LOW.equals(resolutionMode)) {
+                || "shd".equals(channel.yangshipinMaxDefinition)) {
             return "shd";
         }
         return "fhd";
@@ -2952,19 +3145,42 @@ public final class MainActivity extends Activity {
             videoInfo.removeCallbacks(updateVideoInfo);
         }
         if (player != null) {
-            player.setDisplay(null);
-            player.release();
+            IjkMediaPlayer oldPlayer = player;
             player = null;
+            try {
+                oldPlayer.setDisplay(null);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to detach old IJK player", error);
+            }
+            try {
+                oldPlayer.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to release old IJK player", error);
+            }
         }
         if (systemPlayer != null) {
-            systemPlayer.setDisplay(null);
-            systemPlayer.release();
+            MediaPlayer oldSystemPlayer = systemPlayer;
             systemPlayer = null;
+            try {
+                oldSystemPlayer.setDisplay(null);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to detach old system player", error);
+            }
+            try {
+                oldSystemPlayer.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to release old system player", error);
+            }
         }
         if (csdPlayer != null) {
-            csdPlayer.clearVideoSurface();
-            csdPlayer.release();
+            SimpleExoPlayer oldCsdPlayer = csdPlayer;
             csdPlayer = null;
+            try {
+                oldCsdPlayer.clearVideoSurface();
+                oldCsdPlayer.release();
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to release old CSD player", error);
+            }
         }
         activePlayerChannel = null;
         activePlayerStreamUrl = null;
@@ -3121,7 +3337,7 @@ public final class MainActivity extends Activity {
                     + " · " + stats.videoCodec + " · " + formatBitrate(stats.videoBitrate)
                     + "\n音频 " + stats.audioCodec + " · "
                     + formatBitrate(stats.audioBitrate)
-                    + "\nCPU（系统） " + formatCpuUsage(stats.cpuUsage));
+                    + "\n" + stats.cpuLabel + " " + formatCpuUsage(stats.cpuUsage));
         }
     }
 
@@ -3131,6 +3347,7 @@ public final class MainActivity extends Activity {
         stats.height = videoHeight;
         stats.frameRate = measuredOutputFps;
         stats.cpuUsage = sampleSystemCpuUsage();
+        stats.cpuLabel = systemCpuMetricLabel;
         if (csdPlayer != null) {
             applyExoFormat(stats, csdPlayer.getVideoFormat(), true);
             applyExoFormat(stats, csdPlayer.getAudioFormat(), false);
@@ -3143,6 +3360,37 @@ public final class MainActivity extends Activity {
     }
 
     private float sampleSystemCpuUsage() {
+        float usage = sampleProcStatCpuUsage();
+        if (usage >= 0f) {
+            useSystemCpuMetric("proc-stat", "CPU（系统）");
+            return usage;
+        }
+        usage = sampleHardwareCpuUsage();
+        if (usage >= 0f) {
+            useSystemCpuMetric("hardware-properties", "CPU（系统）");
+            return usage;
+        }
+        usage = sampleCpuIdleSysfsUsage();
+        if (usage >= 0f) {
+            useSystemCpuMetric("cpuidle-sysfs", "CPU（系统）");
+            return usage;
+        }
+        usage = sampleSystemLoadAverage();
+        if (usage >= 0f) {
+            // Android 8+ commonly hides aggregate CPU time from ordinary apps.
+            // A normalized one-minute load is still system-wide, but is not the
+            // same thing as instantaneous utilization, so label it explicitly.
+            useSystemCpuMetric("loadavg", "CPU（系统负载）");
+            return usage;
+        }
+        useSystemCpuMetric("unavailable", "CPU（系统）");
+        return -1f;
+    }
+
+    private float sampleProcStatCpuUsage() {
+        if (procStatCpuUnavailable) {
+            return -1f;
+        }
         FileInputStream input = null;
         try {
             input = new FileInputStream("/proc/stat");
@@ -3183,10 +3431,12 @@ public final class MainActivity extends Activity {
             lastSystemCpuIdleJiffies = idle;
             return usage;
         } catch (IOException error) {
+            procStatCpuUnavailable = true;
             return -1f;
         } catch (NumberFormatException error) {
             return -1f;
         } catch (SecurityException error) {
+            procStatCpuUnavailable = true;
             return -1f;
         } finally {
             if (input != null) {
@@ -3196,6 +3446,193 @@ public final class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    private float sampleHardwareCpuUsage() {
+        if (hardwareCpuUnavailable || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return -1f;
+        }
+        try {
+            HardwarePropertiesManager manager = (HardwarePropertiesManager)
+                    getSystemService(HARDWARE_PROPERTIES_SERVICE);
+            if (manager == null) {
+                hardwareCpuUnavailable = true;
+                return -1f;
+            }
+            CpuUsageInfo[] cores = manager.getCpuUsages();
+            if (cores == null || cores.length == 0) {
+                hardwareCpuUnavailable = true;
+                return -1f;
+            }
+            long active = 0L;
+            long total = 0L;
+            for (CpuUsageInfo core : cores) {
+                if (core != null) {
+                    active += core.getActive();
+                    total += core.getTotal();
+                }
+            }
+            long activeDelta = active - lastHardwareCpuActiveMillis;
+            long totalDelta = total - lastHardwareCpuTotalMillis;
+            float usage = -1f;
+            if (lastHardwareCpuTotalMillis > 0L && totalDelta > 0L
+                    && activeDelta >= 0L) {
+                usage = clampCpuUsage(activeDelta * 100f / totalDelta);
+            }
+            lastHardwareCpuActiveMillis = active;
+            lastHardwareCpuTotalMillis = total;
+            return usage;
+        } catch (RuntimeException error) {
+            // The API is public but most devices expose it only to device-owner or
+            // privileged applications. Do not retry a denied binder call every second.
+            hardwareCpuUnavailable = true;
+            Log.i(TAG, "System HardwareProperties CPU unavailable: "
+                    + error.getClass().getSimpleName());
+            return -1f;
+        }
+    }
+
+    private float sampleCpuIdleSysfsUsage() {
+        if (sysfsCpuUnavailable) {
+            return -1f;
+        }
+        File[] cpuDirectories;
+        try {
+            cpuDirectories = new File("/sys/devices/system/cpu").listFiles();
+        } catch (SecurityException error) {
+            sysfsCpuUnavailable = true;
+            return -1f;
+        }
+        if (cpuDirectories == null) {
+            sysfsCpuUnavailable = true;
+            return -1f;
+        }
+        long idleMicros = 0L;
+        int cpuCount = 0;
+        for (File cpuDirectory : cpuDirectories) {
+            String name = cpuDirectory.getName();
+            if (!isCpuDirectoryName(name) || !isCpuOnline(cpuDirectory)) {
+                continue;
+            }
+            File[] states;
+            try {
+                states = new File(cpuDirectory, "cpuidle").listFiles();
+            } catch (SecurityException error) {
+                continue;
+            }
+            if (states == null) {
+                continue;
+            }
+            long coreIdleMicros = 0L;
+            boolean readable = false;
+            for (File state : states) {
+                if (!state.getName().startsWith("state")) {
+                    continue;
+                }
+                try {
+                    coreIdleMicros += Long.parseLong(
+                            readSmallAsciiFile(new File(state, "time")));
+                    readable = true;
+                } catch (IOException ignored) {
+                } catch (NumberFormatException ignored) {
+                } catch (SecurityException ignored) {
+                }
+            }
+            if (readable) {
+                idleMicros += coreIdleMicros;
+                cpuCount++;
+            }
+        }
+        if (cpuCount == 0) {
+            sysfsCpuUnavailable = true;
+            return -1f;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long elapsedMicros = (now - lastSysfsCpuSampleElapsedMillis) * 1000L;
+        long idleDelta = idleMicros - lastSysfsCpuIdleMicros;
+        float usage = -1f;
+        if (lastSysfsCpuSampleElapsedMillis > 0L && lastSysfsCpuCount == cpuCount
+                && elapsedMicros > 0L && idleDelta >= 0L) {
+            long availableMicros = elapsedMicros * cpuCount;
+            if (availableMicros > 0L) {
+                usage = clampCpuUsage(
+                        (availableMicros - Math.min(availableMicros, idleDelta))
+                                * 100f / availableMicros);
+            }
+        }
+        lastSysfsCpuIdleMicros = idleMicros;
+        lastSysfsCpuSampleElapsedMillis = now;
+        lastSysfsCpuCount = cpuCount;
+        return usage;
+    }
+
+    private float sampleSystemLoadAverage() {
+        try {
+            String text = readSmallAsciiFile(new File("/proc/loadavg"));
+            int separator = text.indexOf(' ');
+            String first = separator >= 0 ? text.substring(0, separator) : text;
+            float oneMinuteLoad = Float.parseFloat(first);
+            int processors = Math.max(1, Runtime.getRuntime().availableProcessors());
+            return Math.max(0f, oneMinuteLoad * 100f / processors);
+        } catch (IOException error) {
+            return -1f;
+        } catch (NumberFormatException error) {
+            return -1f;
+        } catch (SecurityException error) {
+            return -1f;
+        }
+    }
+
+    private static boolean isCpuDirectoryName(String name) {
+        if (name == null || name.length() <= 3 || !name.startsWith("cpu")) {
+            return false;
+        }
+        for (int index = 3; index < name.length(); index++) {
+            if (!Character.isDigit(name.charAt(index))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isCpuOnline(File cpuDirectory) {
+        File online = new File(cpuDirectory, "online");
+        if (!online.exists()) {
+            return true;
+        }
+        try {
+            return !"0".equals(readSmallAsciiFile(online));
+        } catch (IOException ignored) {
+            return true;
+        } catch (SecurityException ignored) {
+            return true;
+        }
+    }
+
+    private static String readSmallAsciiFile(File file) throws IOException {
+        FileInputStream input = new FileInputStream(file);
+        try {
+            byte[] buffer = new byte[128];
+            int length = input.read(buffer);
+            if (length <= 0) {
+                throw new IOException("Empty file: " + file);
+            }
+            return new String(buffer, 0, length, "US-ASCII").trim();
+        } finally {
+            input.close();
+        }
+    }
+
+    private void useSystemCpuMetric(String source, String label) {
+        systemCpuMetricLabel = label;
+        if (!source.equals(systemCpuMetricSource)) {
+            systemCpuMetricSource = source;
+            Log.i(TAG, "System CPU metric source=" + source);
+        }
+    }
+
+    private static float clampCpuUsage(float usage) {
+        return Math.max(0f, Math.min(100f, usage));
     }
 
     private static void applyExoFormat(PlaybackDebugStats stats, Format format,
@@ -3365,6 +3802,7 @@ public final class MainActivity extends Activity {
         String audioCodec = "--";
         long audioBitrate = -1L;
         float cpuUsage = -1f;
+        String cpuLabel = "CPU（系统）";
     }
 
     private void moveChannelMenuSelection(int offset) {
@@ -3567,6 +4005,7 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        cancelPendingRelativeSwitch();
         clearNumericChannelInput();
         if (managementPanel.getVisibility() == View.VISIBLE) {
             closeManagementPanel();
@@ -3610,6 +4049,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         playRequestId++;
+        cancelPendingRelativeSwitch();
+        releaseCrashRecovery(isFinishing());
         if (root != null) {
             root.removeCallbacks(updateClock);
         }

@@ -998,7 +998,6 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_decryptTransportStream(
     JNIEnv* env, jclass clazz, jbyteArray transport_stream) {
   jsize length;
   jbyte* input;
-  uint8_t* output;
   int trapped = 0;
   int decrypted = 0;
   (void) clazz;
@@ -1009,17 +1008,16 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_decryptTransportStream(
   g_decrypt_cancelled = 0;
   length = (*env)->GetArrayLength(env, transport_stream);
   input = (*env)->GetByteArrayElements(env, transport_stream, NULL);
-  output = (uint8_t*) malloc((size_t) length);
-  if (input == NULL || output == NULL) {
-    free(output);
-    if (input != NULL) {
-      (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-    }
+  if (input == NULL) {
     return NULL;
   }
   wasm_rt_trap_t trap = (wasm_rt_trap_t) wasm_rt_try(g_wasm_rt_jmp_buf);
   if (trap == WASM_RT_TRAP_NONE) {
-    decrypted = decrypt_transport_stream(output, (const uint8_t*) input, (size_t) length);
+    /* The TS rewriter only updates packet slots after their source bytes have been
+     * consumed, so input and output may safely share the JNI buffer. This removes a
+     * full segment allocation plus two whole-buffer copies on every fragment. */
+    decrypted = decrypt_transport_stream(
+        (uint8_t*) input, (const uint8_t*) input, (size_t) length);
   } else {
     LOGE("wasm trap during %s: %s nalType=%d nalLen=%u updateTag=%s",
         g_wasm_stage, wasm_rt_strerror(trap), g_current_nal_type,
@@ -1031,25 +1029,20 @@ Java_com_bu_cc_tv_NativeH5eDecryptor_decryptTransportStream(
   }
   if (trapped) {
     (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-    free(output);
     LOGW("Rejecting encrypted transport stream after decrypt trap");
     return NULL;
   }
   if (g_decrypt_cancelled) {
     (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-    free(output);
     LOGI("CCTV decrypt cancelled for channel switch");
     return NULL;
   }
   if (!decrypted) {
     (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-    free(output);
     LOGW("Rejecting transport stream because no encrypted video NAL was decoded");
     return NULL;
   }
-  (*env)->SetByteArrayRegion(env, transport_stream, 0, length, (const jbyte*) output);
-  (*env)->ReleaseByteArrayElements(env, transport_stream, input, JNI_ABORT);
-  free(output);
+  (*env)->ReleaseByteArrayElements(env, transport_stream, input, 0);
   return transport_stream;
 }
 

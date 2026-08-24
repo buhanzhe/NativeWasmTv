@@ -70,6 +70,7 @@ final class HlsProxyServer implements Closeable {
      * A single worker preserves ordering and also keeps only one wasm heap alive. */
     private static final int CCTV_PARALLEL_DECRYPT_THREADS = 1;
     private static final int CCTV_LOW_RAM_DECRYPT_THREADS = 1;
+    private static final long CCTV_DECRYPT_SHUTDOWN_WAIT_MS = 750L;
     private static final int CCTV_PARALLEL_PREFETCH_WINDOW = 2;
     private static final int CMG_PREFETCH_WINDOW = 1;
     private static final int CMG_MAX_GAP_PREWARM_SEGMENTS = 6;
@@ -124,6 +125,8 @@ final class HlsProxyServer implements Closeable {
     private final ExecutorService cctvPrefetchWorkers;
     private final boolean parallelCctvDecrypt;
     private final int cctvLiveEdgeHoldBackSegments;
+    private final int cctvStartupDownloadSegments;
+    private final int cctvStartupDecryptSegments;
     private final boolean configuredVariantQualityEnabled;
     private final String variantQualityMode;
     private final ScheduledExecutorService cctvPlaylistMonitor =
@@ -217,8 +220,20 @@ final class HlsProxyServer implements Closeable {
     HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
             boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
             boolean configuredVariantQualityEnabled, String variantQualityMode) {
+        this(cmgDebugDir, statefulCmgSource, lowResourceDevice, spsCompatibilityMode,
+                liveEdgeHoldBackSegments, configuredVariantQualityEnabled,
+                variantQualityMode, 2, 2);
+    }
+
+    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
+            boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
+            boolean configuredVariantQualityEnabled, String variantQualityMode,
+            int startupDownloadSegments, int startupDecryptSegments) {
         this.cmgDebugDir = cmgDebugDir;
         cctvLiveEdgeHoldBackSegments = Math.max(1, Math.min(3, liveEdgeHoldBackSegments));
+        cctvStartupDownloadSegments = Math.max(1, Math.min(2, startupDownloadSegments));
+        cctvStartupDecryptSegments = Math.max(1,
+                Math.min(cctvStartupDownloadSegments, startupDecryptSegments));
         this.configuredVariantQualityEnabled = configuredVariantQualityEnabled;
         this.variantQualityMode = sanitizeVariantQualityMode(variantQualityMode);
         h264SpsCompatibilityMode = spsCompatibilityMode;
@@ -239,6 +254,8 @@ final class HlsProxyServer implements Closeable {
                 + " prefetchThreads=" + decryptThreads
                 + " statefulSession=" + parallelCctvDecrypt
                 + " liveEdgeHoldBack=" + cctvLiveEdgeHoldBackSegments
+                + " startupDownload=" + cctvStartupDownloadSegments
+                + " startupDecrypt=" + cctvStartupDecryptSegments
                 + " variantQuality=" + this.variantQualityMode
                 + " variantQualityEnabled=" + configuredVariantQualityEnabled
                 + " spsCompatibility=" + spsCompatibilityMode);
@@ -622,6 +639,7 @@ final class HlsProxyServer implements Closeable {
         int holdBackSegments = cctvLiveEdgeHoldBack(playlistUrl, merged.size());
         List<PlaylistSegment> playable = new ArrayList<PlaylistSegment>(holdBackSegments == 0
                 ? merged : merged.subList(0, merged.size() - holdBackSegments));
+        boolean startupOpened = false;
         if (isYangshipinUrl(playlistUrl)) {
             List<String> prefetchWindow;
             synchronized (cmgSegmentTasks) {
@@ -670,17 +688,24 @@ final class HlsProxyServer implements Closeable {
                         merged, needsH5eDecrypt(playlistUrl));
             }
             if (needsH5eDecrypt(playlistUrl)) {
-                ensureCctvStartupGate(playlistUrl, playable);
+                startupOpened = ensureCctvStartupGate(playlistUrl, playable);
             }
             prefetchCctvSegments(prefetchWindow);
             startCctvPlaylistMonitor(playlistUrl);
+        }
+        if (startupOpened && playable.size() > cctvStartupDecryptSegments) {
+            /* The first playlist exposes exactly the number of segments promised by the
+             * selected mode. Downloaded-only segments stay local until their background
+             * decrypt task has completed. */
+            playable = new ArrayList<PlaylistSegment>(
+                    playable.subList(0, cctvStartupDecryptSegments));
         }
         int waitingForDownload = 0;
         if (needsH5eDecrypt(playlistUrl)) {
             /* Do not advertise an edge segment until its complete, decrypted body is ready.
              * A failed prefetch is retried by the playlist monitor while ExoPlayer consumes
              * its existing buffer instead of receiving a 502 and rebuilding the channel. */
-            while (playable.size() > CCTV_MIN_PLAYABLE_SEGMENTS
+            while (playable.size() > cctvStartupDecryptSegments
                     && !isCctvSegmentReady(playable.get(playable.size() - 1).url)) {
                 playable.remove(playable.size() - 1);
                 waitingForDownload++;
@@ -717,52 +742,41 @@ final class HlsProxyServer implements Closeable {
         return result.toString();
     }
 
-    private void ensureCctvStartupGate(String playlistUrl,
+    private boolean ensureCctvStartupGate(String playlistUrl,
             List<PlaylistSegment> playable) throws IOException {
         synchronized (cctvStartupLock) {
             if (Boolean.TRUE.equals(cctvStartupReady.get(playlistUrl))) {
-                return;
+                return false;
             }
-            if (playable.size() < 2) {
-                throw new IOException("Waiting for two CCTV startup segments");
+            if (playable.size() < cctvStartupDownloadSegments) {
+                throw new IOException("Waiting for CCTV startup segments: need "
+                        + cctvStartupDownloadSegments);
             }
-            PlaylistSegment first = playable.get(0);
-            PlaylistSegment second = playable.get(1);
             long startedAt = SystemClock.elapsedRealtime();
-
-            boolean firstReady = isCctvSegmentReady(first.url);
-            boolean secondReady = isCctvSegmentReady(second.url);
-            byte[] firstBody = firstReady ? null : getOrDownloadStartupBody(first.url);
-            byte[] secondBody = secondReady ? null : getOrDownloadStartupBody(second.url);
-            try {
-                if (!firstReady) {
-                    byte[] decrypted = decryptCctvSegment(firstBody, first.url, true);
-                    synchronized (cctvSegmentCache) {
-                        cctvSegmentCache.put(first.url, decrypted);
-                    }
+            for (int index = 0; index < cctvStartupDownloadSegments; index++) {
+                PlaylistSegment segment = playable.get(index);
+                if (!isCctvSegmentReady(segment.url)) {
+                    getOrDownloadStartupBody(segment.url);
                 }
-                /* The playlist must not expose the raw second segment. On an old TV the
-                 * wasm setup/decrypt may take several seconds, which otherwise creates a
-                 * visible pause immediately after the first frames. Decrypt both startup
-                 * segments in this same thread-local state before opening the gate. */
-                if (!secondReady) {
-                    byte[] decrypted = decryptCctvSegment(secondBody, second.url, true);
-                    synchronized (cctvSegmentCache) {
-                        cctvSegmentCache.put(second.url, decrypted);
-                    }
-                }
-            } finally {
-                NativeH5eDecryptor.releaseThreadContext();
             }
-            synchronized (cctvDownloadedBodies) {
-                cctvDownloadedBodies.remove(first.url);
-                cctvDownloadedBodies.remove(second.url);
+            /* Decrypt startup data on the persistent ordered worker instead of this HTTP
+             * request thread. Its wasm runtime is then reused by the rolling prefetch
+             * tasks, avoiding a full module allocation on every channel start. */
+            for (int index = 0; index < cctvStartupDecryptSegments; index++) {
+                PlaylistSegment segment = playable.get(index);
+                if (!isCctvSegmentReady(segment.url)) {
+                    getCctvSegment(segment.url);
+                }
             }
             cctvStartupReady.put(playlistUrl, true);
-            Log.i(TAG, "CCTV startup gate ready downloaded=2 playable=2 elapsedMs="
+            Log.i(TAG, "CCTV startup gate ready downloaded="
+                    + cctvStartupDownloadSegments
+                    + " playable=" + cctvStartupDecryptSegments + " elapsedMs="
                     + (SystemClock.elapsedRealtime() - startedAt)
-                    + " first=" + segmentName(first.url)
-                    + " second=" + segmentName(second.url));
+                    + " first=" + segmentName(playable.get(0).url)
+                    + " last=" + segmentName(
+                            playable.get(cctvStartupDownloadSegments - 1).url));
+            return true;
         }
     }
 
@@ -2409,6 +2423,14 @@ final class HlsProxyServer implements Closeable {
         }
         cctvPrefetchWorkers.shutdownNow();
         workers.shutdownNow();
+        try {
+            if (!cctvPrefetchWorkers.awaitTermination(
+                    CCTV_DECRYPT_SHUTDOWN_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "CCTV decrypt worker still stopping after proxy close port=" + port);
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
         Log.i(TAG, "Proxy closed port=" + port);
     }
 

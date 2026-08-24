@@ -64,7 +64,13 @@ final class ChannelCatalog {
             yangshipinChannel("24", "CGTN俄语频道", "600084758", "2024181901"),
             yangshipinChannel("25", "CGTN阿拉伯语频道", "600084782", "2024182001"),
             yangshipinChannel("26", "CGTN西班牙语频道", "600084744", "2024182101"),
-            yangshipinChannel("27", "CGTN外语纪录频道", "600084781", "2024182301")
+            yangshipinChannel("27", "CGTN外语纪录频道", "600084781", "2024182301"),
+            limitedFreeYangshipinChannel("28", "CCTV风云剧场频道",
+                    "600099658", "2025637103"),
+            limitedFreeYangshipinChannel("29", "CCTV第一剧场频道",
+                    "600099655", "2026874203"),
+            limitedFreeYangshipinChannel("30", "CCTV怀旧剧场频道",
+                    "600099620", "2026874303")
     };
 
     static final Channel[] SATELLITE_CHANNELS = new Channel[] {
@@ -197,6 +203,14 @@ final class ChannelCatalog {
             String yangshipinPid, String yangshipinStreamId) {
         return new Channel(number, name, "ysp_" + yangshipinPid, null,
                 yangshipinPid, yangshipinStreamId);
+    }
+
+    private static Channel limitedFreeYangshipinChannel(String number, String name,
+            String yangshipinPid, String yangshipinStreamId) {
+        // These trial channels currently expose 720P and 540P only. Keep the cap on
+        // the channel so a global "highest" preference gracefully selects 720P.
+        return new Channel(number, name, "ysp_" + yangshipinPid, null,
+                yangshipinPid, yangshipinStreamId, "shd");
     }
 
     private static String streamUrl(String streamId) {
