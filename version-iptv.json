@@ -1,7 +1,7 @@
 {
-    "versionCode": 4,
-    "versionName": "1.3.0",
-    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.3.0/nTv.apk?versionCode=4&signer=iptv-v1",
-    "sha256": "c737f4108870f9d226ad4806e6250617edbb0a034c788c1ae0f1bbc43226b4c8",
-    "releaseNotes": "\u65b0\u589e\u5c40\u57df\u7f51\u7f51\u9875\u7ba1\u7406\u3001\u4e8c\u7ef4\u7801\u60ac\u6d6e\u83dc\u5355\u3001\u5728\u7ebf\u9891\u9053\u6e90\u3001\u591a\u7ebf\u8def\u5207\u6362\u3001\u6570\u5b57\u952e\u6362\u53f0\u548c\u89e6\u6478\u53ca\u9065\u63a7\u5668\u8f93\u5165\u8bc6\u522b\u3002"
+    "versionCode": 5,
+    "versionName": "1.5.0",
+    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.5.0/nTv.apk?versionCode=5&signer=iptv-v1",
+    "sha256": "3e8e913b7897b5cac056315c9ecd4cf618fe5ea096f59daff475bd704dfcf518",
+    "releaseNotes": "1.5.0 \u6b63\u5f0f\u7248\uff1a\u4f18\u5316\u592e\u89c6\u7f51\u5206\u7247\u4e0b\u8f7d\u3001\u9884\u7f13\u51b2\u548c\u5207\u53f0\u7a33\u5b9a\u6027\uff1b\u6062\u590d\u592e\u89c6\u9891\u4e09\u6863\u6e05\u6670\u5ea6\uff1b\u4ec5\u4fdd\u7559 IJK \u64ad\u653e\u5668\uff1b\u65b0\u589e\u76f4\u64ad\u7a33\u5b9a\u6027\u3001\u753b\u9762\u3001\u65f6\u95f4\u3001\u8c03\u8bd5\u4fe1\u606f\u3001\u81ea\u542f\u52a8\u548c\u7f51\u9875\u7ba1\u7406\u8bbe\u7f6e\uff1b\u4fee\u590d\u4e0a\u4e0b\u952e\u53cd\u8f6c\u540e\u5207\u53f0\u5d29\u6e83\u3002"
 }
