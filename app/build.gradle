@@ -43,8 +43,8 @@ android {
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion 25
-        versionCode 4
-        versionName '1.3.1-test21-quality-labels'
+        versionCode 5
+        versionName '1.5.0'
 
         ndk {
             abiFilters 'armeabi-v7a'
@@ -68,7 +68,6 @@ android {
         }
     }
 
-    // Desugar ExoPlayer's Java 8 interface methods for Android 4.x devices.
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
@@ -78,10 +77,6 @@ android {
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
     implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
-    // ExoPlayer's MPEG-TS extractor always supplies AVC SPS/PPS as MediaCodec
-    // initialization data. Keep it as an A/B backend for strict Android 4.x TV codecs.
-    implementation 'com.google.android.exoplayer:exoplayer-core:2.13.3'
-    implementation 'com.google.android.exoplayer:exoplayer-hls:2.13.3'
 }
 
 task generateVersionFile {

@@ -113,7 +113,8 @@ final class YangshipinApiPayload {
     }
 
     private static String sanitizeDefinition(String definition) {
-        if ("shd".equals(definition) || "sd".equals(definition)) {
+        if ("shd".equals(definition) || "hd".equals(definition)
+                || "sd".equals(definition)) {
             return definition;
         }
         return "fhd";

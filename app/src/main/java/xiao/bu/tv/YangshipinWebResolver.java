@@ -1013,7 +1013,8 @@ final class YangshipinWebResolver {
         Pending(int requestId, Channel channel, String definition, Callback callback) {
             this.requestId = requestId;
             this.channel = channel;
-            this.definition = "shd".equals(definition) || "sd".equals(definition)
+            this.definition = "shd".equals(definition) || "hd".equals(definition)
+                    || "sd".equals(definition)
                     ? definition : "fhd";
             this.callback = callback;
         }

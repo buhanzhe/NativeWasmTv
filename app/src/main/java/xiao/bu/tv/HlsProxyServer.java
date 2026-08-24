@@ -63,7 +63,7 @@ final class HlsProxyServer implements Closeable {
     private static final int CMG_SEGMENT_CACHE_LIMIT = 6;
     private static final int CCTV_SEGMENT_CACHE_LIMIT = 6;
     private static final int CCTV_LOW_RAM_SEGMENT_CACHE_LIMIT = 3;
-    // Keep a one-hour event-like window so ExoPlayer can build and preserve a
+    // Keep a one-hour event-like window so the player can build and preserve a
     // meaningful offset from the unusually shallow three-segment CCTV origin.
     private static final int LIVE_PLAYLIST_HISTORY_LIMIT = 900;
     /* H5E is a stream state machine: type-25 control NALs affect later segments.
@@ -660,10 +660,14 @@ final class HlsProxyServer implements Closeable {
             List<String> prefetchWindow;
             synchronized (cctvSegmentTasks) {
                 if (!playlistUrl.equals(lastCctvPlaylistUrl)) {
-                    for (FutureTask<byte[]> task : cctvSegmentTasks.values()) {
+                    List<FutureTask<byte[]>> staleTasks =
+                            new ArrayList<FutureTask<byte[]>>(cctvSegmentTasks.values());
+                    cctvSegmentTasks.clear();
+                    // FutureTask.cancel() invokes done() synchronously. Clear the map
+                    // before cancelling so done() cannot mutate a live values iterator.
+                    for (FutureTask<byte[]> task : staleTasks) {
                         task.cancel(true);
                     }
-                    cctvSegmentTasks.clear();
                     synchronized (cctvSegmentCache) {
                         cctvSegmentCache.clear();
                     }
@@ -703,7 +707,7 @@ final class HlsProxyServer implements Closeable {
         int waitingForDownload = 0;
         if (needsH5eDecrypt(playlistUrl)) {
             /* Do not advertise an edge segment until its complete, decrypted body is ready.
-             * A failed prefetch is retried by the playlist monitor while ExoPlayer consumes
+             * A failed prefetch is retried by the playlist monitor while IJK consumes
              * its existing buffer instead of receiving a 502 and rebuilding the channel. */
             while (playable.size() > cctvStartupDecryptSegments
                     && !isCctvSegmentReady(playable.get(playable.size() - 1).url)) {
@@ -2389,14 +2393,20 @@ final class HlsProxyServer implements Closeable {
         running = false;
         monitoredCctvPlaylistUrl = null;
         NativeH5eDecryptor.cancelPendingDecrypts();
+        List<FutureTask<byte[]>> pendingCctvTasks;
         synchronized (cctvSegmentTasks) {
-            for (FutureTask<byte[]> task : cctvSegmentTasks.values()) {
-                task.cancel(true);
-            }
+            pendingCctvTasks =
+                    new ArrayList<FutureTask<byte[]>>(cctvSegmentTasks.values());
             cctvSegmentTasks.clear();
             cctvNextSegments.clear();
             lastCctvRequestedUrl = null;
             lastCctvPlaylistUrl = null;
+        }
+        // cancel() may synchronously run FutureTask.done(), which removes the task
+        // from cctvSegmentTasks. Cancel only after detaching the snapshot to avoid
+        // ConcurrentModificationException on Android 4.x LinkedHashMap iterators.
+        for (FutureTask<byte[]> task : pendingCctvTasks) {
+            task.cancel(true);
         }
         synchronized (cctvSegmentCache) {
             cctvSegmentCache.clear();
@@ -2407,11 +2417,13 @@ final class HlsProxyServer implements Closeable {
         synchronized (cctvStartupLock) {
             cctvStartupReady.clear();
         }
+        List<FutureTask<byte[]>> pendingCmgTasks;
         synchronized (cmgSegmentTasks) {
-            for (FutureTask<byte[]> task : cmgSegmentTasks.values()) {
-                task.cancel(true);
-            }
+            pendingCmgTasks = new ArrayList<FutureTask<byte[]>>(cmgSegmentTasks.values());
             cmgSegmentTasks.clear();
+        }
+        for (FutureTask<byte[]> task : pendingCmgTasks) {
+            task.cancel(true);
         }
         cctvPlaylistMonitor.shutdownNow();
         int port = serverSocket == null ? -1 : serverSocket.getLocalPort();
