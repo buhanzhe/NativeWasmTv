@@ -13,6 +13,12 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <xiao.bu.tv.WebSourceView
+        android:id="@+id/web_source"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/video_clock"
         android:layout_width="wrap_content"
@@ -29,6 +35,27 @@
         android:shadowRadius="4"
         android:textColor="#FFFFFFFF"
         android:textSize="20sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:ignore="HardcodedText,RtlHardcoded" />
+
+    <TextView
+        android:id="@+id/video_date"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|left"
+        android:layout_marginLeft="12dp"
+        android:layout_marginTop="10dp"
+        android:fontFamily="monospace"
+        android:gravity="left|center_vertical"
+        android:includeFontPadding="false"
+        android:shadowColor="#E6000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="3"
+        android:text="2026年08月25日"
+        android:textColor="#FFFFFFFF"
+        android:textSize="16sp"
         android:textStyle="bold"
         android:visibility="gone"
         tools:ignore="HardcodedText,RtlHardcoded" />
@@ -51,6 +78,27 @@
         android:text="视频 --  --fps  --  --\n音频 --  --\nCPU（本应用） --"
         android:textColor="#FFFFFFFF"
         android:textSize="12sp"
+        android:visibility="gone"
+        tools:ignore="HardcodedText,RtlHardcoded" />
+
+    <TextView
+        android:id="@+id/network_speed_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|right"
+        android:layout_marginRight="12dp"
+        android:layout_marginBottom="10dp"
+        android:fontFamily="monospace"
+        android:gravity="right"
+        android:includeFontPadding="false"
+        android:shadowColor="#E6000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="2"
+        android:text="--"
+        android:textColor="#FFFFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
         android:visibility="gone"
         tools:ignore="HardcodedText,RtlHardcoded" />
 
@@ -383,4 +431,10 @@
             android:text="@string/confirm"
             android:textSize="15sp" />
     </LinearLayout>
+
+    <xiao.bu.tv.FlyMouseCursorView
+        android:id="@+id/fly_mouse_cursor"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
 </FrameLayout>

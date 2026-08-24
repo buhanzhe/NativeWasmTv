@@ -39,7 +39,7 @@ android {
 
     defaultConfig {
         applicationId 'xiao.bu.tv'
-        minSdkVersion 16
+        minSdkVersion 14
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion 25

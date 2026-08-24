@@ -23,6 +23,7 @@ final class LocalControlServer implements Closeable {
     interface Listener {
         String stateJson();
         String control(JSONObject request) throws Exception;
+        String pointer(JSONObject request) throws Exception;
         String settings(JSONObject request) throws Exception;
     }
 
@@ -179,6 +180,9 @@ final class LocalControlServer implements Closeable {
         } else if ("POST".equals(method) && "/api/control".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.control(new JSONObject(body)).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/pointer".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.pointer(new JSONObject(body)).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/settings".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.settings(new JSONObject(body)).getBytes("UTF-8"));
@@ -227,9 +231,13 @@ final class LocalControlServer implements Closeable {
                 + "Content-Type: " + contentType + "\r\n"
                 + "Content-Length: " + body.length + "\r\n"
                 + "Cache-Control: no-store\r\n"
+                + "Permissions-Policy: accelerometer=(self), gyroscope=(self)\r\n"
                 + "Access-Control-Allow-Origin: *\r\n"
                 + "Access-Control-Allow-Headers: Content-Type\r\n"
                 + "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                + "Access-Control-Allow-Private-Network: true\r\n"
+                + "Private-Network-Access-Name: ntv-tv\r\n"
+                + "Private-Network-Access-ID: 4e:54:56:54:56:01\r\n"
                 + "Connection: close\r\n\r\n";
         BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
         output.write(headers.getBytes("ISO-8859-1"));

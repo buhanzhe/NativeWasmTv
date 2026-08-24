@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -45,6 +46,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -132,6 +134,7 @@ final class HlsProxyServer implements Closeable {
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
     private final File cmgDebugDir;
+    private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
     private int cmgSegmentCacheLimit = CMG_SEGMENT_CACHE_LIMIT;
     private int cctvSegmentCacheLimit = CCTV_SEGMENT_CACHE_LIMIT;
     private ServerSocket serverSocket;
@@ -184,6 +187,9 @@ final class HlsProxyServer implements Closeable {
     private String lastCctvRequestedUrl;
     private String lastCctvPlaylistUrl;
     private volatile String monitoredCctvPlaylistUrl;
+    private volatile String webReferer;
+    private volatile String webUserAgent;
+    private volatile String webCookies;
     private boolean cctvPlaylistMonitorStarted;
     private long cmgLastYangshipinSegment = -1L;
 
@@ -361,6 +367,12 @@ final class HlsProxyServer implements Closeable {
         }
     }
 
+    void setWebRequestHeaders(String referer, String userAgent, String cookies) {
+        webReferer = sanitizeHeaderValue(referer);
+        webUserAgent = sanitizeHeaderValue(userAgent);
+        webCookies = sanitizeHeaderValue(cookies);
+    }
+
     private void acceptLoop() {
         while (running) {
             try {
@@ -516,7 +528,8 @@ final class HlsProxyServer implements Closeable {
             }
 
             String contentType = connection.getContentType();
-            byte[] body = readFully(connection.getInputStream(), connection.getContentLength());
+            byte[] body = readUpstreamFully(connection.getInputStream(),
+                    connection.getContentLength());
             responseConsumed = true;
             if (!running) {
                 throw new SocketException("Proxy closed");
@@ -981,7 +994,7 @@ final class HlsProxyServer implements Closeable {
             if (status < 200 || status >= 300) {
                 return;
             }
-            String body = new String(readFully(connection.getInputStream(),
+            String body = new String(readUpstreamFully(connection.getInputStream(),
                     connection.getContentLength()), UTF_8);
             if (!playlistUrl.equals(monitoredCctvPlaylistUrl)) {
                 return;
@@ -1339,7 +1352,8 @@ final class HlsProxyServer implements Closeable {
             if (status < 200 || status >= 300) {
                 throw new IOException("Upstream HTTP " + status);
             }
-            byte[] body = readFully(connection.getInputStream(), connection.getContentLength());
+            byte[] body = readUpstreamFully(connection.getInputStream(),
+                    connection.getContentLength());
             responseConsumed = true;
             int expectedLength = connection.getContentLength();
             if (expectedLength >= 0 && body.length != expectedLength) {
@@ -1482,7 +1496,7 @@ final class HlsProxyServer implements Closeable {
         return count - 1;
     }
 
-    private static VariantCandidate selectAvailableVariant(URI base, List<Variant> variants,
+    private VariantCandidate selectAvailableVariant(URI base, List<Variant> variants,
             int preferredIndex, String qualityMode) {
         List<VariantCandidate> available = new ArrayList<VariantCandidate>();
         for (int step = 0; step < variants.size(); step++) {
@@ -1538,7 +1552,7 @@ final class HlsProxyServer implements Closeable {
         return index >= 0 && index < count ? index : -1;
     }
 
-    private static VariantCandidate inspectVariant(String url, Variant variant) {
+    private VariantCandidate inspectVariant(String url, Variant variant) {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
@@ -1551,7 +1565,7 @@ final class HlsProxyServer implements Closeable {
             if (status < 200 || status >= 300) {
                 return new VariantCandidate(variant, false, null);
             }
-            String playlist = new String(readFully(connection.getInputStream(),
+            String playlist = new String(readUpstreamFully(connection.getInputStream(),
                     connection.getContentLength()), UTF_8);
             responseConsumed = true;
             String firstSegment = firstMediaSegment(url, playlist);
@@ -1579,7 +1593,7 @@ final class HlsProxyServer implements Closeable {
         return null;
     }
 
-    private static Resolution probeTransportStreamResolution(String url) throws IOException {
+    private Resolution probeTransportStreamResolution(String url) throws IOException {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
@@ -1593,7 +1607,7 @@ final class HlsProxyServer implements Closeable {
             if (status < 200 || status >= 300) {
                 return null;
             }
-            return parseTransportStreamResolution(readAtMost(
+            return parseTransportStreamResolution(readUpstreamAtMost(
                     connection.getInputStream(), TS_RESOLUTION_PROBE_BYTES));
         } finally {
             if (connection != null) {
@@ -1614,14 +1628,43 @@ final class HlsProxyServer implements Closeable {
         return lowerPath.endsWith(".ts") || lowerType.contains("mp2t");
     }
 
-    private static void applyRequestHeaders(HttpURLConnection connection, String url) {
-        if (isYangshipinUrl(url)) {
+    private void applyRequestHeaders(HttpURLConnection connection, String url) {
+        String customUserAgent = webUserAgent;
+        String customReferer = webReferer;
+        String customCookies = webCookies;
+        if (customUserAgent != null) {
+            connection.setRequestProperty("User-Agent", customUserAgent);
+        } else if (isYangshipinUrl(url)) {
             connection.setRequestProperty("User-Agent", YANGSHIPIN_USER_AGENT);
-            connection.setRequestProperty("Referer", "https://www.yangshipin.cn/");
-            connection.setRequestProperty("Origin", "https://www.yangshipin.cn");
         } else {
             connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT);
         }
+        if (customReferer != null) {
+            connection.setRequestProperty("Referer", customReferer);
+            try {
+                URI refererUri = URI.create(customReferer);
+                if (refererUri.getScheme() != null && refererUri.getAuthority() != null) {
+                    connection.setRequestProperty("Origin", refererUri.getScheme()
+                            + "://" + refererUri.getAuthority());
+                }
+            } catch (IllegalArgumentException ignored) {
+                // A malformed optional Referer must not prevent the stream request.
+            }
+        } else if (isYangshipinUrl(url)) {
+            connection.setRequestProperty("Referer", "https://www.yangshipin.cn/");
+            connection.setRequestProperty("Origin", "https://www.yangshipin.cn");
+        }
+        if (customCookies != null) {
+            connection.setRequestProperty("Cookie", customCookies);
+        }
+    }
+
+    private static String sanitizeHeaderValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String sanitized = value.replace('\r', ' ').replace('\n', ' ').trim();
+        return sanitized.length() == 0 ? null : sanitized;
     }
 
     private static boolean needsH5eDecrypt(String url) {
@@ -1702,7 +1745,7 @@ final class HlsProxyServer implements Closeable {
                         + " " + segmentName(segmentUrl));
                 return null;
             }
-            byte[] previous = readFully(connection.getInputStream(),
+            byte[] previous = readUpstreamFully(connection.getInputStream(),
                     connection.getContentLength());
             responseConsumed = true;
             Log.i(TAG, "CMG prewarm segment " + segmentName(segmentUrl)
@@ -2288,6 +2331,43 @@ final class HlsProxyServer implements Closeable {
 
     private static byte[] readFully(InputStream input) throws IOException {
         return readFully(input, -1);
+    }
+
+    long getUpstreamDownloadedBytes() {
+        return upstreamDownloadedBytes.get();
+    }
+
+    private byte[] readUpstreamFully(InputStream input, int expectedLength)
+            throws IOException {
+        return readFully(new UpstreamInputStream(input), expectedLength);
+    }
+
+    private byte[] readUpstreamAtMost(InputStream input, int limit) throws IOException {
+        return readAtMost(new UpstreamInputStream(input), limit);
+    }
+
+    private final class UpstreamInputStream extends FilterInputStream {
+        UpstreamInputStream(InputStream input) {
+            super(input);
+        }
+
+        @Override
+        public int read() throws IOException {
+            int value = super.read();
+            if (value >= 0) {
+                upstreamDownloadedBytes.incrementAndGet();
+            }
+            return value;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int count = super.read(buffer, offset, length);
+            if (count > 0) {
+                upstreamDownloadedBytes.addAndGet(count);
+            }
+            return count;
+        }
     }
 
     private static byte[] readFully(InputStream input, int expectedLength) throws IOException {

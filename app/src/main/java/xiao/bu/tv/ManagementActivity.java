@@ -6,10 +6,15 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 
 public final class ManagementActivity extends Activity {
     static final String EXTRA_URL = "management_url";
@@ -20,7 +25,11 @@ public final class ManagementActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         webView = new WebView(this);
-        webView.setBackgroundColor(Color.rgb(7, 10, 16));
+        webView.setBackgroundColor(Color.rgb(247, 247, 248));
+        // Several Android TV/tablet WebView implementations render a black frame when
+        // a hardware-decoded Surface is paused underneath. The local control page is
+        // lightweight, so software composition is more reliable here.
+        webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -48,7 +57,29 @@ public final class ManagementActivity extends Activity {
             finish();
             return;
         }
-        webView.loadUrl(url);
+        try {
+            webView.loadDataWithBaseURL(url, readControlHtml(),
+                    "text/html", "UTF-8", url);
+        } catch (IOException error) {
+            // The loopback URL remains a safe fallback if the bundled resource cannot
+            // be read on an unusual vendor build.
+            webView.loadUrl(url);
+        }
+    }
+
+    private String readControlHtml() throws IOException {
+        InputStream input = getResources().openRawResource(R.raw.control);
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                output.write(buffer, 0, count);
+            }
+            return output.toString("UTF-8");
+        } finally {
+            input.close();
+        }
     }
 
     @Override

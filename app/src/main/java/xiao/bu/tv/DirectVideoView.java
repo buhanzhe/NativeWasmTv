@@ -87,6 +87,15 @@ public final class DirectVideoView extends SurfaceView implements SurfaceHolder.
         requestLayout();
     }
 
+    void resetSurfaceBufferSizePreservingAspect() {
+        // A new decoder may use a different encoded size, so stop forcing the old
+        // producer buffer dimensions. Keep the last measured aspect ratio until the
+        // new stream reports its dimensions; otherwise the final old frame briefly
+        // stretches to the full window while a channel switch is resolving.
+        getHolder().setSizeFromLayout();
+        requestLayout();
+    }
+
     void onPause() {
         // SurfaceHolder owns the lifecycle; no GL context needs pausing.
     }

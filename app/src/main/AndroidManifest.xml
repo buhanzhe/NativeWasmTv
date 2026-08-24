@@ -25,7 +25,7 @@
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:launchMode="singleTask"
-            android:screenOrientation="landscape">
+            android:screenOrientation="sensorLandscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -36,6 +36,7 @@
         <activity
             android:name=".ManagementActivity"
             android:exported="false"
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/ManagementTheme" />
 
         <receiver

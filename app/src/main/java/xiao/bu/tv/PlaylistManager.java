@@ -158,7 +158,7 @@ final class PlaylistManager {
             }
         }
         if (count == 0) {
-            throw new IOException("频道源中没有找到可播放的 HTTP 地址");
+            throw new IOException("频道源中没有找到可播放的 HTTP 或 WebView 地址");
         }
         ChannelCatalog.Group[] result = new ChannelCatalog.Group[groups.size()];
         int index = 0;
@@ -204,7 +204,9 @@ final class PlaylistManager {
     }
 
     private static boolean isStreamUrl(String text) {
-        return text.startsWith("http://") || text.startsWith("https://");
+        return text.startsWith("http://") || text.startsWith("https://")
+                || text.startsWith("webview://http://")
+                || text.startsWith("webview://https://");
     }
 
     private static String emptyToDefault(String value, String fallback) {
