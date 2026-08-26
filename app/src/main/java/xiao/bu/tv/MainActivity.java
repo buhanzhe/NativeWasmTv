@@ -20,7 +20,6 @@ import android.os.CpuUsageInfo;
 import android.os.HardwarePropertiesManager;
 import android.os.IBinder;
 import android.os.SystemClock;
-import android.util.Base64;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.InputDevice;
@@ -42,8 +41,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.LinkedHashSet;
@@ -198,7 +195,6 @@ public final class MainActivity extends Activity {
     private HlsProxyServer proxy;
     private boolean proxyStatefulCmgSource;
     private boolean lowResourceDevice;
-    private File cmgDebugDir;
     private IjkMediaPlayer player;
     private boolean prepared;
     private boolean videoRenderingStarted;
@@ -498,11 +494,6 @@ public final class MainActivity extends Activity {
         root.requestFocus();
         autoUpdater = new AutoUpdater(this);
         autoUpdater.checkForUpdates();
-        maybeProbeCmgRuntime();
-        if (getIntent().hasExtra("cmg_compare")) {
-            return;
-        }
-
         boolean hasLastChannel = preferences.contains(LAST_GROUP_INDEX)
                 && preferences.contains(LAST_CHANNEL_INDEX);
         if (hasLastChannel) {
@@ -518,8 +509,6 @@ public final class MainActivity extends Activity {
         showChannelMenu(currentGroupIndex);
 
         try {
-            cmgDebugDir = getIntent().getBooleanExtra("cmg_debug_dump", false)
-                    ? getExternalFilesDir("cmg-debug") : null;
             switchChannel(currentChannelIndex);
         } catch (Exception error) {
             Log.e(TAG, "Unable to start player", error);
@@ -1155,323 +1144,6 @@ public final class MainActivity extends Activity {
         applied.await(5L, TimeUnit.SECONDS);
     }
 
-    private void maybeProbeCmgRuntime() {
-        if (getIntent().getExtras() != null) {
-            Log.i(TAG, "Intent extras: " + getIntent().getExtras());
-        }
-        if (getIntent().hasExtra("cmg_compare")) {
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    runCmgCompareProbe();
-                }
-            }, "cmg-compare-probe").start();
-            return;
-        }
-        if (getIntent().hasExtra("cmg_replay")) {
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    runCmgReplayProbe();
-                }
-            }, "cmg-replay-probe").start();
-            return;
-        }
-        if (!getIntent().hasExtra("cmg_probe")) {
-            return;
-        }
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    Log.i(TAG, "CMG native probe start");
-                    Log.i(TAG, "CMG native probe: " + NativeCmgDecryptor.probeRuntime());
-                } catch (Throwable error) {
-                    Log.e(TAG, "CMG native probe failed", error);
-                }
-            }
-        }, "cmg-native-probe").start();
-    }
-
-    private void runCmgCompareProbe() {
-        try {
-            String playerTag = getIntent().getStringExtra("cmg_tag");
-            if (playerTag == null) {
-                playerTag = "1780652630064";
-            }
-            String updateTagText = getIntent().getStringExtra("cmg_update_tag");
-            if (updateTagText == null) {
-                updateTagText = "0";
-            }
-            int updateTag = (int) Long.parseLong(updateTagText, 16);
-            Log.i(TAG, "CMG compare configure ok="
-                    + NativeCmgDecryptor.configureRuntimeForProbe(playerTag, updateTag)
-                    + " tag=" + playerTag + " updateTag=" + updateTagText);
-
-            File dir = getExternalFilesDir(null);
-            if (dir == null) {
-                throw new IOException("External files dir unavailable");
-            }
-            String beforeName = getIntent().getStringExtra("cmg_before");
-            if (beforeName == null) {
-                beforeName = "official-cmg-nal-1-before.b64";
-            }
-            String afterName = getIntent().getStringExtra("cmg_after");
-            if (afterName == null) {
-                afterName = "official-cmg-nal-1-after.b64";
-            }
-            byte[] before = readBase64File(new File(dir, beforeName));
-            byte[] officialAfter = readBase64File(new File(dir, afterName));
-            String warmupName = getIntent().getStringExtra("cmg_warm_before");
-            if (warmupName == null) {
-                warmupName = "official-cmg-nal-0-before.b64";
-            }
-            File warmupFile = new File(dir, warmupName);
-            if (warmupFile.exists()) {
-                String warmupTagText = getIntent().getStringExtra("cmg_warm_update_tag");
-                if (warmupTagText == null) {
-                    warmupTagText = "6c34b9ae";
-                }
-                int warmupTag = (int) Long.parseLong(warmupTagText, 16);
-                byte[] warmup = readBase64File(warmupFile);
-                NativeCmgDecryptor.setUpdateTagForProbe(warmupTag);
-                byte[] warmupAfter = NativeCmgDecryptor.decodeNalForProbe(warmup, true, true);
-                Log.i(TAG, "CMG compare warmup tag=" + warmupTagText
-                        + " len=" + warmup.length
-                        + " out=" + (warmupAfter == null ? -1 : warmupAfter.length)
-                        + " diff=" + (warmupAfter == null ? -1 : diffCount(warmup, warmupAfter)));
-                NativeCmgDecryptor.setUpdateTagForProbe(updateTag);
-            }
-            int preStep = getIntent().getIntExtra("cmg_pre_step", -1);
-            if (preStep >= 0 && preStep <= 8) {
-                byte[] preStepAfter = NativeCmgDecryptor.decodeNalSingleStepForProbe(
-                        before, true, preStep);
-                Log.i(TAG, "CMG compare pre-step-" + preStep
-                        + " out=" + (preStepAfter == null ? -1 : preStepAfter.length)
-                        + " diff=" + (preStepAfter == null ? -1 : diffCount(before, preStepAfter)));
-            }
-            byte[] nativeAfter = NativeCmgDecryptor.decodeNalForProbe(before, true, true);
-            if (nativeAfter == null) {
-                Log.e(TAG, "CMG compare native output is null");
-                return;
-            }
-            logByteCompare("official", before, officialAfter);
-            logByteCompare("native", before, nativeAfter);
-            logByteCompare("native-vs-official", officialAfter, nativeAfter);
-            for (int step = 0; step <= 8; step++) {
-                byte[] stepAfter = NativeCmgDecryptor.decodeNalSingleStepForProbe(
-                        before, true, step);
-                if (stepAfter == null) {
-                    Log.e(TAG, "CMG compare native-step-" + step + " output is null");
-                    continue;
-                }
-                logByteCompare("native-step-" + step, before, stepAfter);
-            }
-        } catch (Throwable error) {
-            Log.e(TAG, "CMG compare failed", error);
-        }
-    }
-
-    private void runCmgReplayProbe() {
-        try {
-            String playerTag = getIntent().getStringExtra("cmg_tag");
-            if (playerTag == null) {
-                playerTag = "player_container_player";
-            }
-            boolean forceOfficialTags = !getIntent().hasExtra("cmg_replay_no_force");
-            boolean callNativeActive = !getIntent().hasExtra("cmg_replay_no_active");
-            int targetIndex = getIntent().getIntExtra("cmg_replay_target", 71);
-            Log.i(TAG, "CMG replay configure ok="
-                    + NativeCmgDecryptor.configureRuntimeForProbe(playerTag, 0)
-                    + " tag=" + playerTag
-                    + " forceOfficialTags=" + forceOfficialTags
-                    + " callNativeActive=" + callNativeActive
-                    + " target=" + targetIndex);
-
-            File dir = getExternalFilesDir(null);
-            if (dir == null) {
-                throw new IOException("External files dir unavailable");
-            }
-            String manifestName = getIntent().getStringExtra("cmg_replay_manifest");
-            if (manifestName == null) {
-                manifestName = "cmg-replay-manifest.txt";
-            }
-            String[] lines = new String(readFile(new File(dir, manifestName)), "UTF-8")
-                    .split("\\r?\\n");
-            int firstActiveMismatch = -1;
-            int firstDecodeMismatch = -1;
-            int decodedCount = 0;
-            int activeCount = 0;
-            for (String line : lines) {
-                if (line == null || line.length() == 0 || line.startsWith("#")) {
-                    continue;
-                }
-                String[] parts = line.split("\\|", -1);
-                if (parts.length < 7) {
-                    Log.w(TAG, "CMG replay skip malformed line: " + line);
-                    continue;
-                }
-                int index = Integer.parseInt(parts[0]);
-                int nalType = Integer.parseInt(parts[1]);
-                String officialTagText = parts[2];
-                boolean decoded = "1".equals(parts[3]);
-                String beforeName = parts[4];
-                String expectedName = parts[5];
-                int officialDiff = Integer.parseInt(parts[6]);
-
-                int nativeTag = 0;
-                if (callNativeActive) {
-                    nativeTag = NativeCmgDecryptor.updateSessionForProbe();
-                    activeCount++;
-                    int officialTag = parseHexUpdateTag(officialTagText);
-                    if (firstActiveMismatch < 0 && officialTag != 0 && nativeTag != officialTag) {
-                        firstActiveMismatch = index;
-                        Log.i(TAG, "CMG replay first active mismatch index=" + index
-                                + " type=" + nalType
-                                + " nativeTag=" + String.format(Locale.US, "%08x", nativeTag)
-                                + " officialTag=" + officialTagText);
-                    }
-                }
-                if (!decoded) {
-                    if (index <= 8 || index == targetIndex || firstActiveMismatch == index) {
-                        Log.i(TAG, "CMG replay active-only index=" + index
-                                + " type=" + nalType
-                                + " nativeTag=" + String.format(Locale.US, "%08x", nativeTag)
-                                + " officialTag=" + officialTagText);
-                    }
-                    continue;
-                }
-
-                byte[] before = readBase64File(new File(dir, beforeName));
-                byte[] expected = readBase64File(new File(dir, expectedName));
-                if (forceOfficialTags) {
-                    NativeCmgDecryptor.setUpdateTagForProbe(parseHexUpdateTag(officialTagText));
-                }
-                byte[] actual = NativeCmgDecryptor.decodeNalForProbe(before, true, true);
-                decodedCount++;
-                if (actual == null) {
-                    Log.e(TAG, "CMG replay native null index=" + index + " type=" + nalType);
-                    if (firstDecodeMismatch < 0) {
-                        firstDecodeMismatch = index;
-                    }
-                    continue;
-                }
-                int expectedDiff = diffCount(before, expected);
-                int actualDiff = diffCount(before, actual);
-                int nativeVsOfficial = diffCount(expected, actual);
-                int firstNativeVsOfficial = firstDiff(expected, actual);
-                if (nativeVsOfficial != 0 && firstDecodeMismatch < 0) {
-                    firstDecodeMismatch = index;
-                    Log.i(TAG, "CMG replay first decode mismatch index=" + index
-                            + " type=" + nalType
-                            + " officialTag=" + officialTagText
-                            + " nativeTag=" + String.format(Locale.US, "%08x", nativeTag)
-                            + " officialDiff=" + expectedDiff
-                            + " actualDiff=" + actualDiff
-                            + " nativeVsOfficial=" + nativeVsOfficial
-                            + " firstDiff=" + firstNativeVsOfficial
-                            + " expectedHead64=" + headHex(expected, 64)
-                            + " actualHead64=" + headHex(actual, 64));
-                }
-                if (index <= 8 || index == targetIndex || nativeVsOfficial != 0) {
-                    Log.i(TAG, "CMG replay step index=" + index
-                            + " type=" + nalType
-                            + " officialTag=" + officialTagText
-                            + " nativeTag=" + String.format(Locale.US, "%08x", nativeTag)
-                            + " officialDiff=" + officialDiff
-                            + " expectedDiff=" + expectedDiff
-                            + " actualDiff=" + actualDiff
-                            + " nativeVsOfficial=" + nativeVsOfficial);
-                }
-            }
-            Log.i(TAG, "CMG replay summary activeCount=" + activeCount
-                    + " decodedCount=" + decodedCount
-                    + " firstActiveMismatch=" + firstActiveMismatch
-                    + " firstDecodeMismatch=" + firstDecodeMismatch);
-        } catch (Throwable error) {
-            Log.e(TAG, "CMG replay failed", error);
-        }
-    }
-
-    private static byte[] readBase64File(File file) throws IOException {
-        String text = new String(readFile(file), "US-ASCII");
-        return Base64.decode(text.trim(), Base64.DEFAULT);
-    }
-
-    private static byte[] readFile(File file) throws IOException {
-        FileInputStream input = new FileInputStream(file);
-        try {
-            ByteArrayOutputStream output = new ByteArrayOutputStream((int) file.length());
-            byte[] buffer = new byte[16 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
-            }
-            return output.toByteArray();
-        } finally {
-            input.close();
-        }
-    }
-
-    private static void logByteCompare(String label, byte[] expectedBase, byte[] actual) {
-        Log.i(TAG, "CMG compare " + label
-                + " baseLen=" + expectedBase.length
-                + " actualLen=" + actual.length
-                + " firstDiff=" + firstDiff(expectedBase, actual)
-                + " diffCount=" + diffCount(expectedBase, actual)
-                + " baseSha256=" + sha256Hex(expectedBase)
-                + " actualSha256=" + sha256Hex(actual)
-                + " actualHead64=" + headHex(actual, 64));
-    }
-
-    private static int firstDiff(byte[] left, byte[] right) {
-        int length = Math.min(left.length, right.length);
-        for (int index = 0; index < length; index++) {
-            if (left[index] != right[index]) {
-                return index;
-            }
-        }
-        return left.length == right.length ? -1 : length;
-    }
-
-    private static int diffCount(byte[] left, byte[] right) {
-        int length = Math.min(left.length, right.length);
-        int count = Math.abs(left.length - right.length);
-        for (int index = 0; index < length; index++) {
-            if (left[index] != right[index]) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static String sha256Hex(byte[] data) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return hex(digest.digest(data), digest.getDigestLength());
-        } catch (NoSuchAlgorithmException error) {
-            return "sha256-unavailable";
-        }
-    }
-
-    private static String headHex(byte[] data, int maxLength) {
-        int length = Math.min(data.length, maxLength);
-        byte[] head = new byte[length];
-        System.arraycopy(data, 0, head, 0, length);
-        return hex(head, length);
-    }
-
-    private static String hex(byte[] data, int length) {
-        char[] chars = new char[length * 2];
-        final char[] digits = "0123456789abcdef".toCharArray();
-        for (int index = 0; index < length; index++) {
-            int value = data[index] & 0xff;
-            chars[index * 2] = digits[value >>> 4];
-            chars[index * 2 + 1] = digits[value & 0x0f];
-        }
-        return new String(chars);
-    }
-
     private void applySystemUiVisibility() {
         int flags = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -1608,7 +1280,7 @@ public final class MainActivity extends Activity {
         // while the next source is being initialized.
         HlsProxyServer.resetCmgSessionForChannelSwitch();
         HlsProxyServer next = new HlsProxyServer(
-                cmgDebugDir, statefulCmgSource, lowResourceDevice,
+                statefulCmgSource, lowResourceDevice,
                 h264SpsCompatibility, cctvLiveEdgeHoldBackSegments(),
                 currentGroup().source != ChannelCatalog.SOURCE_CUSTOM, resolutionMode,
                 cctvStartupDownloadSegments(), cctvStartupDecryptSegments());
@@ -1638,9 +1310,8 @@ public final class MainActivity extends Activity {
                 if (cmgTag != null && cmgTag.length() > 0) {
                     int initialUpdateTag = parseHexUpdateTag(cmgInitialUpdateTag);
                     int updateTag = parseHexUpdateTag(cmgUpdateTag);
-                    HlsProxyServer.configureCmgDebugContext(cmgTag,
-                            cmgInitialUpdateTag, cmgUpdateTag,
-                            cmgInitTimeMs, cmgUpdateBaseTimeMs, cmgUpdateTrace);
+                    HlsProxyServer.configureCmgContext(
+                            cmgTag, cmgInitTimeMs, cmgUpdateBaseTimeMs);
                     HlsProxyServer.configureCmgUpdateTags(initialUpdateTag, updateTag);
                     NativeCmgDecryptor.configureLocationForProbe(
                             "https://www.yangshipin.cn/tv/home?pid=" + channel.yangshipinPid);
@@ -2208,9 +1879,6 @@ public final class MainActivity extends Activity {
     }
 
     private boolean shouldUseSoftwareDecode() {
-        if (getIntent().getBooleanExtra("debug_software_decode", false)) {
-            return true;
-        }
         if (DECODE_MODE_SOFTWARE.equals(decodeMode)) {
             return true;
         }

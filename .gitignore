@@ -2,12 +2,21 @@
 .idea/
 build/
 app/build/
+app/src/main/obj/
 app/src/main/jniLibs/
 local.properties
 .signing/
 *.iml
+*.log
+*.trace
+*.dump
+*.jsonl
+*.py[cod]
+__pycache__/
+ysp-auth-*.txt
+ysp-liveinfo-*.txt
+ysp-network*.txt
 
 /.playwright-mcp
 output/
 .playwright-cli/
-scripts/

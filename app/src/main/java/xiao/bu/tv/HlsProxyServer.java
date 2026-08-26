@@ -12,8 +12,6 @@ import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -101,10 +99,6 @@ final class HlsProxyServer implements Closeable {
                     + "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
     private static final Object CMG_DECRYPT_LOCK = new Object();
     private static final PesBuffer CMG_PES_BUFFER = new PesBuffer();
-    private static final AtomicInteger CMG_DETAIL_LOGS = new AtomicInteger();
-    private static final AtomicInteger CMG_DECODE_DETAIL_LOGS = new AtomicInteger();
-    private static final AtomicInteger SPS_COMPATIBILITY_LOGS = new AtomicInteger();
-    private static volatile boolean cmgVerboseLogging;
     private static volatile boolean h264SpsCompatibilityMode = true;
     private static boolean cmgSessionWarmed;
     private static boolean cmgLiveVideoDecodeEnabled;
@@ -112,15 +106,9 @@ final class HlsProxyServer implements Closeable {
     private static int cmgStableUpdateTag;
     private static boolean cmgFirstStateNalPending;
     private static int cmgVclSinceRuntimeRestart;
-    private static String cmgDebugPlayerTag = "";
-    private static String cmgDebugInitialTag = "";
-    private static String cmgDebugStableTag = "";
-    private static long cmgDebugInitTimeMs;
-    private static long cmgDebugUpdateBaseTimeMs;
-    private static long cmgDebugClockBaseTimeMs;
-    private static long cmgDebugClockBaseElapsedMs;
-    private static int cmgDebugClockOffsetMs;
-    private static String cmgDebugUpdateTrace = "";
+    private static String cmgPlayerTag = "";
+    private static long cmgClockBaseTimeMs;
+    private static int cmgClockOffsetMs;
     // The CMG Live decryptor is a stateful stream machine. Segment requests must not
     // advance it concurrently, or later NALs are decoded with the wrong state.
     private final ExecutorService workers;
@@ -133,7 +121,6 @@ final class HlsProxyServer implements Closeable {
     private final String variantQualityMode;
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
-    private final File cmgDebugDir;
     private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
     private int cmgSegmentCacheLimit = CMG_SEGMENT_CACHE_LIMIT;
     private int cctvSegmentCacheLimit = CCTV_SEGMENT_CACHE_LIMIT;
@@ -141,7 +128,6 @@ final class HlsProxyServer implements Closeable {
     private Thread acceptThread;
     private volatile boolean running;
     private final AtomicInteger cmgTsRequestIndex = new AtomicInteger();
-    private static final AtomicInteger CMG_DUMP_INDEX = new AtomicInteger();
     private final Map<String, byte[]> cmgSegmentCache =
             new LinkedHashMap<String, byte[]>(16, 0.75f, true) {
                 @Override
@@ -194,48 +180,14 @@ final class HlsProxyServer implements Closeable {
     private long cmgLastYangshipinSegment = -1L;
 
     HlsProxyServer() {
-        this(null, true, false, true, CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS);
+        this(true, false, true, CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS,
+                true, VARIANT_QUALITY_HIGH, 2, 2);
     }
 
-    HlsProxyServer(File cmgDebugDir) {
-        this(cmgDebugDir, true, false, true, CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource) {
-        this(cmgDebugDir, statefulCmgSource, false, true,
-                CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice) {
-        this(cmgDebugDir, statefulCmgSource, lowResourceDevice, true,
-                CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
-            boolean spsCompatibilityMode) {
-        this(cmgDebugDir, statefulCmgSource, lowResourceDevice, spsCompatibilityMode,
-                CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
-            boolean spsCompatibilityMode, int liveEdgeHoldBackSegments) {
-        this(cmgDebugDir, statefulCmgSource, lowResourceDevice, spsCompatibilityMode,
-                liveEdgeHoldBackSegments, true, VARIANT_QUALITY_HIGH);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
-            boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
-            boolean configuredVariantQualityEnabled, String variantQualityMode) {
-        this(cmgDebugDir, statefulCmgSource, lowResourceDevice, spsCompatibilityMode,
-                liveEdgeHoldBackSegments, configuredVariantQualityEnabled,
-                variantQualityMode, 2, 2);
-    }
-
-    HlsProxyServer(File cmgDebugDir, boolean statefulCmgSource, boolean lowResourceDevice,
+    HlsProxyServer(boolean statefulCmgSource, boolean lowResourceDevice,
             boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
             boolean configuredVariantQualityEnabled, String variantQualityMode,
             int startupDownloadSegments, int startupDecryptSegments) {
-        this.cmgDebugDir = cmgDebugDir;
         cctvLiveEdgeHoldBackSegments = Math.max(1, Math.min(3, liveEdgeHoldBackSegments));
         cctvStartupDownloadSegments = Math.max(1, Math.min(2, startupDownloadSegments));
         cctvStartupDecryptSegments = Math.max(1,
@@ -247,7 +199,6 @@ final class HlsProxyServer implements Closeable {
         cmgSegmentCacheLimit = lowResourceDevice ? 2 : CMG_SEGMENT_CACHE_LIMIT;
         cctvSegmentCacheLimit = lowResourceDevice
                 ? CCTV_LOW_RAM_SEGMENT_CACHE_LIMIT : CCTV_SEGMENT_CACHE_LIMIT;
-        cmgVerboseLogging = cmgDebugDir != null;
         parallelCctvDecrypt = !statefulCmgSource;
         workers = statefulCmgSource
                 ? Executors.newSingleThreadExecutor()
@@ -300,46 +251,35 @@ final class HlsProxyServer implements Closeable {
             cmgFirstStateNalPending = initialUpdateTag != 0 && initialUpdateTag != stableUpdateTag;
             cmgSessionWarmed = false;
             cmgLiveVideoDecodeEnabled = false;
-            CMG_DETAIL_LOGS.set(0);
-            CMG_DECODE_DETAIL_LOGS.set(0);
             Log.i(TAG, "CMG proxy update tags initial="
                     + String.format(Locale.US, "%08x", initialUpdateTag)
                     + " stable=" + String.format(Locale.US, "%08x", stableUpdateTag));
         }
     }
 
-    static void configureCmgDebugContext(String playerTag,
-            String initialUpdateTag, String stableUpdateTag,
-            long initTimeMs, long updateBaseTimeMs, String updateTrace) {
+    static void configureCmgContext(String playerTag, long initTimeMs, long updateBaseTimeMs) {
         synchronized (CMG_DECRYPT_LOCK) {
-            cmgDebugPlayerTag = playerTag == null ? "" : playerTag;
-            cmgDebugInitialTag = initialUpdateTag == null ? "" : initialUpdateTag;
-            cmgDebugStableTag = stableUpdateTag == null ? "" : stableUpdateTag;
-            cmgDebugInitTimeMs = initTimeMs;
-            cmgDebugUpdateBaseTimeMs = updateBaseTimeMs;
-            cmgDebugClockBaseTimeMs = updateBaseTimeMs > 0L ? updateBaseTimeMs : initTimeMs;
-            cmgDebugClockBaseElapsedMs = SystemClock.elapsedRealtime();
-            cmgDebugClockOffsetMs = 0;
-            cmgDebugUpdateTrace = updateTrace == null ? "" : updateTrace;
+            cmgPlayerTag = playerTag == null ? "" : playerTag;
+            cmgClockBaseTimeMs = updateBaseTimeMs > 0L ? updateBaseTimeMs : initTimeMs;
+            cmgClockOffsetMs = 0;
         }
     }
 
     static void configureCmgRuntimeClock(long baseTimeMs, int clockOffsetMs) {
         synchronized (CMG_DECRYPT_LOCK) {
             if (baseTimeMs > 0L) {
-                cmgDebugClockBaseTimeMs = baseTimeMs;
-                cmgDebugClockBaseElapsedMs = SystemClock.elapsedRealtime();
+                cmgClockBaseTimeMs = baseTimeMs;
             }
             long inferredOffsetMs = baseTimeMs - System.currentTimeMillis();
             if (clockOffsetMs == 0 && Math.abs(inferredOffsetMs) > 5000L
                     && inferredOffsetMs >= Integer.MIN_VALUE
                     && inferredOffsetMs <= Integer.MAX_VALUE) {
-                cmgDebugClockOffsetMs = (int) inferredOffsetMs;
+                cmgClockOffsetMs = (int) inferredOffsetMs;
             } else {
-                cmgDebugClockOffsetMs = clockOffsetMs;
+                cmgClockOffsetMs = clockOffsetMs;
             }
-            Log.i(TAG, "CMG proxy runtime clock base=" + cmgDebugClockBaseTimeMs
-                    + " offsetMs=" + cmgDebugClockOffsetMs);
+            Log.i(TAG, "CMG proxy runtime clock base=" + cmgClockBaseTimeMs
+                    + " offsetMs=" + cmgClockOffsetMs);
         }
     }
 
@@ -352,17 +292,9 @@ final class HlsProxyServer implements Closeable {
             cmgStableUpdateTag = 0;
             cmgFirstStateNalPending = false;
             cmgVclSinceRuntimeRestart = 0;
-            cmgDebugPlayerTag = "";
-            cmgDebugInitialTag = "";
-            cmgDebugStableTag = "";
-            cmgDebugInitTimeMs = 0L;
-            cmgDebugUpdateBaseTimeMs = 0L;
-            cmgDebugClockBaseTimeMs = 0L;
-            cmgDebugClockBaseElapsedMs = 0L;
-            cmgDebugClockOffsetMs = 0;
-            cmgDebugUpdateTrace = "";
-            CMG_DETAIL_LOGS.set(0);
-            CMG_DECODE_DETAIL_LOGS.set(0);
+            cmgPlayerTag = "";
+            cmgClockBaseTimeMs = 0L;
+            cmgClockOffsetMs = 0;
             Log.i(TAG, "CMG session reset for channel switch");
         }
     }
@@ -717,7 +649,6 @@ final class HlsProxyServer implements Closeable {
             playable = new ArrayList<PlaylistSegment>(
                     playable.subList(0, cctvStartupDecryptSegments));
         }
-        int waitingForDownload = 0;
         if (needsH5eDecrypt(playlistUrl)) {
             /* Do not advertise an edge segment until its complete, decrypted body is ready.
              * A failed prefetch is retried by the playlist monitor while IJK consumes
@@ -725,7 +656,6 @@ final class HlsProxyServer implements Closeable {
             while (playable.size() > cctvStartupDecryptSegments
                     && !isCctvSegmentReady(playable.get(playable.size() - 1).url)) {
                 playable.remove(playable.size() - 1);
-                waitingForDownload++;
             }
         }
         long firstSequence = playable.get(0).sequence;
@@ -747,15 +677,6 @@ final class HlsProxyServer implements Closeable {
             }
             result.append(proxyUrl(segment.url)).append('\n');
         }
-        Log.i(TAG, "Buffered media playlist segments current=" + currentSegments.size()
-                + " merged=" + merged.size()
-                + " playable=" + playable.size()
-                + " holdBack=" + holdBackSegments
-                + " downloadGate=" + waitingForDownload
-                + " seq=" + firstSequence + "-"
-                + playable.get(playable.size() - 1).sequence
-                + " " + segmentName(playable.get(0).url)
-                + ".." + segmentName(playable.get(playable.size() - 1).url));
         return result.toString();
     }
 
@@ -826,7 +747,6 @@ final class HlsProxyServer implements Closeable {
 
     private byte[] getCctvSegment(final String originUrl) throws IOException {
         FutureTask<byte[]> task;
-        boolean wasPrefetched;
         boolean created = false;
         byte[] cached;
         String cachedNext = null;
@@ -836,7 +756,6 @@ final class HlsProxyServer implements Closeable {
             }
             if (cached != null) {
                 task = null;
-                wasPrefetched = true;
                 lastCctvRequestedUrl = originUrl;
                 cachedNext = cctvNextSegments.get(originUrl);
             } else {
@@ -846,15 +765,12 @@ final class HlsProxyServer implements Closeable {
                     cctvSegmentTasks.put(originUrl, task);
                     created = true;
                 }
-                wasPrefetched = task.isDone();
             }
         }
         if (cached != null) {
             if (cachedNext != null) {
                 prefetchCctvSegment(cachedNext);
             }
-            Log.i(TAG, "CCTV TS cache hit " + segmentName(originUrl)
-                    + " bytes=" + cached.length);
             return cached;
         }
         /* Never run this FutureTask on a proxy request thread. Doing so lets
@@ -864,7 +780,6 @@ final class HlsProxyServer implements Closeable {
             cctvPrefetchWorkers.execute(task);
         }
         try {
-            long waitStartedAt = SystemClock.elapsedRealtime();
             byte[] body = task.get();
             String next;
             synchronized (cctvSegmentTasks) {
@@ -878,23 +793,12 @@ final class HlsProxyServer implements Closeable {
                 prefetchCctvSegment(next);
             }
             if (parallelCctvDecrypt) {
-                Log.i(TAG, "CCTV TS ready " + segmentName(originUrl)
-                        + " bytes=" + body.length
-                        + " prefetched=" + wasPrefetched
-                        + " waitMs=" + (SystemClock.elapsedRealtime() - waitStartedAt)
-                        + " decryptMs=background");
                 return body;
             }
-            long decryptStartedAt = SystemClock.elapsedRealtime();
             byte[] decrypted = decryptCctvSegment(body, originUrl, false);
             synchronized (cctvSegmentCache) {
                 cctvSegmentCache.put(originUrl, decrypted);
             }
-            Log.i(TAG, "CCTV TS ready " + segmentName(originUrl)
-                    + " bytes=" + decrypted.length
-                    + " prefetched=" + wasPrefetched
-                    + " waitMs=" + (decryptStartedAt - waitStartedAt)
-                    + " decryptMs=" + (SystemClock.elapsedRealtime() - decryptStartedAt));
             return decrypted;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
@@ -922,8 +826,6 @@ final class HlsProxyServer implements Closeable {
             if (next != null) {
                 prefetchCmgSegment(next);
             }
-            Log.i(TAG, "CMG cache hit " + segmentName(originUrl)
-                    + " bytes=" + cached.length);
             return cached;
         }
         FutureTask<byte[]> task;
@@ -935,7 +837,6 @@ final class HlsProxyServer implements Closeable {
                 cctvPrefetchWorkers.execute(task);
             }
         }
-        long waitStartedAt = SystemClock.elapsedRealtime();
         try {
             byte[] body = task.get();
             String next;
@@ -947,8 +848,6 @@ final class HlsProxyServer implements Closeable {
             if (next != null) {
                 prefetchCmgSegment(next);
             }
-            Log.i(TAG, "CMG TS ready " + segmentName(originUrl)
-                    + " waitMs=" + (SystemClock.elapsedRealtime() - waitStartedAt));
             return body;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
@@ -1220,8 +1119,6 @@ final class HlsProxyServer implements Closeable {
                     byte[] original = downloadCctvSegment(originUrl);
                     int requestIndex = cmgTsRequestIndex.incrementAndGet();
                     YangshipinSegment segment = parseYangshipinSegment(originUrl);
-                    Log.i(TAG, "CMG prefetch TS #" + requestIndex
-                            + " " + segmentName(originUrl));
                     prewarmYangshipinState(originUrl, segment, requestIndex);
                     restartCmgRuntime("TS #" + requestIndex);
                     byte[] decrypted = decryptYangshipinTransportStream(original);
@@ -1232,7 +1129,6 @@ final class HlsProxyServer implements Closeable {
                     synchronized (cmgSegmentCache) {
                         cmgSegmentCache.put(originUrl, decrypted);
                     }
-                    dumpCmgSegmentIfNeeded(requestIndex, originUrl, original, decrypted);
                     return decrypted;
                 } catch (Exception error) {
                     synchronized (cmgSegmentTasks) {
@@ -1246,7 +1142,6 @@ final class HlsProxyServer implements Closeable {
 
     private byte[] decryptCctvSegment(byte[] body, String originUrl, boolean background)
             throws IOException {
-        long startedAt = SystemClock.elapsedRealtime();
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND);
         } catch (RuntimeException ignored) {
@@ -1262,41 +1157,9 @@ final class HlsProxyServer implements Closeable {
             decrypted = NativeH5eDecryptor.decryptTransportStream(body);
         }
         if (decrypted == null) {
-            if (cmgDebugDir != null) {
-                int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
-                if (dumpIndex <= 8 && (cmgDebugDir.exists() || cmgDebugDir.mkdirs())) {
-                    writeFile(new File(cmgDebugDir,
-                            String.format(Locale.US, "cctv-failed-%03d.ts", dumpIndex)), body);
-                }
-            }
             throw new IOException("Native H5E decryptor rejected transport stream");
         }
-        dumpCctvSegmentIfNeeded(originUrl, body, decrypted);
-        if (background) {
-            Log.i(TAG, "CCTV TS decrypted " + segmentName(originUrl)
-                    + " bytes=" + decrypted.length
-                    + " decryptMs=" + (SystemClock.elapsedRealtime() - startedAt));
-        }
         return decrypted;
-    }
-
-    private void dumpCctvSegmentIfNeeded(String originUrl, byte[] original, byte[] decrypted) {
-        if (cmgDebugDir == null) {
-            return;
-        }
-        int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
-        if (dumpIndex > 120 || (!cmgDebugDir.exists() && !cmgDebugDir.mkdirs())) {
-            return;
-        }
-        String prefix = String.format(Locale.US, "cctv-%03d", dumpIndex);
-        try {
-            writeFile(new File(cmgDebugDir, prefix + "-original.ts"), original);
-            writeFile(new File(cmgDebugDir, prefix + "-app.ts"), decrypted);
-            writeFile(new File(cmgDebugDir, prefix + "-url.txt"),
-                    originUrl.getBytes(UTF_8));
-        } catch (IOException error) {
-            Log.w(TAG, "Unable to dump CCTV TS " + prefix, error);
-        }
     }
 
     private byte[] downloadCctvSegment(String originUrl) throws IOException {
@@ -1752,7 +1615,6 @@ final class HlsProxyServer implements Closeable {
                     + " bytes=" + previous.length);
             byte[] decrypted = decryptYangshipinTransportStream(previous);
             cmgSegmentCache.put(segmentUrl, decrypted);
-            dumpCmgSegmentIfNeeded(0, segmentUrl, previous, decrypted);
             return decrypted;
         } catch (IOException error) {
             Log.w(TAG, "CMG prewarm segment failed " + segmentName(segmentUrl), error);
@@ -1794,8 +1656,7 @@ final class HlsProxyServer implements Closeable {
             // Production never needs the encrypted copy after this point. Mutating the
             // download buffer avoids one 1.5-3 MB Dalvik allocation per live segment.
             // Debug captures still preserve both before/after transport streams.
-            byte[] output = cmgVerboseLogging ? ts.clone() : ts;
-            DecodeStats totalStats = new DecodeStats();
+            byte[] output = ts;
             PesBuffer currentPes = CMG_PES_BUFFER;
             currentPes.reset();
             boolean pesActive = false;
@@ -1815,7 +1676,7 @@ final class HlsProxyServer implements Closeable {
                 boolean payloadStart = (output[packetOffset + 1] & 0x40) != 0;
                 if (payloadStart) {
                     if (pesActive && currentPes.size() > 0) {
-                        totalStats.add(decryptPesNals(output, currentPes));
+                        decryptPesNals(output, currentPes);
                     }
                     currentPes.reset();
                     pesActive = false;
@@ -1846,24 +1707,11 @@ final class HlsProxyServer implements Closeable {
                 }
             }
             if (pesActive && currentPes.size() > 0) {
-                totalStats.add(decryptPesNals(output, currentPes));
+                decryptPesNals(output, currentPes);
             }
             normalizeVideoContinuityCounters(output, videoPid);
-            if (cmgVerboseLogging && totalStats.seen > 0) {
-                Log.i(TAG, "CMG decoded TS nals=" + totalStats.decoded
-                        + " changed=" + totalStats.changed
-                        + " short=" + totalStats.shortOutput
-                        + " grew=" + totalStats.grewOutput
-                        + " null=" + totalStats.nullOutput
-                        + " state=" + totalStats.stateOnly
-                        + " seen=" + totalStats.seen);
-                if (totalStats.sample.length() > 0
-                        && CMG_DETAIL_LOGS.getAndIncrement() < 8) {
-                    Log.i(TAG, "CMG NAL sample " + totalStats.sample.toString());
-                }
-            }
             long elapsedMs = SystemClock.elapsedRealtime() - startedAt;
-            if (cmgVerboseLogging || elapsedMs >= 500L) {
+            if (elapsedMs >= 500L) {
                 Log.i(TAG, "CMG TS decrypt elapsed=" + elapsedMs + "ms bytes=" + ts.length);
             }
             return output;
@@ -1881,9 +1729,6 @@ final class HlsProxyServer implements Closeable {
             cmgLiveVideoDecodeEnabled = false;
             cmgFirstStateNalPending = false;
             cmgVclSinceRuntimeRestart = 0;
-            Log.i(TAG, "CMG runtime restarted for " + reason
-                    + " initResult=" + String.format(Locale.US, "%08x",
-                    NativeCmgDecryptor.getPlayerInitResultForProbe()));
         }
     }
 
@@ -1893,117 +1738,8 @@ final class HlsProxyServer implements Closeable {
         }
     }
 
-    private static byte[] decryptVideoPayloadNals(byte[] data, DecodeStats stats) throws IOException {
-        ByteArrayOutputStream rebuilt = new ByteArrayOutputStream(data.length);
-        int writeOffset = 0;
-        for (int offset = 0; offset < data.length - 4; offset++) {
-            int prefix = startCodeLength(data, offset);
-            if (prefix == 0) {
-                continue;
-            }
-            int nalStart = offset + prefix;
-            if (nalStart >= data.length) {
-                continue;
-            }
-            int nalEnd = data.length;
-            for (int next = nalStart + 1; next < data.length - 4; next++) {
-                if (startCodeLength(data, next) > 0) {
-                    nalEnd = next;
-                    break;
-                }
-            }
-            int nalType = data[nalStart] & 0x1f;
-            byte[] replacement = null;
-            boolean replaceNal = needsCmgNalDecode(nalType);
-            boolean stateOnlyNal = needsCmgStateDecode(nalType);
-            int updateTag = advanceCmgSessionForNal(nalType);
-            if (replaceNal || stateOnlyNal) {
-                stats.seen++;
-                byte[] nal = new byte[nalEnd - nalStart];
-                System.arraycopy(data, nalStart, nal, 0, nal.length);
-                updateCmgLiveVideoFlag(nalType, nal);
-                long nalStartedAt = SystemClock.elapsedRealtime();
-                if (cmgVerboseLogging && replaceNal && nal.length > 100000) {
-                    Log.i(TAG, "CMG decoding NAL type=" + nalType + " len=" + nal.length);
-                }
-                byte[] decoded = NativeCmgDecryptor.decodeNalForProbe(nal, true, true);
-                long nalElapsed = SystemClock.elapsedRealtime() - nalStartedAt;
-                if (replaceNal && (nalElapsed > 500L
-                        || (cmgVerboseLogging && nal.length > 100000))) {
-                    Log.i(TAG, "CMG decoded NAL type=" + nalType + " len=" + nal.length
-                            + " out=" + (decoded == null ? -1 : decoded.length)
-                            + " mode=live"
-                            + " elapsed=" + nalElapsed + "ms");
-                }
-                if (stateOnlyNal) {
-                    stats.seen--;
-                    stats.stateOnly++;
-                    if (decoded == null) {
-                        stats.nullOutput++;
-                        stats.sampleNal(nalType, nal.length, -1, "state-null");
-                        Log.w(TAG, "CMG state NAL rejected type=" + nalType + " len=" + nal.length);
-                    } else if (decoded.length > nal.length) {
-                        stats.grewOutput++;
-                        stats.sampleNal(nalType, nal.length, decoded.length, "state-grew");
-                        Log.w(TAG, "Skipping CMG state NAL replacement because length grew type="
-                                + nalType + " before=" + nal.length + " after=" + decoded.length);
-                    } else if (decoded.length != nal.length || bytesDiffer(decoded, nal)) {
-                        stats.sampleNal(nalType, nal.length, decoded.length, "state-changed");
-                        Log.w(TAG, "CMG state NAL changed type=" + nalType
-                                + " before=" + nal.length + " after=" + decoded.length
-                                + "; keeping original bytes");
-                    } else {
-                        stats.sampleNal(nalType, nal.length, decoded.length, "state");
-                    }
-                } else if (decoded == null) {
-                    stats.nullOutput++;
-                    stats.sampleNal(nalType, nal.length, -1, "null");
-                    Log.w(TAG, "Skipping CMG NAL replacement because native rejected type="
-                            + nalType + " len=" + nal.length);
-                } else if (decoded.length > nal.length) {
-                    stats.grewOutput++;
-                    stats.sampleNal(nalType, nal.length, decoded.length, "grew");
-                    Log.w(TAG, "Skipping CMG NAL replacement because length grew type="
-                            + nalType + " before=" + nal.length + " after=" + decoded.length);
-                } else {
-                    boolean nalChanged = bytesDiffer(decoded, nal);
-                    if (decoded.length < nal.length) {
-                        stats.shortOutput++;
-                        stats.sampleNal(nalType, nal.length, decoded.length,
-                                nalChanged ? "short-changed" : "short-same");
-                        if (cmgVerboseLogging && stats.shortOutput <= 3) {
-                            Log.w(TAG, "CMG NAL output shrank type=" + nalType
-                                    + " before=" + nal.length + " after=" + decoded.length
-                                    + "; repacking PES payload");
-                        }
-                        replacement = decoded;
-                    } else {
-                        replacement = decoded;
-                        stats.sampleNal(nalType, nal.length, decoded.length,
-                                nalChanged ? "changed" : "same");
-                    }
-                    stats.decoded++;
-                }
-                if (replacement != null && bytesDiffer(replacement, nal)) {
-                    stats.changed++;
-                }
-            }
-            rebuilt.write(data, writeOffset, nalStart - writeOffset);
-            if (replacement == null) {
-                rebuilt.write(data, nalStart, nalEnd - nalStart);
-            } else {
-                rebuilt.write(replacement, 0, replacement.length);
-            }
-            writeOffset = nalEnd;
-            offset = nalEnd - 1;
-        }
-        rebuilt.write(data, writeOffset, data.length - writeOffset);
-        return rebuilt.toByteArray();
-    }
-
     private static void normalizeVideoContinuityCounters(byte[] ts, int videoPid) {
         int lastCounter = -1;
-        int adjusted = 0;
         for (int packetOffset = 0; packetOffset + 188 <= ts.length; packetOffset += 188) {
             if (ts[packetOffset] != 0x47) {
                 continue;
@@ -2026,17 +1762,12 @@ final class HlsProxyServer implements Closeable {
             }
             if (originalCounter != nextCounter) {
                 ts[packetOffset + 3] = (byte) ((ts[packetOffset + 3] & 0xf0) | nextCounter);
-                adjusted++;
             }
             lastCounter = nextCounter;
         }
-        if (cmgVerboseLogging && adjusted > 0) {
-            Log.i(TAG, "CMG normalized video continuity counters adjusted=" + adjusted);
-        }
     }
 
-    private static DecodeStats decryptPesNals(byte[] ts, PesBuffer pes) throws IOException {
-        DecodeStats stats = new DecodeStats();
+    private static void decryptPesNals(byte[] ts, PesBuffer pes) throws IOException {
         byte[] data = pes.data();
         int dataLength = pes.payloadSize();
         ByteArrayOutputStream rebuilt = null;
@@ -2064,18 +1795,13 @@ final class HlsProxyServer implements Closeable {
             restartCmgRuntimeAtAccessUnitBoundary(nalType);
             advanceCmgSessionForNal(nalType);
             if (stateOnlyNal) {
-                stats.seen++;
                 byte[] nal = new byte[nalEnd - nalStart];
                 System.arraycopy(data, nalStart, nal, 0, nal.length);
                 updateCmgLiveVideoFlag(nalType, nal);
                 byte[] decoded = NativeCmgDecryptor.decodeNalForProbe(nal, true, true);
-                stats.seen--;
-                stats.stateOnly++;
                 if (decoded == null) {
-                    stats.nullOutput++;
                     Log.w(TAG, "CMG state NAL rejected type=" + nalType + " len=" + nal.length);
                 } else if (decoded.length > nal.length) {
-                    stats.grewOutput++;
                     Log.w(TAG, "Skipping CMG state NAL replacement because length grew type="
                             + nalType + " before=" + nal.length + " after=" + decoded.length);
                 } else if (decoded.length != nal.length || bytesDiffer(decoded, nal)) {
@@ -2086,36 +1812,23 @@ final class HlsProxyServer implements Closeable {
                 sanitizeH264SpsMarker(data, nalStart, nalEnd);
             } else if (replaceNal) {
                 int nalLength = nalEnd - nalStart;
-                stats.seen++;
                 long nalStartedAt = SystemClock.elapsedRealtime();
                 int decodedLength = NativeCmgDecryptor.decodeNalRangeInPlace(
                         data, nalStart, nalLength, true, true);
                 long nalElapsed = SystemClock.elapsedRealtime() - nalStartedAt;
-                if (nalElapsed > 500L || (cmgVerboseLogging && nalLength > 100000)) {
+                if (nalElapsed > 500L) {
                     Log.i(TAG, "CMG decoded NAL type=" + nalType + " len=" + nalLength
                             + " out=" + decodedLength + " mode=live-in-place"
                             + " elapsed=" + nalElapsed + "ms");
                 }
                 if (decodedLength == -2) {
-                    stats.grewOutput++;
                     Log.w(TAG, "Skipping CMG NAL replacement because length grew type="
                             + nalType + " before=" + nalLength);
                 } else if (decodedLength < 0) {
-                    stats.nullOutput++;
                     Log.w(TAG, "Skipping CMG NAL replacement because native rejected type="
                             + nalType + " len=" + nalLength);
                 } else {
                     replacementLength = decodedLength;
-                    stats.decoded++;
-                    stats.changed++;
-                    if (decodedLength < nalLength) {
-                        stats.shortOutput++;
-                        if (cmgVerboseLogging && stats.shortOutput <= 3) {
-                            Log.w(TAG, "CMG NAL output shrank type=" + nalType
-                                    + " before=" + nalLength + " after=" + decodedLength
-                                    + "; repacking PES payload");
-                        }
-                    }
                 }
             }
             if (nalType == 1 || nalType == 5) {
@@ -2143,7 +1856,6 @@ final class HlsProxyServer implements Closeable {
             byte[] repacked = rebuilt.toByteArray();
             pes.copyPayloadToTransportStream(ts, repacked, repacked.length);
         }
-        return stats;
     }
 
     private static boolean bytesDiffer(byte[] left, byte[] right) {
@@ -2158,39 +1870,9 @@ final class HlsProxyServer implements Closeable {
         return false;
     }
 
-    private static int firstDiff(byte[] left, byte[] right) {
-        int length = Math.min(left.length, right.length);
-        for (int index = 0; index < length; index++) {
-            if (left[index] != right[index]) {
-                return index;
-            }
-        }
-        return left.length == right.length ? -1 : length;
-    }
-
-    private static int diffCount(byte[] left, byte[] right) {
-        int length = Math.min(left.length, right.length);
-        int diff = Math.abs(left.length - right.length);
-        for (int index = 0; index < length; index++) {
-            if (left[index] != right[index]) {
-                diff++;
-            }
-        }
-        return diff;
-    }
-
-    private static String hexHead(byte[] data, int length) {
-        StringBuilder builder = new StringBuilder(length * 2);
-        int count = Math.min(data.length, length);
-        for (int index = 0; index < count; index++) {
-            builder.append(String.format(Locale.US, "%02x", data[index] & 0xff));
-        }
-        return builder.toString();
-    }
-
     private static int advanceCmgSessionForNal(int nalType) {
         int updateTag;
-        String mediaTag = cmgDebugPlayerTag;
+        String mediaTag = cmgPlayerTag;
         if (mediaTag.length() > 0) {
             NativeCmgDecryptor.setPlayerTagForProbe(mediaTag);
         }
@@ -2205,21 +1887,16 @@ final class HlsProxyServer implements Closeable {
         } else {
             updateTag = NativeCmgDecryptor.updateSessionForProbe();
         }
-        if (cmgVerboseLogging && CMG_DECODE_DETAIL_LOGS.get() < 24) {
-            Log.i(TAG, "CMG UpdatePlayer before NAL type=" + nalType + " tag="
-                    + String.format(Locale.US, "%08x", updateTag)
-                    + " mediaTag=" + mediaTag);
-        }
         return updateTag;
     }
 
     private static void syncCmgRuntimeClockForNative() {
-        if (cmgDebugClockBaseTimeMs <= 0L) {
+        if (cmgClockBaseTimeMs <= 0L) {
             return;
         }
         // The browser wrapper ultimately reads Date.now(). Use the wall clock here too,
         // so suspend, NTP corrections, and date changes do not leave wasm on a stale epoch.
-        NativeCmgDecryptor.setClockForProbe(System.currentTimeMillis() + cmgDebugClockOffsetMs);
+        NativeCmgDecryptor.setClockForProbe(System.currentTimeMillis() + cmgClockOffsetMs);
     }
 
     private static void sanitizeH264SpsMarker(byte[] data, int nalStart, int nalEnd) {
@@ -2232,10 +1909,6 @@ final class HlsProxyServer implements Closeable {
             return;
         }
         data[nalStart + 2] = (byte) after;
-        if (SPS_COMPATIBILITY_LOGS.getAndIncrement() < 8) {
-            Log.i(TAG, "Sanitized CMG H264 SPS private marker "
-                    + String.format(Locale.US, "%02x -> %02x", before, after));
-        }
     }
 
     private static int capturedCmgUpdateTagForNal(int nalType) {
@@ -2263,10 +1936,6 @@ final class HlsProxyServer implements Closeable {
         }
         int bits = nal[2] & 3;
         cmgLiveVideoDecodeEnabled = bits == 1 || bits == 2;
-        if (cmgVerboseLogging) {
-            Log.i(TAG, "CMG SPS live video decode flag bits=" + bits
-                    + " enabled=" + cmgLiveVideoDecodeEnabled);
-        }
     }
 
     private static String segmentName(String url) {
@@ -2276,56 +1945,6 @@ final class HlsProxyServer implements Closeable {
             return slash >= 0 ? path.substring(slash + 1) : path;
         } catch (RuntimeException ignored) {
             return url;
-        }
-    }
-
-    private void dumpCmgSegmentIfNeeded(int requestIndex, String originUrl,
-            byte[] original, byte[] decrypted) {
-        if (cmgDebugDir == null) {
-            return;
-        }
-        int dumpIndex = CMG_DUMP_INDEX.incrementAndGet();
-        if (dumpIndex > 120) {
-            return;
-        }
-        if (!cmgDebugDir.exists() && !cmgDebugDir.mkdirs()) {
-            Log.w(TAG, "Unable to create CMG debug dir " + cmgDebugDir);
-            return;
-        }
-        String prefix = String.format(Locale.US, "seg-%03d", dumpIndex);
-        try {
-            writeFile(new File(cmgDebugDir, prefix + "-original.ts"), original);
-            writeFile(new File(cmgDebugDir, prefix + "-app.ts"), decrypted);
-            StringBuilder meta = new StringBuilder();
-            synchronized (CMG_DECRYPT_LOCK) {
-                meta.append("requestIndex=").append(requestIndex).append('\n');
-                meta.append("url=").append(originUrl).append('\n');
-                meta.append("activeURL=https://www.yangshipin.cn\n");
-                meta.append("playerTag=").append(cmgDebugPlayerTag).append('\n');
-                meta.append("initialUpdateTag=").append(cmgDebugInitialTag).append('\n');
-                meta.append("stableUpdateTag=").append(cmgDebugStableTag).append('\n');
-                meta.append("initialUpdateTagInt=")
-                        .append(String.format(Locale.US, "%08x", cmgInitialUpdateTag)).append('\n');
-                meta.append("stableUpdateTagInt=")
-                        .append(String.format(Locale.US, "%08x", cmgStableUpdateTag)).append('\n');
-                meta.append("initTimeMs=").append(cmgDebugInitTimeMs).append('\n');
-                meta.append("updateBaseTimeMs=").append(cmgDebugUpdateBaseTimeMs).append('\n');
-                meta.append("updateTrace=").append(cmgDebugUpdateTrace).append('\n');
-            }
-            writeFile(new File(cmgDebugDir, prefix + "-meta.txt"), meta.toString().getBytes(UTF_8));
-            Log.i(TAG, "CMG dumped TS " + prefix + " dir=" + cmgDebugDir.getAbsolutePath()
-                    + " original=" + original.length + " app=" + decrypted.length);
-        } catch (IOException error) {
-            Log.w(TAG, "Unable to dump CMG TS " + prefix, error);
-        }
-    }
-
-    private static void writeFile(File file, byte[] body) throws IOException {
-        FileOutputStream output = new FileOutputStream(file);
-        try {
-            output.write(body);
-        } finally {
-            output.close();
         }
     }
 
@@ -2757,45 +2376,6 @@ final class HlsProxyServer implements Closeable {
                 nextScale = (lastScale + reader.readSignedExpGolomb() + 256) % 256;
             }
             lastScale = nextScale == 0 ? lastScale : nextScale;
-        }
-    }
-
-    private static final class DecodeStats {
-        int seen;
-        int decoded;
-        int changed;
-        int shortOutput;
-        int grewOutput;
-        int nullOutput;
-        int stateOnly;
-        final StringBuilder sample = new StringBuilder();
-        private int sampledNalCount;
-
-        void add(DecodeStats other) {
-            seen += other.seen;
-            decoded += other.decoded;
-            changed += other.changed;
-            shortOutput += other.shortOutput;
-            grewOutput += other.grewOutput;
-            nullOutput += other.nullOutput;
-            stateOnly += other.stateOnly;
-        }
-
-        void sampleNal(int nalType, int beforeLength, int afterLength, String status) {
-            if (sampledNalCount >= 48) {
-                return;
-            }
-            if (sample.length() > 0) {
-                sample.append(' ');
-            }
-            sample.append(nalType)
-                    .append(':')
-                    .append(beforeLength)
-                    .append("->")
-                    .append(afterLength)
-                    .append(':')
-                    .append(status);
-            sampledNalCount++;
         }
     }
 

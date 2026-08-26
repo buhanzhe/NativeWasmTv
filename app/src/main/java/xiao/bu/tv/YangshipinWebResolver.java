@@ -68,7 +68,7 @@ final class YangshipinWebResolver {
             ";(function(){try{"
                     + "if(!WebAssembly||WebAssembly.__ntvImportHooked)return;"
                     + "WebAssembly.__ntvImportHooked=true;"
-                    + "self.__ntvImportTrace=[];self.__ntvEmvalText={};self.__ntvImportEventCount=0;"
+                    + "self.__ntvImportTrace=[];self.__ntvEmvalText={};"
                     + "function mem(env){try{return env&&env.memory&&env.memory.buffer?new Uint8Array(env.memory.buffer):null;}catch(e){return null;}}"
                     + "function cstr(env,p){var m=mem(env);if(!m||!p)return '';var s='',i=p,n=Math.min(m.length,p+160);for(;i<n&&m[i];i++){s+=String.fromCharCode(m[i]);}return s;}"
                     + "function u32(env,p){var m=mem(env);if(!m||!p||p+3>=m.length)return 0;return (m[p]|(m[p+1]<<8)|(m[p+2]<<16)|(m[p+3]<<24))>>>0;}"
@@ -95,7 +95,6 @@ final class YangshipinWebResolver {
                     + "try{if(name==='B'&&result>4&&emvalDetail){self.__ntvEmvalText[result]=emvalDetail;}"
                     + "if(name==='D'&&result>4){var prop=(self.__ntvEmvalText||{})[args[1]]||'';if(prop){self.__ntvEmvalText[result]=loc(prop);}}"
                     + "if(name==='F'&&args[0]>4){delete self.__ntvEmvalText[args[0]];}}catch(ex2){}"
-                    + "try{if(self.__ntvImportEventCount<64){self.__ntvImportEventCount++;console.log('__NTV_CMG_IMPORT_EVENT__'+name+':'+args.join(',')+':'+detail+'->'+result);}}catch(exL){}"
                     + "if(self.__ntvImportTrace&&self.__ntvImportTrace.length<128){self.__ntvImportTrace.push(name+':'+args.join(',')+':'+traceDetail+'->'+result);}"
                     + "return result;};});}catch(e){}}"
                     + "var oldInstantiate=WebAssembly.instantiate;"
@@ -107,11 +106,6 @@ final class YangshipinWebResolver {
             ";(function(){try{"
                     + "if(!fG||!fG.moduleDecData||fG.__ntvTagHooked)return;"
                     + "fG.__ntvTagHooked=true;"
-                    + "function hexBytes(a,n){try{var out=[],m=Math.min(a&&a.length||0,n);for(var i=0;i<m;i++){var h=(a[i]&255).toString(16);out.push(h.length<2?'0'+h:h);}return out.join('');}catch(e){return '';}}"
-                    + "function hashBytes(a){try{var h=2166136261>>>0,m=a&&a.length||0;for(var i=0;i<m;i++){h^=(a[i]&255);h=Math.imul(h,16777619)>>>0;}return ('00000000'+h.toString(16)).slice(-8);}catch(e){return '00000000';}}"
-                    + "function firstDiff(a,b){try{var m=Math.min(a&&a.length||0,b&&b.length||0);for(var i=0;i<m;i++){if((a[i]&255)!==(b[i]&255))return i;}return (a&&a.length||0)===(b&&b.length||0)?-1:m;}catch(e){return -2;}}"
-                    + "function diffCount(a,b){try{var m=Math.min(a&&a.length||0,b&&b.length||0),d=Math.abs((a&&a.length||0)-(b&&b.length||0));for(var i=0;i<m;i++){if((a[i]&255)!==(b[i]&255))d++;}return d;}catch(e){return -1;}}"
-                    + "try{if(!self.__ntvXhrTsHooked&&self.XMLHttpRequest){self.__ntvXhrTsHooked=true;var xo=XMLHttpRequest.prototype.open;var xs=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(method,url){try{this.__ntvUrl=String(url||'');}catch(e){}return xo.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){try{var u=this.__ntvUrl||'';if(u.indexOf('.ts')>=0){self.__ntvLastTsUrl=u;}}catch(e){}return xs.apply(this,arguments);};}}catch(e){}"
                     + "if(fG.moduleActive){"
                     + "var originalModuleActive=fG.moduleActive;"
                     + "fG.__ntvUpdateCount=0;"
@@ -154,13 +148,10 @@ final class YangshipinWebResolver {
                     + "};"
                     + "}"
                     + "var originalModuleDecData=fG.moduleDecData;"
-                    + "fG.__ntvDecEventCount=0;"
                     + "fG.moduleDecData=function(module,mediaTagId,data){"
                     + "try{"
                     + "var nalType=data&&data.length?(data[0]&31):-1;"
                     + "var tag=self.vmpTag||'';"
-                    + "var before=new Uint8Array(data&&data.length?data:0);"
-                    + "var videoInfo='';try{var v=document.querySelector('video');if(v){videoInfo=[Math.round((v.currentTime||0)*1000),v.readyState||0,v.paused?1:0].join(',');}}catch(exV){}"
                     + "if(!fG.__ntvFirstVmpTag&&nalType===7&&tag){fG.__ntvFirstVmpTag=tag;}"
                     + "if(!fG.__ntvLoggedMediaTag&&(nalType===1||nalType===5)&&tag){"
                     + "fG.__ntvLoggedMediaTag=true;"
@@ -168,11 +159,6 @@ final class YangshipinWebResolver {
                     + "}"
                     + "}catch(e){}"
                     + "var result=originalModuleDecData.apply(this,arguments);"
-                    + "try{if((nalType===1||nalType===5||nalType===6||nalType===7||nalType===8||nalType===9)&&fG.__ntvDecEventCount<12000){"
-                    + "fG.__ntvDecEventCount++;"
-                    + "var after=result&&result.length!==undefined?result:data;"
-                    + "console.log('__NTV_CMG_DEC_EVENT__'+fG.__ntvDecEventCount+'|'+mediaTagId+'|'+nalType+'|'+(tag||'')+'|'+(self.vmpTag||'')+'|'+(before.length||0)+'|'+(after&&after.length||0)+'|'+firstDiff(before,after)+'|'+diffCount(before,after)+'|'+(self.__ntvLastTsUrl||'')+'|'+hexBytes(before,48)+'|'+hexBytes(after,48)+'|'+hashBytes(before)+'|'+hashBytes(after)+'|'+(fG.__ntvUpdateCount||0)+'|'+videoInfo);"
-                    + "}}catch(e2){}"
                     + "return result;"
                     + "};"
                     + "}catch(e){try{console.log('__NTV_CMG_HOOK_ERROR__'+e);}catch(x){}}"
@@ -254,9 +240,6 @@ final class YangshipinWebResolver {
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
                 if (consoleMessage != null) {
                     String message = consoleMessage.message();
-                    if (message != null && message.startsWith("__NTV_CMG_IMPORT_EVENT__")) {
-                        Log.i(TAG, message);
-                    }
                     if (maybeResolveApiAuth(message) || maybeResolveApiResult(message)) {
                         return true;
                     }
