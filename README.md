@@ -20,7 +20,8 @@
 ## 下载与安装
 
 - [GitHub Releases](https://github.com/buhanzhe/NativeWasmTv/releases)
-- [夸克网盘](https://pan.quark.cn/s/e4db1433c7bb?pwd=KDmk)，提取码：`KDmk`
+- [夸克网盘](https://pan.quark.cn/s/a0395f56abae)
+
 
 下载 APK 后直接安装即可。升级时建议直接覆盖安装，以保留频道和偏好设置。
 
