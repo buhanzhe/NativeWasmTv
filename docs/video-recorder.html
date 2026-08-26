@@ -95,6 +95,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/gh/daoquangphuong/fetchv@ccb34acb844d3145af36681d3221523ec3881501/libs/hls.1.1.2.branch.min.js"></script>
 <script src="https://cdn.jsdelivr.net/gh/daoquangphuong/fetchv@ccb34acb844d3145af36681d3221523ec3881501/libs/mux.m3u8.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <script>
 var params=new URLSearchParams(location.search),tvHost=(params.get('ip')||'').trim(),tvPort=(params.get('port')||'9966').trim();
 var baseUrl='',tvState=null,mediaUrl='',variants=[],recording=false,preparing=false,firstPlaylist=true,pollTimer=null,clockTimer=null,downloadChain=Promise.resolve();
@@ -107,7 +108,7 @@ function localFetch(url,options){options=options||{};options.cache='no-store';op
 function setConnection(text,state){var box=document.getElementById('connection');box.className='connection'+(state?' '+state:'');document.getElementById('connectionText').textContent=text}
 function showNotice(title,message){var box=document.getElementById('notice');box.innerHTML='<b></b><span></span>';box.querySelector('b').textContent=title;box.querySelector('span').textContent=message;box.className='notice show'}
 function clearNotice(){document.getElementById('notice').className='notice'}
-function setStatus(text,active){var bar=document.getElementById('progress');bar.textContent=text;bar.className='progress'+(active?' indeterminate':'');if(!active)bar.style.width=segments.length?'100%':'0'}
+function setStatus(text,active){var bar=document.getElementById('progress');bar.textContent=text;bar.className='progress'+(active?' indeterminate':'');bar.style.width=active?'100%':(segments.length?'100%':'0')}
 function formatBytes(value){if(value<1024)return value+' B';if(value<1048576)return(value/1024).toFixed(0)+' KB';if(value<1073741824)return(value/1048576).toFixed(2)+' MB';return(value/1073741824).toFixed(2)+' GB'}
 function formatTime(seconds){seconds=Math.max(0,Math.floor(seconds||0));var h=Math.floor(seconds/3600),m=Math.floor(seconds%3600/60),s=seconds%60;return[h,m,s].map(function(v){return String(v).padStart(2,'0')}).join(':')}
 function safeFilename(value){return String(value||'NTV-Live').replace(/[\\/:*?"<>|]/g,'-').replace(/^\s+|\s+$/g,'').slice(0,80)||'NTV-Live'}
@@ -155,7 +156,27 @@ function updateStats(){var now=Date.now(),elapsed=recordingStartedAt?(now-record
 async function stopRecording(autoStopped){if(!recording&&!preparing)return;recording=false;preparing=true;clearTimeout(pollTimer);clearInterval(clockTimer);recordButton.classList.remove('recording');recordButton.disabled=true;setStatus('正在完成分片…',true);try{await downloadChain;if(!segments.length)throw new Error('尚未录制到完整分片');await prepareDownload();setStatus(autoStopped?'已自动停止，可保存':'录制完成，可保存',false);downloadButton.disabled=false}catch(error){showNotice('MP4 合并失败',error.message);setStatus('MP4 合并失败',false)}finally{preparing=false;recordButton.disabled=false;recordButton.setAttribute('aria-label','开始新录制');quality.disabled=variants.length===0;updateStats()}}
 function createTsDownload(){var blob=new Blob(segments.map(function(item){return item.blob}),{type:'video/mp2t'});downloadUrl=URL.createObjectURL(blob);downloadExtension='ts'}
 async function prepareDownload(){if(downloadUrl){URL.revokeObjectURL(downloadUrl);downloadUrl=''}downloadUrl=await transmuxToMp4();downloadExtension='mp4'}
-function transmuxToMp4(){return new Promise(function(resolve,reject){if(typeof Manifest!=='function')return reject(new Error('mux.m3u8.min.js 未加载'));var maxDuration=4,previousCc=null,lines=['#EXTM3U','#EXT-X-VERSION:3','#EXT-X-MEDIA-SEQUENCE:0'];for(var i=0;i<segments.length;i++)maxDuration=Math.max(maxDuration,Math.ceil(segments[i].duration||4));lines.push('#EXT-X-TARGETDURATION:'+maxDuration);for(var j=0;j<segments.length;j++){var item=segments[j];if(previousCc!==null&&item.discontinuity!==previousCc)lines.push('#EXT-X-DISCONTINUITY');previousCc=item.discontinuity;var url=URL.createObjectURL(item.blob);muxObjectUrls.push(url);lines.push('#EXTINF:'+(item.duration||4).toFixed(3)+',');lines.push(url)}lines.push('#EXT-X-ENDLIST');var playlistUrl=URL.createObjectURL(new Blob([lines.join('\n')],{type:'application/vnd.apple.mpegurl'}));muxObjectUrls.push(playlistUrl),finished=false;function complete(url){if(finished)return;finished=true;resolve(url)}function fail(message){if(finished)return;finished=true;reject(new Error(String(message&&message.message||message||'未知错误')))}var ui={_parent:null,options:{autosave:false},loadingDivide:function(){setStatus('正在生成 MP4…',true)},loadingIndex:function(){setStatus('正在解析录制内容…',true)},loadIndexError:fail,loadIndexSuccess:function(){},error:fail,cancel:fail,pause:function(){},completed:function(url,name,part,more){if(!more)complete(url)},start:function(){setStatus('正在转换 MP4…',true)},savePart:function(){},setProgress:function(bytes,cached,total){document.getElementById('substats').textContent='MP4 合并 '+cached+'/'+total},setSpeed:function(){},setThreads:function(){},setErrorRequest:function(){},setPreview:function(){},createThreadsControls:function(){},setTimeSpent:function(){}};try{var manifest=new Manifest({filename:safeFilename(document.getElementById('filename').textContent),headers:{},url:playlistUrl,method:'GET'},ui);ui._parent=manifest;manifest.threadsLimit=2;manifest.loadMaster();setTimeout(function(){if(!finished)fail('MP4 转换超时')},120000)}catch(error){fail(error)}})}
+async function transmuxToMp4(){
+  if(!window.muxjs||!muxjs.mp4||typeof muxjs.mp4.Transmuxer!=='function')throw new Error('mux.js 未加载');
+  setStatus('正在转换 MP4…',true);
+  var parts=[],initWritten=false,mediaBytes=0,muxError=null;
+  var transmuxer=new muxjs.mp4.Transmuxer({keepOriginalTimestamps:false,remux:true});
+  transmuxer.on('data',function(output){
+    if(!initWritten&&output.initSegment&&output.initSegment.byteLength){parts.push(output.initSegment);initWritten=true}
+    if(output.data&&output.data.byteLength){parts.push(output.data);mediaBytes+=output.data.byteLength}
+  });
+  transmuxer.on('error',function(error){muxError=error||new Error('音视频转换失败')});
+  for(var i=0;i<segments.length;i++){
+    var buffer=await segments[i].blob.arrayBuffer();
+    transmuxer.push(new Uint8Array(buffer));
+    document.getElementById('substats').textContent='MP4 合并 '+(i+1)+'/'+segments.length;
+    if(i%4===3)await new Promise(function(resolve){setTimeout(resolve,0)});
+  }
+  transmuxer.flush();
+  if(muxError)throw muxError;
+  if(!initWritten||!mediaBytes)throw new Error('视频轨道不完整，无法生成 MP4');
+  return URL.createObjectURL(new Blob(parts,{type:'video/mp4'}));
+}
 async function downloadRecording(){if(recording)await stopRecording(false);if(!downloadUrl){if(!segments.length){showNotice('没有可保存内容','请先开始录制并等待至少一个完整分片。');return}await prepareDownload()}var link=document.createElement('a');link.href=downloadUrl;link.download=safeFilename(document.getElementById('filename').textContent)+'.mp4';document.body.appendChild(link);link.click();link.remove()}
 window.addEventListener('beforeunload',function(event){if(recording){event.preventDefault();event.returnValue='录制仍在进行，离开页面会丢失未保存内容。'}if(downloadUrl)URL.revokeObjectURL(downloadUrl)});
 connect();
