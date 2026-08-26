@@ -49,7 +49,7 @@
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div class="brand">NTV · VIDEO RECORDER</div><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">正在连接电视</span></div></div>
+  <div class="top"><div class="brand">NTV · 视频录制</div><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">正在连接电视</span></div></div>
   <section class="card">
     <div class="identity">
       <div class="file-icon"><span class="live-tag">LIVE</span></div>
@@ -139,7 +139,7 @@ async function connect(){
   baseUrl='http://'+tvHost+':'+(Number(tvPort)||9966);
   try{
     var response=await localFetch(baseUrl+'/api/state');if(!response.ok)throw new Error('HTTP '+response.status);tvState=await response.json();if(!tvState.ok)throw new Error(tvState.message||'电视状态不可用');
-    setConnection(tvHost+':'+tvPort,'online');clearNotice();var current=tvState.recording||{};document.getElementById('filename').textContent=defaultFilename(current.name||tvState.current&&tvState.current.name);
+    setConnection('电视在线','online');clearNotice();var current=tvState.recording||{};document.getElementById('filename').textContent=defaultFilename(current.name||tvState.current&&tvState.current.name);
     if(!current.available){throw new Error('当前频道还没有可录制的视频流')}
     await loadRecordingManifest();recordButton.disabled=false;setStatus('准备录制',false);document.getElementById('substats').textContent=(current.group||'')+(current.name?' · '+current.name:'');return true;
   }catch(error){setConnection('无法连接电视','bad');showNotice('录制服务不可用',error.message+'。若浏览器询问本地网络权限，请选择允许；旧版 Safari/Firefox 可能需要从 HTTP 本地页面打开。');setStatus('连接失败',false);recordButton.disabled=false;return false}
