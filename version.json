@@ -6,6 +6,6 @@
     "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
     "sha256": "3e8e913b7897b5cac056315c9ecd4cf618fe5ea096f59daff475bd704dfcf518",
     "sha25632": "3e8e913b7897b5cac056315c9ecd4cf618fe5ea096f59daff475bd704dfcf518",
-    "sha25664": "1f32c2f1289dba848e352da6054ea14b43b39f27acd23b720caccf88932b4068",
+    "sha25664": "c086cfba8b06f3ebd05433027fa447f8735e07d022940d94f7b79120e7d374fd",
     "releaseNotes": "\u65b0\u589e ARM64 \u5b89\u88c5\u5305\uff1b\u66f4\u65b0\u5668\u6309\u5df2\u5b89\u88c5\u5305\u67b6\u6784\u4e0b\u8f7d\u5bf9\u5e94\u7248\u672c\u3002"
 }
