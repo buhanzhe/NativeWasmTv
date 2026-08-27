@@ -112,11 +112,9 @@ task generateVersionFile {
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
-        File output = rootProject.file('version.json')
         File clientOutput = rootProject.file('version-iptv.json')
-        output.setText(manifestJson, 'UTF-8')
         clientOutput.setText(manifestJson, 'UTF-8')
-        logger.lifecycle("Generated ${output} and ${clientOutput}"
+        logger.lifecycle("Generated ${clientOutput}"
                 + (sha256 ? " (SHA-256: ${sha256})" : ''))
     }
 }

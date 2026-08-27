@@ -20,3 +20,5 @@ ysp-network*.txt
 /.playwright-mcp
 output/
 .playwright-cli/
+adb-*.png
+adb-*.xml

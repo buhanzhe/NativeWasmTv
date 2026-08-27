@@ -16,6 +16,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.URLDecoder;
 import java.util.Collections;
 import java.util.Enumeration;
 
@@ -25,12 +26,24 @@ final class LocalControlServer implements Closeable {
         String control(JSONObject request) throws Exception;
         String pointer(JSONObject request) throws Exception;
         String settings(JSONObject request) throws Exception;
+        String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
+        Resource recording(String token) throws Exception;
+    }
+
+    static final class Resource {
+        final String contentType;
+        final byte[] body;
+
+        Resource(String contentType, byte[] body) {
+            this.contentType = contentType;
+            this.body = body;
+        }
     }
 
     private static final String TAG = "LocalControlServer";
     static final int PREFERRED_PORT = 9966;
     static final int MAX_PORT = 9975;
-    private static final int MAX_REQUEST_BYTES = 64 * 1024;
+    private static final int MAX_REQUEST_BYTES = 2 * 1024 * 1024;
     private final byte[] indexHtml;
     private final Listener listener;
     private volatile boolean running;
@@ -151,7 +164,12 @@ final class LocalControlServer implements Closeable {
                 }
                 offset += count;
             }
-            route(socket, method, path, new String(body, 0, offset, "UTF-8"));
+            if (offset != body.length) {
+                byte[] partial = new byte[offset];
+                System.arraycopy(body, 0, partial, 0, offset);
+                body = partial;
+            }
+            route(socket, method, path, body);
         } catch (Exception error) {
             Log.w(TAG, "Management request failed", error);
             try {
@@ -167,7 +185,8 @@ final class LocalControlServer implements Closeable {
         }
     }
 
-    private void route(Socket socket, String method, String path, String body) throws Exception {
+    private void route(Socket socket, String method, String path, byte[] body) throws Exception {
+        String requestTarget = path;
         int query = path.indexOf('?');
         if (query >= 0) {
             path = path.substring(0, query);
@@ -179,17 +198,55 @@ final class LocalControlServer implements Closeable {
                     listener.stateJson().getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/control".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
-                    listener.control(new JSONObject(body)).getBytes("UTF-8"));
+                    listener.control(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/pointer".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
-                    listener.pointer(new JSONObject(body)).getBytes("UTF-8"));
+                    listener.pointer(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/settings".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
-                    listener.settings(new JSONObject(body)).getBytes("UTF-8"));
+                    listener.settings(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/playlist/upload".equals(path)) {
+            String sourceId = queryParameter(requestTarget, "id");
+            String fileName = queryParameter(requestTarget, "name");
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.uploadPlaylist(sourceId, fileName, body).getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/recording/playlist".equals(path)) {
+            Resource resource = listener.recording(null);
+            send(socket, 200, resource.contentType, resource.body);
+        } else if ("GET".equals(method)
+                && path.startsWith("/api/recording/resource/")) {
+            String token = path.substring("/api/recording/resource/".length());
+            Resource resource = listener.recording(token);
+            send(socket, 200, resource.contentType, resource.body);
         } else if ("OPTIONS".equals(method)) {
             send(socket, 204, "text/plain", new byte[0]);
         } else {
             send(socket, 404, "application/json; charset=utf-8", jsonError("接口不存在"));
+        }
+    }
+
+    private static String queryParameter(String requestTarget, String name) {
+        int marker = requestTarget.indexOf('?');
+        if (marker < 0 || marker + 1 >= requestTarget.length()) {
+            return "";
+        }
+        String[] parts = requestTarget.substring(marker + 1).split("&");
+        for (String part : parts) {
+            int equals = part.indexOf('=');
+            String key = equals < 0 ? part : part.substring(0, equals);
+            if (!name.equals(decodeQueryValue(key))) {
+                continue;
+            }
+            return decodeQueryValue(equals < 0 ? "" : part.substring(equals + 1));
+        }
+        return "";
+    }
+
+    private static String decodeQueryValue(String value) {
+        try {
+            return URLDecoder.decode(value, "UTF-8");
+        } catch (Exception ignored) {
+            return value;
         }
     }
 

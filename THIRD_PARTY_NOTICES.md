@@ -23,12 +23,3 @@ The Android app depends on
 through its published Android AAR artifacts.
 
 License: LGPL-2.1. See the upstream project for the complete notice.
-
-## ExoPlayer
-
-The Android app depends on
-[google/ExoPlayer](https://github.com/google/ExoPlayer) `2.12.3`
-through its published Android AAR artifacts. It is used by the optional
-explicit-CSD hardware-decoding test backend.
-
-License: Apache License 2.0. See the upstream project for the complete notice.

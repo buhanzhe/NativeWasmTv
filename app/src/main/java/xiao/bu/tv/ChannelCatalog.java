@@ -5,6 +5,7 @@ final class ChannelCatalog {
     static final int SOURCE_YSP_CCTV = 1;
     static final int SOURCE_YSP_SATELLITE = 2;
     static final int SOURCE_CUSTOM = 3;
+    static final int SOURCE_FAVORITES = 4;
 
     private static final String STREAM_BASE =
             "https://ldocctvwbcdbyte.volcfcdn.com/ldocctvwbcd/";
@@ -109,31 +110,43 @@ final class ChannelCatalog {
             yangshipinChannel("33", "新疆卫视", "600152138", "2019927403")
     };
 
-    private static final Group[] BUILT_IN_GROUPS = new Group[] {
-            new Group("央视网 · 央视频道", SOURCE_CCTV_WEB, CCTV_CHANNELS),
-            new Group("央视频 · 央视频道", SOURCE_YSP_CCTV, YANGSHIPIN_CCTV_CHANNELS),
-            new Group("央视频 · 卫视频道", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
-    };
-
-    static volatile Group[] GROUPS = BUILT_IN_GROUPS;
+    private static Group[] customGroups = new Group[0];
+    private static Channel[] favoriteChannels = new Channel[0];
+    static volatile Group[] GROUPS = buildGroups();
 
     private ChannelCatalog() {
     }
 
     static synchronized void setCustomGroups(Group[] customGroups) {
-        if (customGroups == null || customGroups.length == 0) {
-            GROUPS = BUILT_IN_GROUPS;
-            return;
-        }
-        Group[] groups = new Group[BUILT_IN_GROUPS.length + customGroups.length];
-        System.arraycopy(BUILT_IN_GROUPS, 0, groups, 0, BUILT_IN_GROUPS.length);
-        System.arraycopy(customGroups, 0, groups, BUILT_IN_GROUPS.length, customGroups.length);
-        GROUPS = groups;
+        ChannelCatalog.customGroups = customGroups == null
+                ? new Group[0] : customGroups;
+        GROUPS = buildGroups();
+    }
+
+    static synchronized void setFavoriteChannels(Channel[] channels) {
+        favoriteChannels = channels == null ? new Channel[0] : channels;
+        GROUPS = buildGroups();
+    }
+
+    private static Group[] buildGroups() {
+        Group[] groups = new Group[1 + customGroups.length];
+        groups[0] = new Group("我的收藏", SOURCE_FAVORITES, favoriteChannels);
+        System.arraycopy(customGroups, 0, groups, 1, customGroups.length);
+        return groups;
     }
 
     static int wrapGroupIndex(int index) {
         int size = GROUPS.length;
         return (index % size + size) % size;
+    }
+
+    static int firstPlayableGroupIndex() {
+        for (int index = 0; index < GROUPS.length; index++) {
+            if (GROUPS[index].channels.length > 0) {
+                return index;
+            }
+        }
+        return 0;
     }
 
     static int wrapIndex(int index) {
@@ -142,6 +155,9 @@ final class ChannelCatalog {
 
     static int wrapIndex(Channel[] channels, int index) {
         int size = channels.length;
+        if (size == 0) {
+            return 0;
+        }
         return (index % size + size) % size;
     }
 
@@ -159,7 +175,17 @@ final class ChannelCatalog {
     }
 
     static int defaultChannelIndex(Group group) {
+        if (group.channels.length == 0 || group.source == SOURCE_FAVORITES) {
+            return 0;
+        }
         if (group.source == SOURCE_CUSTOM) {
+            if ("央视频道".equals(group.title)) {
+                for (int index = 0; index < group.channels.length; index++) {
+                    if (group.channels[index].name.startsWith("CCTV-13")) {
+                        return index;
+                    }
+                }
+            }
             return 0;
         }
         if (group.source == SOURCE_YSP_SATELLITE) {
@@ -178,6 +204,43 @@ final class ChannelCatalog {
             }
         }
         return 0;
+    }
+
+    static Channel findYangshipinChannelByPid(String pid) {
+        Channel channel = findByPid(YANGSHIPIN_CCTV_CHANNELS, pid);
+        return channel != null ? channel : findByPid(SATELLITE_CHANNELS, pid);
+    }
+
+    private static Channel findByPid(Channel[] channels, String pid) {
+        if (pid == null || pid.length() == 0) {
+            return null;
+        }
+        for (Channel channel : channels) {
+            if (pid.equals(channel.yangshipinPid)) {
+                return channel;
+            }
+        }
+        return null;
+    }
+
+    static Channel findCctvChannelByWebSlug(String slug) {
+        if (slug == null) {
+            return null;
+        }
+        String normalized = slug.toLowerCase(java.util.Locale.US);
+        if ("cctv9".equals(normalized)) {
+            normalized = "cctvjilu";
+        } else if ("cctv14".equals(normalized)) {
+            normalized = "cctvchild";
+        } else if ("cctv5p".equals(normalized) || "cctv5+".equals(normalized)) {
+            normalized = "cctv5plus";
+        }
+        for (Channel channel : CCTV_CHANNELS) {
+            if (normalized.equals(channel.streamId)) {
+                return channel;
+            }
+        }
+        return null;
     }
 
     static String preferHighBitrate(String url) {

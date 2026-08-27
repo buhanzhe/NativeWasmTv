@@ -31,9 +31,8 @@ import java.util.zip.ZipFile;
 /** Checks the repository manifest, downloads a newer APK, and opens the system installer. */
 final class AutoUpdater {
     private static final String TAG = "AutoUpdater";
-    private static final String GH_PROXY = "https://gh-proxy.com/";
-    private static final String VERSION_URL = GH_PROXY
-            + "https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json";
+    private static final String VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
+            + "raw/refs/heads/master/version-iptv.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;
@@ -87,8 +86,9 @@ final class AutoUpdater {
     }
 
     private UpdateInfo loadUpdateInfo() throws IOException, JSONException {
-        // The query avoids a stale CDN manifest while the request itself still uses gh-proxy.
-        HttpURLConnection connection = openConnection(VERSION_URL
+        // The query avoids a stale proxy cache. API 14/15 use the HTTP accelerator because
+        // their platform TLS stack cannot connect to gh-proxy.com.
+        HttpURLConnection connection = openConnection(GithubProxy.apply(VERSION_URL)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Cache-Control", "no-cache");
@@ -356,18 +356,16 @@ final class AutoUpdater {
     }
 
     private static String proxiedGithubUrl(String url) throws JSONException {
-        if (url.startsWith(GH_PROXY)) {
-            return url;
-        }
         try {
-            URL parsed = new URL(url);
+            String githubUrl = GithubProxy.unwrap(url);
+            URL parsed = new URL(githubUrl);
             String host = parsed.getHost().toLowerCase(Locale.US);
             if (!"https".equalsIgnoreCase(parsed.getProtocol())
                     || !("github.com".equals(host)
                     || "raw.githubusercontent.com".equals(host))) {
                 throw new JSONException("APK URL must be an HTTPS GitHub URL");
             }
-            return GH_PROXY + url;
+            return GithubProxy.apply(githubUrl);
         } catch (IOException error) {
             throw new JSONException("Invalid APK URL");
         }

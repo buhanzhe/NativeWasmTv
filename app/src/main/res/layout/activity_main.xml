@@ -4,6 +4,7 @@
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#FF000000"
     android:focusable="true"
     android:focusableInTouchMode="true">
 
@@ -18,6 +19,22 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone" />
+
+    <View
+        android:id="@+id/channel_switch_blackout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:visibility="gone" />
+
+    <ImageView
+        android:id="@+id/channel_swipe_snapshot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        tools:ignore="ContentDescription" />
 
     <TextView
         android:id="@+id/video_clock"
@@ -34,7 +51,8 @@
         android:shadowDy="2"
         android:shadowRadius="4"
         android:textColor="#FFFFFFFF"
-        android:textSize="20sp"
+        android:text="2026年08月26日 12:35:28 星期三"
+        android:textSize="18sp"
         android:textStyle="bold"
         android:visibility="gone"
         tools:ignore="HardcodedText,RtlHardcoded" />
@@ -123,206 +141,192 @@
         tools:ignore="RtlHardcoded" />
 
     <LinearLayout
-        android:id="@+id/loading_panel"
-        android:layout_width="380dp"
+        android:id="@+id/channel_bar"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:background="@drawable/loading_panel_background"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="18dp"
+        android:background="@drawable/player_info_background"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingLeft="24dp"
-        android:paddingTop="20dp"
-        android:paddingRight="24dp"
-        android:paddingBottom="20dp"
+        android:paddingLeft="16dp"
+        android:paddingTop="11dp"
+        android:paddingRight="16dp"
+        android:paddingBottom="14dp"
         android:visibility="gone">
 
         <ProgressBar
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:indeterminate="true" />
+            android:id="@+id/channel_progress"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginRight="10dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="18dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/loading_channel"
+                android:id="@+id/channel_name"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="@color/text_primary"
-                android:textSize="20sp"
+                android:textColor="#FFFFFFFF"
+                android:textSize="18sp"
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/loading_status"
+                android:id="@+id/status_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#B8FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/channel_source_path"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:ellipsize="middle"
+                android:maxLines="1"
+                android:textColor="#9FFFFFFF"
+                android:textSize="10sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/channel_epg"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textColor="@color/text_secondary"
-                android:textSize="14sp" />
+                android:textColor="#E0FFFFFF"
+                android:textSize="12sp"
+                android:visibility="gone" />
         </LinearLayout>
-    </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/channel_bar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="@drawable/player_info_background"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingLeft="24dp"
-        android:paddingTop="18dp"
-        android:paddingRight="24dp"
-        android:paddingBottom="18dp"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/channel_name"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="@color/text_primary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/status_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginLeft="20dp"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp" />
+        <View
+            android:layout_width="1dp"
+            android:layout_height="38dp"
+            android:layout_marginLeft="14dp"
+            android:layout_marginRight="14dp"
+            android:background="#24FFFFFF" />
 
         <TextView
             android:id="@+id/video_info"
-            android:layout_width="wrap_content"
+            android:layout_width="250dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="16dp"
-            android:background="@drawable/video_info_background"
-            android:paddingLeft="12dp"
-            android:paddingTop="6dp"
-            android:paddingRight="12dp"
-            android:paddingBottom="6dp"
-            android:text="源: --  fps: --"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp"
+            android:ellipsize="end"
+            android:gravity="right|center_vertical"
+            android:maxLines="2"
+            android:text="-- × -- · -- fps · --&#10;IJK 硬解"
+            android:textColor="#C8FFFFFF"
+            android:textSize="11sp"
+            android:lineSpacingExtra="2dp"
             tools:ignore="HardcodedText,RtlHardcoded" />
     </LinearLayout>
 
     <LinearLayout
         android:id="@+id/channel_list_panel"
-        android:layout_width="600dp"
+        android:layout_width="1000dp"
         android:layout_height="match_parent"
         android:background="@drawable/channel_panel_background"
         android:orientation="vertical"
-        android:paddingLeft="20dp"
-        android:paddingTop="22dp"
-        android:paddingRight="20dp"
-        android:paddingBottom="14dp"
+        android:paddingLeft="14dp"
+        android:paddingTop="10dp"
+        android:paddingRight="14dp"
+        android:paddingBottom="10dp"
         android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="网页电视  ·  LIVE"
-                android:textAllCaps="true"
-                android:textColor="@color/accent"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                tools:ignore="HardcodedText,NewApi" />
-
-            <TextView
-                android:id="@+id/channel_list_clock"
-                android:layout_width="96dp"
-                android:layout_height="28dp"
-                android:fontFamily="monospace"
-                android:gravity="right|center_vertical"
-                android:includeFontPadding="false"
-                android:textColor="@color/text_secondary"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                tools:ignore="RtlHardcoded" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/channel_list_title"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="14dp"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:text="频道导航"
-            android:textColor="@color/text_primary"
-            android:textSize="24sp"
-            android:textStyle="bold"
-            tools:ignore="HardcodedText" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/divider" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginTop="10dp"
             android:layout_weight="1"
             android:orientation="horizontal">
 
             <ListView
                 android:id="@+id/channel_group_list"
-                android:layout_width="200dp"
+                android:layout_width="wrap_content"
                 android:layout_height="match_parent"
                 android:choiceMode="singleChoice"
                 android:clipToPadding="false"
                 android:divider="@android:color/transparent"
-                android:dividerHeight="4dp"
+                android:dividerHeight="5dp"
                 android:focusableInTouchMode="true"
-                android:listSelector="@drawable/channel_item_background"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp" />
+                android:listSelector="@drawable/channel_group_item_background"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
 
             <View
                 android:layout_width="1dp"
                 android:layout_height="match_parent"
-                android:layout_marginLeft="10dp"
-                android:layout_marginRight="10dp"
+                android:layout_marginLeft="8dp"
+                android:layout_marginRight="8dp"
                 android:background="@color/divider" />
 
             <ListView
                 android:id="@+id/channel_list"
-                android:layout_width="0dp"
+                android:layout_width="wrap_content"
                 android:layout_height="match_parent"
-                android:layout_weight="1"
                 android:choiceMode="singleChoice"
                 android:clipToPadding="false"
                 android:divider="@android:color/transparent"
-                android:dividerHeight="4dp"
+                android:dividerHeight="3dp"
                 android:focusableInTouchMode="true"
                 android:listSelector="@drawable/channel_item_background"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp" />
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:layout_marginLeft="8dp"
+                android:layout_marginRight="8dp"
+                android:background="@color/divider" />
+
+            <LinearLayout
+                android:id="@+id/epg_column"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/epg_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:paddingLeft="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingRight="8dp"
+                    android:paddingBottom="8dp"
+                    android:text="正在加载节目单"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    tools:ignore="HardcodedText" />
+
+                <ListView
+                    android:id="@+id/epg_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:choiceMode="singleChoice"
+                    android:clipToPadding="false"
+                    android:divider="@android:color/transparent"
+                    android:dividerHeight="4dp"
+                    android:focusableInTouchMode="true"
+                    android:listSelector="@drawable/channel_item_background"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="4dp" />
+            </LinearLayout>
 
         </LinearLayout>
 
@@ -331,7 +335,7 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:paddingTop="9dp"
-            android:text="方向键浏览  ·  确认播放  ·  返回关闭"
+            android:text="节目组  →  频道  →  收藏  →  当前频道节目单"
             android:textColor="@color/text_muted"
             android:textSize="12sp"
             tools:ignore="HardcodedText" />
@@ -415,6 +419,7 @@
         android:visibility="gone">
 
         <TextView
+            android:id="@+id/back_prompt_text"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:lineSpacingExtra="3dp"

@@ -170,6 +170,13 @@ final class HlsProxyServer implements Closeable {
             };
     private final Map<String, String> cctvNextSegments =
             new LinkedHashMap<String, String>();
+    private final Map<String, Boolean> recordingTokens =
+            new LinkedHashMap<String, Boolean>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > 2048;
+                }
+            };
     private String lastCctvRequestedUrl;
     private String lastCctvPlaylistUrl;
     private volatile String monitoredCctvPlaylistUrl;
@@ -241,7 +248,39 @@ final class HlsProxyServer implements Closeable {
     String proxyUrl(String originUrl) {
         String token = Base64.encodeToString(originUrl.getBytes(UTF_8),
                 Base64.NO_WRAP | Base64.URL_SAFE);
+        synchronized (recordingTokens) {
+            recordingTokens.put(token, Boolean.TRUE);
+        }
         return "http://127.0.0.1:" + serverSocket.getLocalPort() + "/proxy/" + token;
+    }
+
+    ProxyResponse fetchForRecording(String originUrl, String token, String publicPrefix)
+            throws IOException {
+        String requestedUrl = originUrl;
+        if (token != null) {
+            synchronized (recordingTokens) {
+                if (!recordingTokens.containsKey(token)) {
+                    throw new IOException("录制资源令牌无效或已过期");
+                }
+            }
+            try {
+                requestedUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
+            } catch (IllegalArgumentException error) {
+                throw new IOException("录制资源令牌格式错误");
+            }
+        }
+        if (requestedUrl == null || requestedUrl.length() == 0) {
+            throw new IOException("当前频道还没有可录制的视频地址");
+        }
+        ProxyResponse response = fetch(requestedUrl);
+        if (!isPlaylist(requestedUrl, response.contentType)) {
+            return response;
+        }
+        String internalPrefix = "http://127.0.0.1:" + serverSocket.getLocalPort()
+                + "/proxy/";
+        String playlist = new String(response.body, UTF_8)
+                .replace(internalPrefix, publicPrefix);
+        return new ProxyResponse(response.contentType, playlist.getBytes(UTF_8));
     }
 
     static void configureCmgUpdateTags(int initialUpdateTag, int stableUpdateTag) {
@@ -2116,6 +2155,9 @@ final class HlsProxyServer implements Closeable {
         synchronized (cctvStartupLock) {
             cctvStartupReady.clear();
         }
+        synchronized (recordingTokens) {
+            recordingTokens.clear();
+        }
         List<FutureTask<byte[]>> pendingCmgTasks;
         synchronized (cmgSegmentTasks) {
             pendingCmgTasks = new ArrayList<FutureTask<byte[]>>(cmgSegmentTasks.values());
@@ -2555,7 +2597,7 @@ final class HlsProxyServer implements Closeable {
         int length;
     }
 
-    private static final class ProxyResponse {
+    static final class ProxyResponse {
         final String contentType;
         final byte[] body;
 

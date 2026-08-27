@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/channel_item_background"
+    android:gravity="center_vertical"
+    android:minHeight="52dp"
+    android:orientation="vertical"
+    android:paddingLeft="12dp"
+    android:paddingTop="7dp"
+    android:paddingRight="12dp"
+    android:paddingBottom="7dp">
+
+    <TextView
+        android:id="@+id/epg_program_time"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/text_muted"
+        android:textSize="11sp" />
+
+    <TextView
+        android:id="@+id/epg_program_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:textColor="@color/text_primary"
+        android:textSize="14sp" />
+</LinearLayout>
