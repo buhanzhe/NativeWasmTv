@@ -32,7 +32,7 @@ import java.util.zip.ZipFile;
 final class AutoUpdater {
     private static final String TAG = "AutoUpdater";
     private static final String VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
-            + "raw/refs/heads/master/version-iptv.json";
+            + "releases/latest/download/version.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;
@@ -61,6 +61,8 @@ final class AutoUpdater {
                     if (update.versionCode <= BuildConfig.VERSION_CODE || destroyed) {
                         return;
                     }
+                    Log.i(TAG, "Update available: " + update.versionName + ", asset="
+                            + BuildConfig.UPDATE_APK_ASSET);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -86,8 +88,7 @@ final class AutoUpdater {
     }
 
     private UpdateInfo loadUpdateInfo() throws IOException, JSONException {
-        // The query avoids a stale proxy cache. API 14/15 use the HTTP accelerator because
-        // their platform TLS stack cannot connect to gh-proxy.com.
+        // API 14/15 use the HTTP accelerator because their TLS stack cannot reach gh-proxy.com.
         HttpURLConnection connection = openConnection(GithubProxy.apply(VERSION_URL)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
@@ -108,12 +109,20 @@ final class AutoUpdater {
         JSONObject object = new JSONObject(json);
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
-        String apkUrl = proxiedGithubUrl(object.getString("apkUrl").trim());
-        String sha256 = object.optString("sha256", "").trim().toLowerCase(Locale.US);
+        String apkUrl = object.optString(BuildConfig.UPDATE_APK_URL_FIELD, "").trim();
+        String sha256 = object.optString(BuildConfig.UPDATE_SHA256_FIELD, "")
+                .trim().toLowerCase(Locale.US);
         String releaseNotes = object.optString("releaseNotes", "").trim();
         if (versionCode < 1 || versionName.length() == 0) {
             throw new JSONException("Invalid version metadata");
         }
+        if (apkUrl.length() == 0) {
+            throw new JSONException("Missing APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+        }
+        if (!apkUrl.endsWith("/" + BuildConfig.UPDATE_APK_ASSET)) {
+            throw new JSONException("Wrong APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+        }
+        apkUrl = proxiedGithubUrl(apkUrl);
         if (sha256.length() > 0 && !sha256.matches("[0-9a-f]{64}")) {
             throw new JSONException("Invalid APK SHA-256");
         }
@@ -172,7 +181,8 @@ final class AutoUpdater {
                     if (directory == null || (!directory.isDirectory() && !directory.mkdirs())) {
                         throw new IOException("无法创建更新目录");
                     }
-                    File apk = new File(directory, "nTv-" + update.versionCode + ".apk");
+                    File apk = new File(directory, BuildConfig.UPDATE_APK_ASSET
+                            .replace(".apk", "-" + update.versionCode + ".apk"));
                     if (apk.isFile() && verifySha256(apk, update.sha256) && isApk(apk)) {
                         finishDownload(apk);
                         return;
@@ -357,15 +367,14 @@ final class AutoUpdater {
 
     private static String proxiedGithubUrl(String url) throws JSONException {
         try {
-            String githubUrl = GithubProxy.unwrap(url);
-            URL parsed = new URL(githubUrl);
+            URL parsed = new URL(url);
             String host = parsed.getHost().toLowerCase(Locale.US);
             if (!"https".equalsIgnoreCase(parsed.getProtocol())
                     || !("github.com".equals(host)
                     || "raw.githubusercontent.com".equals(host))) {
                 throw new JSONException("APK URL must be an HTTPS GitHub URL");
             }
-            return GithubProxy.apply(githubUrl);
+            return GithubProxy.apply(url);
         } catch (IOException error) {
             throw new JSONException("Invalid APK URL");
         }

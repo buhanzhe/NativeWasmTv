@@ -2001,9 +2001,6 @@ public final class MainActivity extends Activity {
 
     private boolean switchCustomSource(int offset, boolean automatic, String reason) {
         cancelPendingRelativeSwitch();
-        if (currentCatalogSource() != ChannelCatalog.SOURCE_CUSTOM) {
-            return false;
-        }
         Channel channel = currentChannel();
         int count = channel.sourceCount();
         if (count <= 1) {
@@ -3587,6 +3584,9 @@ public final class MainActivity extends Activity {
         backPrompt.setVisibility(View.GONE);
         closeManagementPanel();
         channelListPanel.setVisibility(View.VISIBLE);
+        // WebSourceView raises itself while a page is active. Raise the channel menu again
+        // so the remote OK key remains usable on both video and WebView channels.
+        channelListPanel.bringToFront();
         updateChannelPanelWidth();
         ensureFlyMouseOnTop();
         showChannelMenu(currentGroupIndex);
@@ -4889,6 +4889,7 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean isHandledRemoteKey(int keyCode) {
+        keyCode = normalizeRemoteKeyCode(keyCode);
         if (digitForKeyCode(keyCode) >= 0) {
             return true;
         }
@@ -4905,6 +4906,26 @@ public final class MainActivity extends Activity {
                 return true;
             default:
                 return false;
+        }
+    }
+
+    /**
+     * Android TV vendors do not consistently report the physical OK and source-navigation
+     * buttons. Normalizing the common alternatives here keeps the rest of the input state
+     * machine identical for DPAD remotes, USB controllers and older television firmware.
+     */
+    private static int normalizeRemoteKeyCode(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_BUTTON_SELECT:
+                return KeyEvent.KEYCODE_DPAD_CENTER;
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+                return KeyEvent.KEYCODE_DPAD_LEFT;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                return KeyEvent.KEYCODE_DPAD_RIGHT;
+            default:
+                return keyCode;
         }
     }
 
@@ -5299,8 +5320,7 @@ public final class MainActivity extends Activity {
         if (channelSwitchAnimating) {
             return;
         }
-        if (currentCatalogSource() != ChannelCatalog.SOURCE_CUSTOM
-                || currentChannel().sourceCount() <= 1) {
+        if (currentChannel().sourceCount() <= 1) {
             animateGestureRebound();
             showChannelBar(currentChannel().name, "当前频道没有可切换的备用源");
             return;
@@ -5393,7 +5413,11 @@ public final class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        int keyCode = event.getKeyCode();
+        int rawKeyCode = event.getKeyCode();
+        int keyCode = normalizeRemoteKeyCode(rawKeyCode);
+        if (event.getAction() == KeyEvent.ACTION_DOWN && rawKeyCode != keyCode) {
+            Log.d(TAG, "Normalized remote key " + rawKeyCode + " to " + keyCode);
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN && isHandledRemoteKey(keyCode)) {
             setRemoteInputMode(true);
         }

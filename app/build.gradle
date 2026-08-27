@@ -12,6 +12,8 @@ if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
             + '.signing/keystore-info.properties are required for release signing.')
 }
 def releaseSigningProperties = new Properties()
+def configuredVersionCode = project.hasProperty('versionCodeOverride')
+        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 5
 if (releaseSigningAvailable) {
     releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
     ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
@@ -43,11 +45,28 @@ android {
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion 25
-        versionCode 5
+        versionCode configuredVersionCode
         versionName '1.5.0'
+    }
 
-        ndk {
-            abiFilters 'armeabi-v7a'
+    flavorDimensions 'architecture'
+    productFlavors {
+        arm32 {
+            dimension 'architecture'
+            minSdkVersion 14
+            ndk { abiFilters 'armeabi-v7a' }
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk32Url"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25632"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv.apk"'
+        }
+        arm64 {
+            dimension 'architecture'
+            // Android supports 64-bit native processes from API 21 onward.
+            minSdkVersion 21
+            ndk { abiFilters 'arm64-v8a' }
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk64Url"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25664"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv64.apk"'
         }
     }
 
@@ -76,7 +95,8 @@ android {
 
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
-    implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
+    arm32Implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
+    arm64Implementation 'tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8'
 }
 
 task generateVersionFile {
@@ -84,10 +104,11 @@ task generateVersionFile {
     description = 'Generate the GitHub update manifest at the repository root.'
 
     doLast {
-        File apkFile = project.hasProperty('updateApk')
-                ? rootProject.file(project.property('updateApk')) : null
-        String sha256 = ''
-        if (apkFile != null) {
+        Closure<String> fileSha256 = { String propertyName ->
+            if (!project.hasProperty(propertyName)) {
+                return ''
+            }
+            File apkFile = rootProject.file(project.property(propertyName))
             if (!apkFile.isFile()) {
                 throw new GradleException("Update APK does not exist: ${apkFile}")
             }
@@ -99,22 +120,33 @@ task generateVersionFile {
                     digest.update(buffer, 0, count)
                 }
             }
-            sha256 = digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+            return digest.digest().collect { String.format('%02x', it & 0xff) }.join()
         }
+        String sha25632 = fileSha256('updateApk32')
+        String sha25664 = fileSha256('updateApk64')
+        if (!sha25632 || !sha25664) {
+            throw new GradleException('Both -PupdateApk32 and -PupdateApk64 are required')
+        }
+        String releaseBase = 'https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/'
 
         def manifest = [
                 versionCode : android.defaultConfig.versionCode,
                 versionName : android.defaultConfig.versionName,
-                apkUrl      : "https://github.com/buhanzhe/NativeWasmTv/releases/download/"
-                        + "v${android.defaultConfig.versionName}/nTv.apk"
-                        + "?versionCode=${android.defaultConfig.versionCode}&signer=iptv-v1",
-                sha256      : sha256,
+                // apkUrl/sha256 keep every released 32-bit updater backward compatible.
+                apkUrl      : releaseBase + 'nTv.apk',
+                apk32Url    : releaseBase + 'nTv.apk',
+                apk64Url    : releaseBase + 'nTv64.apk',
+                sha256      : sha25632,
+                sha25632    : sha25632,
+                sha25664    : sha25664,
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
-        File clientOutput = rootProject.file('version-iptv.json')
-        clientOutput.setText(manifestJson, 'UTF-8')
-        logger.lifecycle("Generated ${clientOutput}"
-                + (sha256 ? " (SHA-256: ${sha256})" : ''))
+        File output = rootProject.file('version.json')
+        File legacyOutput = rootProject.file('version-iptv.json')
+        output.setText(manifestJson, 'UTF-8')
+        legacyOutput.setText(manifestJson, 'UTF-8')
+        logger.lifecycle("Generated ${output} and ${legacyOutput} (arm32=${sha25632 ?: 'unset'}, "
+                + "arm64=${sha25664 ?: 'unset'})")
     }
 }

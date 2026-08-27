@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$NdkRoot
+    [string]$NdkRoot,
+
+    [ValidateSet('armeabi-v7a', 'arm64-v8a')]
+    [string]$Abi = 'armeabi-v7a'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +20,7 @@ function Convert-ToWslPath([string]$Path) {
 
 $repo = Convert-ToWslPath $repoRoot
 $ndk = Convert-ToWslPath $ndkRoot
+$platform = if ($Abi -eq 'arm64-v8a') { 'android-21' } else { 'android-16' }
 $command = @"
 set -e
 mkdir -p /tmp/ndk-compat-libs
@@ -33,8 +37,10 @@ cd '$repo'
   NDK_PROJECT_PATH='$repo/app' \
   APP_BUILD_SCRIPT='$repo/app/src/main/jni/Android.mk' \
   NDK_APPLICATION_MK='$repo/app/src/main/jni/Application.mk' \
-  NDK_OUT='$repo/app/build/native/obj' \
-  NDK_LIBS_OUT='$repo/app/src/main/jniLibs' \
+  APP_ABI='$Abi' \
+  APP_PLATFORM='$platform' \
+  NDK_OUT='$repo/app/build/native/$Abi/obj' \
+  NDK_LIBS_OUT='$repo/app/src/main/libs' \
   -j2
 "@
 
@@ -43,5 +49,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "Native build failed with exit code $LASTEXITCODE"
 }
 
-Write-Host 'Built app/src/main/jniLibs/armeabi-v7a/libcctv_h5e.so'
-
+Write-Host "Built app/src/main/libs/$Abi native libraries"
