@@ -120,6 +120,10 @@ $env:JAVA_HOME = 'C:\path\to\jdk-8'
 https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version.json
 ```
 
+旧版本仍固定读取 `master` 分支中的 `version-iptv.json`。因此
+`generateVersionFile` 会继续生成该兼容清单，不能删除；其中旧版使用的
+`apkUrl` 和 `sha256` 字段始终指向 32 位 `nTv.apk`。
+
 每个 Release 包含 `nTv.apk`（ARMv7）、`nTv64.apk`（ARM64）和 `version.json`。
 安装包会固化自身架构：32 位包只更新到 `nTv.apk`，64 位包只更新到
 `nTv64.apk`。根据两份已签名 APK 生成清单：

@@ -129,6 +129,11 @@ The update endpoint is fixed to the latest GitHub Release manifest:
 https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version.json
 ```
 
+Older builds continue to read `version-iptv.json` from the `master` branch.
+`generateVersionFile` therefore keeps generating that compatibility manifest;
+do not delete it. Its legacy `apkUrl` and `sha256` fields always refer to the
+32-bit `nTv.apk` asset.
+
 Each release contains `nTv.apk` (ARMv7), `nTv64.apk` (ARM64), and `version.json`.
 The architecture is fixed into each APK, so a 32-bit install only updates to
 `nTv.apk`, while a 64-bit install only updates to `nTv64.apk`. Generate the

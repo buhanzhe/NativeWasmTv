@@ -143,8 +143,10 @@ task generateVersionFile {
         ]
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
         File output = rootProject.file('version.json')
+        File legacyOutput = rootProject.file('version-iptv.json')
         output.setText(manifestJson, 'UTF-8')
-        logger.lifecycle("Generated ${output} (arm32=${sha25632 ?: 'unset'}, "
+        legacyOutput.setText(manifestJson, 'UTF-8')
+        logger.lifecycle("Generated ${output} and ${legacyOutput} (arm32=${sha25632 ?: 'unset'}, "
                 + "arm64=${sha25664 ?: 'unset'})")
     }
 }
