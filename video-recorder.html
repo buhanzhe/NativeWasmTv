@@ -156,7 +156,6 @@ function updateStats(){var now=Date.now(),elapsed=recordingStartedAt?(now-record
 async function stopRecording(autoStopped){if(!recording&&!preparing)return;recording=false;preparing=true;clearTimeout(pollTimer);clearInterval(clockTimer);recordButton.classList.remove('recording');recordButton.disabled=true;setStatus('正在完成分片…',true);try{await downloadChain;if(!segments.length)throw new Error('尚未录制到完整分片');await prepareDownload();setStatus(autoStopped?'已自动停止，可保存':'录制完成，可保存',false);downloadButton.disabled=false}catch(error){showNotice('MP4 合并失败',error.message);setStatus('MP4 合并失败',false)}finally{preparing=false;recordButton.disabled=false;recordButton.setAttribute('aria-label','开始新录制');quality.disabled=variants.length===0;updateStats()}}
 async function prepareDownload(){if(downloadUrl){URL.revokeObjectURL(downloadUrl);downloadUrl=''}downloadUrl=await transmuxToMp4()}
 function readSegmentBytes(segment){if(segment&&segment.data)return Promise.resolve(segment.data instanceof Uint8Array?segment.data:new Uint8Array(segment.data));var blob=segment&&segment.blob;if(!blob)return Promise.reject(new Error('录制分片数据无效'));if(typeof blob.arrayBuffer==='function')return blob.arrayBuffer().then(function(buffer){return new Uint8Array(buffer)});return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(new Uint8Array(reader.result))};reader.onerror=function(){reject(reader.error||new Error('无法读取录制分片'))};reader.readAsArrayBuffer(blob)})}
-function validateMp4(url,expectedDuration){return new Promise(function(resolve,reject){var video=document.createElement('video'),timer=setTimeout(function(){finish(new Error('MP4 播放校验超时'))},12000);function finish(error){clearTimeout(timer);video.removeAttribute('src');video.load();error?reject(error):resolve()}video.preload='metadata';video.muted=true;video.onloadedmetadata=function(){var duration=Number(video.duration),expected=Number(expectedDuration)||0,tolerance=Math.max(2,expected*.12);if(!isFinite(duration)||duration<=0||video.videoWidth<=0)finish(new Error('MP4 视频轨道或时间轴无效'));else if(expected>0&&Math.abs(duration-expected)>tolerance)finish(new Error('MP4 时间轴异常：'+duration.toFixed(1)+' 秒，预期约 '+expected.toFixed(1)+' 秒'));else finish()};video.onerror=function(){finish(new Error('浏览器无法解析生成的 MP4'))};video.src=url;video.load()})}
 async function transmuxToMp4(){
   if(!window.muxjs||!muxjs.mp4||typeof muxjs.mp4.Transmuxer!=='function')throw new Error('音视频转换组件未加载');
   if(!window.NtvMp4Finalizer||typeof NtvMp4Finalizer.finalize!=='function')throw new Error('MP4 时间轴组件未加载');
@@ -172,7 +171,6 @@ async function transmuxToMp4(){
   if(muxError)throw muxError;if(!initSegment||!mediaSegments.length)throw new Error('视频轨道不完整，无法生成 MP4');
   setStatus('正在建立 MP4 时间轴…',true);
   var finalized=NtvMp4Finalizer.finalize(initSegment,mediaSegments),url=URL.createObjectURL(finalized.blob);
-  try{await validateMp4(url,finalized.duration)}catch(error){URL.revokeObjectURL(url);throw error}
   document.getElementById('substats').textContent='MP4 已就绪 · '+finalized.duration.toFixed(1)+' 秒';
   return url;
 }
