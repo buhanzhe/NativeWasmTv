@@ -114,25 +114,27 @@ $env:JAVA_HOME = 'C:\path\to\jdk-8'
 旧版安装器 Intent 无需该清单权限即可使用。在 Android 8.0 及以上版本中，系统仍
 可能要求用户允许此应用作为安装来源；该系统安全确认无法绕过。
 
-更新地址为：
+更新地址固定为最新 GitHub Release 内的清单：
 
 ```text
-https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json
+https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version.json
 ```
 
-将发布文件命名为 `nTv.apk`，上传到标签与 `v<versionName>` 一致的 GitHub Release
-（例如 `v1.1.0`），然后根据该 APK 生成仓库清单：
+每个 Release 包含 `nTv.apk`（ARMv7）、`nTv64.apk`（ARM64）和 `version.json`。
+安装包会固化自身架构：32 位包只更新到 `nTv.apk`，64 位包只更新到
+`nTv64.apk`。根据两份已签名 APK 生成清单：
 
 ```powershell
 $env:JAVA_HOME = 'C:\path\to\jdk-8'
-.\gradlew.bat generateVersionFile `
-  '-PupdateApk=C:\path\to\nTv.apk' `
+.\gradlew.bat :app:generateVersionFile `
+  '-PupdateApk32=C:\path\to\nTv.apk' `
+  '-PupdateApk64=C:\path\to\nTv64.apk' `
   '-PreleaseNotes=本次更新说明'
 ```
 
-发布对应 APK 后，提交并推送生成的 `version.json`。仓库和 Release 文件必须公开，
-因为 `gh-proxy.com` 无法对私有 GitHub 仓库进行身份验证。发布版本时应始终传入
-`-PupdateApk`，以便客户端拒绝损坏的下载文件。
+将生成的 `version.json` 与两份对应 APK 上传到同一 Release。仓库和 Release 文件必须公开，
+因为 `gh-proxy.com` 无法对私有 GitHub 仓库进行身份验证。发布版本时必须同时传入
+两份 APK，以便客户端拒绝损坏的下载文件。
 
 Android 4.4 支持 TLS 1.2，但并非始终默认启用。应用的 TLS 兼容层会为更新服务和
 现有 HTTPS 播放请求启用 TLS 1.2 以及兼容的 ECDHE/AES 加密套件。

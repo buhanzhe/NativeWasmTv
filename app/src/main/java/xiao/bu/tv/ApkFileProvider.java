@@ -125,6 +125,6 @@ public final class ApkFileProvider extends ContentProvider {
     }
 
     private static boolean isAllowedName(String name) {
-        return name != null && name.matches("nTv-[0-9]+\\.apk");
+        return name != null && name.matches("nTv(?:64)?-[0-9]+\\.apk");
     }
 }

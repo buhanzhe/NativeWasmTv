@@ -123,27 +123,29 @@ It targets API 25 so the legacy installer intent remains available without that
 manifest permission. Android 8.0+ can still require the user to approve this app
 as an installation source; that system security confirmation cannot be bypassed.
 
-The update endpoint is:
+The update endpoint is fixed to the latest GitHub Release manifest:
 
 ```text
-https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json
+https://gh-proxy.com/https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version.json
 ```
 
-Create the release asset as `nTv.apk`, upload it to the GitHub Release whose tag
-matches `v<versionName>` (for example `v1.1.0`), then generate the repository
-manifest from that exact APK:
+Each release contains `nTv.apk` (ARMv7), `nTv64.apk` (ARM64), and `version.json`.
+The architecture is fixed into each APK, so a 32-bit install only updates to
+`nTv.apk`, while a 64-bit install only updates to `nTv64.apk`. Generate the
+manifest from both signed APKs:
 
 ```powershell
 $env:JAVA_HOME = 'C:\path\to\jdk-8'
-.\gradlew.bat generateVersionFile `
-  '-PupdateApk=C:\path\to\nTv.apk' `
+.\gradlew.bat :app:generateVersionFile `
+  '-PupdateApk32=C:\path\to\nTv.apk' `
+  '-PupdateApk64=C:\path\to\nTv64.apk' `
   '-PreleaseNotes=本次更新说明'
 ```
 
-Commit and push the generated `version.json` after publishing the matching APK.
+Upload the generated `version.json` with both matching APKs to the same Release.
 The repository and Release asset must be publicly accessible because
 `gh-proxy.com` cannot authenticate to a private GitHub repository. Always pass
-`-PupdateApk` for a published release so clients can reject corrupted downloads.
+both APK properties so clients can reject corrupted downloads.
 
 Android 4.4 has TLS 1.2 support but does not enable it consistently. The app's
 TLS compatibility layer enables TLS 1.2 and compatible ECDHE/AES cipher suites

@@ -33,7 +33,7 @@ final class AutoUpdater {
     private static final String TAG = "AutoUpdater";
     private static final String GH_PROXY = "https://gh-proxy.com/";
     private static final String VERSION_URL = GH_PROXY
-            + "https://github.com/buhanzhe/NativeWasmTv/raw/refs/heads/master/version-iptv.json";
+            + "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;
@@ -62,6 +62,8 @@ final class AutoUpdater {
                     if (update.versionCode <= BuildConfig.VERSION_CODE || destroyed) {
                         return;
                     }
+                    Log.i(TAG, "Update available: " + update.versionName + ", asset="
+                            + BuildConfig.UPDATE_APK_ASSET);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -108,12 +110,20 @@ final class AutoUpdater {
         JSONObject object = new JSONObject(json);
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
-        String apkUrl = proxiedGithubUrl(object.getString("apkUrl").trim());
-        String sha256 = object.optString("sha256", "").trim().toLowerCase(Locale.US);
+        String apkUrl = object.optString(BuildConfig.UPDATE_APK_URL_FIELD, "").trim();
+        String sha256 = object.optString(BuildConfig.UPDATE_SHA256_FIELD, "")
+                .trim().toLowerCase(Locale.US);
         String releaseNotes = object.optString("releaseNotes", "").trim();
         if (versionCode < 1 || versionName.length() == 0) {
             throw new JSONException("Invalid version metadata");
         }
+        if (apkUrl.length() == 0) {
+            throw new JSONException("Missing APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+        }
+        if (!apkUrl.endsWith("/" + BuildConfig.UPDATE_APK_ASSET)) {
+            throw new JSONException("Wrong APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+        }
+        apkUrl = proxiedGithubUrl(apkUrl);
         if (sha256.length() > 0 && !sha256.matches("[0-9a-f]{64}")) {
             throw new JSONException("Invalid APK SHA-256");
         }
@@ -172,7 +182,8 @@ final class AutoUpdater {
                     if (directory == null || (!directory.isDirectory() && !directory.mkdirs())) {
                         throw new IOException("无法创建更新目录");
                     }
-                    File apk = new File(directory, "nTv-" + update.versionCode + ".apk");
+                    File apk = new File(directory, BuildConfig.UPDATE_APK_ASSET
+                            .replace(".apk", "-" + update.versionCode + ".apk"));
                     if (apk.isFile() && verifySha256(apk, update.sha256) && isApk(apk)) {
                         finishDownload(apk);
                         return;
