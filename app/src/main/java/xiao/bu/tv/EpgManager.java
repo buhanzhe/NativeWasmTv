@@ -30,7 +30,7 @@ import java.util.TimeZone;
 import java.util.zip.GZIPInputStream;
 
 final class EpgManager {
-    static final String DEFAULT_URL = "https://iptv.burningc4.com/guide.xml";
+    static final String DEFAULT_URL = "https://liliu.serv00.net/epg/cn.xml";
     private static final String TAG = "EpgManager";
     private static final String CACHE_FILE = "epg-guide-cache.xml";
     private static final String CACHE_PREFS = "epg_cache";

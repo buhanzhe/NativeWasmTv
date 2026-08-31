@@ -32,6 +32,7 @@ final class LocalControlServer implements Closeable {
         String pointer(JSONObject request) throws Exception;
         String settings(JSONObject request) throws Exception;
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
+        String uploadKu9Script(String fileName, byte[] body) throws Exception;
         Resource playlistSource(String location) throws Exception;
         String mergePlaylist(JSONObject request) throws Exception;
         Resource recording(String token) throws Exception;
@@ -52,6 +53,7 @@ final class LocalControlServer implements Closeable {
     static final int PREFERRED_PORT = 9966;
     static final int MAX_PORT = 9975;
     private static final int SOCKET_TIMEOUT_MS = 30000;
+    private static final int MAX_KU9_SCRIPT_BYTES = 2 * 1024 * 1024;
     private static final int MIN_REQUEST_BYTES = 8 * 1024 * 1024;
     private static final int MAX_REQUEST_BYTES = 64 * 1024 * 1024;
     private final byte[] indexHtml;
@@ -161,12 +163,15 @@ final class LocalControlServer implements Closeable {
             String path = requestParts[1];
             int contentLength = 0;
             boolean invalidContentLength = false;
+            boolean chunkedBody = false;
             String line;
             while ((line = readLine(input)) != null && line.length() > 0) {
                 int colon = line.indexOf(':');
-                if (colon > 0 && "content-length".equalsIgnoreCase(line.substring(0, colon))) {
+                String headerName = colon > 0 ? line.substring(0, colon).trim() : "";
+                String headerValue = colon > 0 ? line.substring(colon + 1).trim() : "";
+                if ("content-length".equalsIgnoreCase(headerName)) {
                     try {
-                        long parsedLength = Long.parseLong(line.substring(colon + 1).trim());
+                        long parsedLength = Long.parseLong(headerValue);
                         if (parsedLength < 0L || parsedLength > Integer.MAX_VALUE) {
                             invalidContentLength = true;
                         } else {
@@ -175,6 +180,9 @@ final class LocalControlServer implements Closeable {
                     } catch (NumberFormatException error) {
                         invalidContentLength = true;
                     }
+                } else if ("transfer-encoding".equalsIgnoreCase(headerName)
+                        && headerValue.toLowerCase(java.util.Locale.US).contains("chunked")) {
+                    chunkedBody = true;
                 }
             }
             if (invalidContentLength) {
@@ -182,25 +190,18 @@ final class LocalControlServer implements Closeable {
                         jsonError("请求长度无效"));
                 return;
             }
-            if (contentLength > requestBodyLimit()) {
+            int bodyLimit = path.startsWith("/api/ku9/script/upload")
+                    ? MAX_KU9_SCRIPT_BYTES : requestBodyLimit();
+            if (contentLength > bodyLimit) {
                 send(socket, 413, "application/json; charset=utf-8",
-                        jsonError("请求内容超过设备可安全处理的大小"));
+                        jsonError(path.startsWith("/api/ku9/script/upload")
+                                ? "JS 文件不能超过 2 MB"
+                                : "请求内容超过设备可安全处理的大小"));
                 return;
             }
-            byte[] body = new byte[contentLength];
-            int offset = 0;
-            while (offset < body.length) {
-                int count = input.read(body, offset, body.length - offset);
-                if (count < 0) {
-                    break;
-                }
-                offset += count;
-            }
-            if (offset != body.length) {
-                byte[] partial = new byte[offset];
-                System.arraycopy(body, 0, partial, 0, offset);
-                body = partial;
-            }
+            byte[] body = chunkedBody
+                    ? readChunkedBody(input, bodyLimit)
+                    : readFixedBody(input, contentLength);
             route(socket, method, path, body);
         } catch (Exception error) {
             Log.w(TAG, "Management request failed", error);
@@ -247,6 +248,10 @@ final class LocalControlServer implements Closeable {
             String fileName = queryParameter(requestTarget, "name");
             send(socket, 200, "application/json; charset=utf-8",
                     listener.uploadPlaylist(sourceId, fileName, body).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/ku9/script/upload".equals(path)) {
+            String fileName = queryParameter(requestTarget, "name");
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.uploadKu9Script(fileName, body).getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/playlist/source".equals(path)) {
             Resource resource = listener.playlistSource(
                     queryParameter(requestTarget, "location"));
@@ -313,6 +318,61 @@ final class LocalControlServer implements Closeable {
             }
         }
         return output.size() == 0 ? null : output.toString("ISO-8859-1");
+    }
+
+    private static byte[] readFixedBody(InputStream input, int contentLength)
+            throws IOException {
+        byte[] body = new byte[contentLength];
+        int offset = 0;
+        while (offset < body.length) {
+            int count = input.read(body, offset, body.length - offset);
+            if (count < 0) {
+                break;
+            }
+            offset += count;
+        }
+        if (offset == body.length) {
+            return body;
+        }
+        byte[] partial = new byte[offset];
+        System.arraycopy(body, 0, partial, 0, offset);
+        return partial;
+    }
+
+    private static byte[] readChunkedBody(InputStream input, int limit) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(limit, 8192));
+        while (true) {
+            String sizeLine = readLine(input);
+            if (sizeLine == null) {
+                throw new IOException("分块请求不完整");
+            }
+            int extension = sizeLine.indexOf(';');
+            String sizeText = (extension < 0 ? sizeLine : sizeLine.substring(0, extension)).trim();
+            final long chunkSize;
+            try {
+                chunkSize = Long.parseLong(sizeText, 16);
+            } catch (NumberFormatException error) {
+                throw new IOException("分块请求格式错误", error);
+            }
+            if (chunkSize < 0L || chunkSize > limit - output.size()) {
+                throw new IOException("请求内容超过设备可安全处理的大小");
+            }
+            if (chunkSize == 0L) {
+                while ((sizeLine = readLine(input)) != null && sizeLine.length() > 0) {
+                    // Consume optional trailer headers.
+                }
+                return output.toByteArray();
+            }
+            byte[] chunk = readFixedBody(input, (int) chunkSize);
+            if (chunk.length != (int) chunkSize) {
+                throw new IOException("分块请求内容不完整");
+            }
+            output.write(chunk);
+            String terminator = readLine(input);
+            if (terminator == null || terminator.length() != 0) {
+                throw new IOException("分块请求结尾格式错误");
+            }
+        }
     }
 
     private static byte[] jsonError(String message) throws IOException {

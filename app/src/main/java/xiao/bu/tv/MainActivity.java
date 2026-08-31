@@ -268,6 +268,7 @@ public final class MainActivity extends Activity {
     private EpgManager epgManager;
     private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
+    private Ku9ScriptResolver ku9ScriptResolver;
     private DirectVideoView videoView;
     private View channelSwitchBlackout;
     private ImageView channelSwipeSnapshot;
@@ -671,6 +672,7 @@ public final class MainActivity extends Activity {
         liveUrlResolver = new LiveUrlResolver(getSharedPreferences("live_url_resolver", MODE_PRIVATE));
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
+        ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
         if (lowResourceDevice) {
             root.postDelayed(new Runnable() {
                 @Override
@@ -1169,6 +1171,15 @@ public final class MainActivity extends Activity {
                     return new JSONObject().put("ok", true)
                             .put("name", imported.displayName)
                             .put("location", imported.location).toString();
+                }
+
+                @Override
+                public String uploadKu9Script(String fileName, byte[] body) throws Exception {
+                    Ku9ScriptLoader.SavedScript saved = Ku9ScriptLoader.saveUserScript(
+                            MainActivity.this, fileName, body);
+                    return new JSONObject().put("ok", true)
+                            .put("name", saved.name)
+                            .put("replaced", saved.replaced).toString();
                 }
 
                 @Override
@@ -2988,6 +2999,9 @@ public final class MainActivity extends Activity {
             showChannelBar(channel.name, "没有可用的备用源");
             return;
         }
+        if (!Ku9ScriptResolver.isKu9Source(configuredUrl) && ku9ScriptResolver != null) {
+            ku9ScriptResolver.cancel();
+        }
         if (isWebViewSource(configuredUrl)) {
             String yangshipinPid = extractYangshipinPid(configuredUrl);
             if (yangshipinPid != null) {
@@ -3008,6 +3022,10 @@ public final class MainActivity extends Activity {
                 return;
             }
             openWebSource(channel, configuredUrl, requestId);
+            return;
+        }
+        if (Ku9ScriptResolver.isKu9Source(configuredUrl)) {
+            resolveKu9Source(channel, configuredUrl, requestId);
             return;
         }
         updateLoadingStatus(directCustomSource
@@ -3098,6 +3116,33 @@ public final class MainActivity extends Activity {
 
     private void startResolvedPlayer(Channel channel, String streamUrl) {
         startResolvedPlayer(channel, streamUrl, false);
+    }
+
+    private void resolveKu9Source(final Channel channel, String configuredUrl,
+            final int requestId) {
+        updateLoadingStatus("正在执行酷9源脚本");
+        showChannelBar(channel.name, customSourceStatus("正在解析酷9源"));
+        ku9ScriptResolver.resolve(requestId, channel.name, configuredUrl,
+                new Ku9ScriptResolver.Callback() {
+                    @Override
+                    public void onResolved(int resolvedRequestId,
+                            Ku9ScriptResolver.Result result) {
+                        if (resolvedRequestId != playRequestId) {
+                            return;
+                        }
+                        startResolvedPlayer(channel, result.url, result.directDataSource);
+                    }
+
+                    @Override
+                    public void onFailed(int failedRequestId, String reason) {
+                        if (failedRequestId != playRequestId) {
+                            return;
+                        }
+                        abortChannelSwitchAnimation();
+                        hideLoading();
+                        showChannelBar(channel.name, reason);
+                    }
+                });
     }
 
     private void startResolvedPlayer(Channel channel, String streamUrl,
@@ -6938,6 +6983,9 @@ public final class MainActivity extends Activity {
         releasePlayer();
         if (yangshipinResolver != null) {
             yangshipinResolver.destroy();
+        }
+        if (ku9ScriptResolver != null) {
+            ku9ScriptResolver.destroy();
         }
         if (proxy != null) {
             proxy.close();
