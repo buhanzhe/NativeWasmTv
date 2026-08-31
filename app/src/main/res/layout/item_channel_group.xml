@@ -8,16 +8,32 @@
     android:paddingLeft="8dp"
     android:paddingRight="8dp">
 
-    <TextView
-        android:id="@+id/channel_number"
+    <FrameLayout
         android:layout_width="27dp"
-        android:layout_height="27dp"
-        android:background="@drawable/channel_group_number_background"
-        android:gravity="center"
-        android:includeFontPadding="false"
-        android:textColor="@color/channel_item_text"
-        android:textSize="12sp"
-        android:textStyle="bold" />
+        android:layout_height="27dp">
+
+        <TextView
+            android:id="@+id/channel_number"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/channel_group_number_background"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:textColor="@color/channel_item_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/channel_group_favorite_icon"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/channel_group_number_background"
+            android:contentDescription="我的收藏"
+            android:padding="5dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/collection_fill"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/channel_item_name"

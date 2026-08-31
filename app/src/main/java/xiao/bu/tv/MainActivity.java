@@ -1179,7 +1179,8 @@ public final class MainActivity extends Activity {
                             MainActivity.this, fileName, body);
                     return new JSONObject().put("ok", true)
                             .put("name", saved.name)
-                            .put("replaced", saved.replaced).toString();
+                            .put("replaced", saved.replaced)
+                            .put("path", saved.path).toString();
                 }
 
                 @Override
@@ -1341,8 +1342,7 @@ public final class MainActivity extends Activity {
                     .put("diagonalInches", detectedDisplayInches > 0f
                             ? Math.round(detectedDisplayInches * 10f) / 10.0d : 0d));
             root.put("system", systemInfoProvider == null ? new JSONObject()
-                    : systemInfoProvider.snapshot(webSourceView == null
-                            ? "" : webSourceView.browserUserAgent()));
+                    : systemInfoProvider.snapshot());
             JSONObject current = new JSONObject();
             current.put("groupIndex", groupIndex);
             current.put("channelIndex", channelIndex);

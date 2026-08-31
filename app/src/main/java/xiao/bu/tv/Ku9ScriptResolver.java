@@ -51,13 +51,11 @@ final class Ku9ScriptResolver {
 
     private static final String TAG = "Ku9ScriptResolver";
     private static final int MIN_ANDROID_API = Build.VERSION_CODES.LOLLIPOP;
-    private static final int MIN_CHROMIUM_MAJOR = 37;
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final long TIMEOUT_MS = 30000L;
     private static final long MIN_PLAYLIST_REFRESH_MS = 2000L;
     private static final long MAX_PLAYLIST_REFRESH_MS = 5000L;
     private static final String EXECUTOR_URL = "https://ntv.local/ku9/";
-    private static final Pattern CHROME_VERSION = Pattern.compile("(?:Chrome|Chromium)/(\\d+)");
     private static final Pattern TARGET_DURATION =
             Pattern.compile("(?m)^#EXT-X-TARGETDURATION:(\\d+)");
     private static final String EXECUTOR_PAGE =
@@ -120,7 +118,7 @@ final class Ku9ScriptResolver {
             callback.onFailed(requestId, "酷9 JS 源仅支持 Android 5.0 及以上");
             return;
         }
-        final int requestGeneration = ++generation;
+        final int requestGeneration = generation;
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -152,12 +150,12 @@ final class Ku9ScriptResolver {
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
-    private void ensureWebView() throws IOException {
+    private void ensureWebView(Pending request) throws IOException {
         if (webView != null) {
             return;
         }
         try {
-            webView = new WebView(activity.getApplicationContext());
+            webView = new WebView(activity);
         } catch (RuntimeException error) {
             throw new IOException("系统 WebView 不可用", error);
         }
@@ -171,17 +169,6 @@ final class Ku9ScriptResolver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         }
-        String userAgent = settings.getUserAgentString();
-        Matcher versionMatcher = userAgent == null ? null : CHROME_VERSION.matcher(userAgent);
-        if (versionMatcher != null && versionMatcher.find()) {
-            int major = parseInt(versionMatcher.group(1));
-            if (major > 0 && major < MIN_CHROMIUM_MAJOR) {
-                webView.destroy();
-                webView = null;
-                throw new IOException("系统 WebView 版本过低（Chromium " + major
-                        + "，至少需要 M37）");
-            }
-        }
         webView.setBackgroundColor(Color.TRANSPARENT);
         webView.setAlpha(0f);
         webView.setTranslationX(-10000f);
@@ -189,7 +176,7 @@ final class Ku9ScriptResolver {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1, 1);
         params.gravity = Gravity.LEFT | Gravity.TOP;
         root.addView(webView, params);
-        webView.addJavascriptInterface(new Bridge(), "NtvKu9Bridge");
+        webView.addJavascriptInterface(new Bridge(request), "NtvKu9Bridge");
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
@@ -208,7 +195,7 @@ final class Ku9ScriptResolver {
 
     private void startExecution(Pending request) {
         try {
-            ensureWebView();
+            ensureWebView(request);
         } catch (IOException error) {
             request.callback.onFailed(request.requestId, error.getMessage());
             return;
@@ -224,13 +211,17 @@ final class Ku9ScriptResolver {
         if (pending != request || request.generation != generation) {
             return;
         }
+        webView.evaluateJavascript(buildJavascript(request), null);
+    }
+
+    private String buildJavascript(Pending request) {
         JSONObject item = new JSONObject();
         try {
             item.put("url", request.sourceUrl);
             item.put("name", request.channelName == null ? "" : request.channelName);
         } catch (JSONException ignored) {
         }
-        String javascript = "(function(){'use strict';"
+        return "(function(){'use strict';"
                 + "function parseJson(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
                 + "function headerJson(v){return typeof v==='string'?v:JSON.stringify(v||{});}"
                 + "window.ku9={"
@@ -252,7 +243,6 @@ final class Ku9ScriptResolver {
                 + "var r=main(" + item.toString() + ");"
                 + "if(r&&typeof r.then==='function'){r.then(done,fail);}else{done(r);}}"
                 + "catch(e){fail(e);}})();";
-        webView.evaluateJavascript(javascript, null);
     }
 
     private void complete(Pending request, String json) {
@@ -394,15 +384,16 @@ final class Ku9ScriptResolver {
         generation++;
         clearPending();
         closePlaylistServer();
-        if (webView != null) {
-            webView.stopLoading();
-            webView.loadUrl("about:blank");
-        }
+        destroyWebView();
     }
 
     void destroy() {
         cancel();
+    }
+
+    private void destroyWebView() {
         if (webView != null) {
+            webView.stopLoading();
             webView.removeJavascriptInterface("NtvKu9Bridge");
             ViewGroup parent = (ViewGroup) webView.getParent();
             if (parent != null) {
@@ -421,6 +412,12 @@ final class Ku9ScriptResolver {
     }
 
     private final class Bridge {
+        private final Pending request;
+
+        Bridge(Pending request) {
+            this.request = request;
+        }
+
         @JavascriptInterface
         public String get(String url, String headersJson) {
             try {
@@ -484,8 +481,7 @@ final class Ku9ScriptResolver {
 
         @JavascriptInterface
         public void complete(final String resultJson) {
-            final Pending request = pending;
-            if (request == null) {
+            if (pending != request) {
                 return;
             }
             activity.runOnUiThread(new Runnable() {
@@ -500,8 +496,7 @@ final class Ku9ScriptResolver {
 
         @JavascriptInterface
         public void fail(final String reason) {
-            final Pending request = pending;
-            if (request == null) {
+            if (pending != request) {
                 return;
             }
             activity.runOnUiThread(new Runnable() {

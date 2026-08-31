@@ -1,18 +1,15 @@
 package xiao.bu.tv;
 
 import android.content.Context;
-import android.graphics.Color;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 final class ChannelListAdapter extends BaseAdapter {
-    private static final int FAVORITE_ACTIVE_COLOR = Color.rgb(255, 204, 51);
-    private static final int FAVORITE_INACTIVE_COLOR = Color.argb(200, 255, 255, 255);
-
     interface FavoriteListener {
         boolean isFavorite(int position);
         void onFavoriteClick(int position);
@@ -165,7 +162,10 @@ final class ChannelListAdapter extends BaseAdapter {
             holder.number = (TextView) convertView.findViewById(R.id.channel_number);
             holder.name = (TextView) convertView.findViewById(R.id.channel_item_name);
             holder.count = (TextView) convertView.findViewById(R.id.channel_group_count);
-            holder.favorite = (TextView) convertView.findViewById(R.id.channel_item_favorite);
+            holder.groupFavorite = (ImageView) convertView.findViewById(
+                    R.id.channel_group_favorite_icon);
+            holder.favorite = (ImageView) convertView.findViewById(
+                    R.id.channel_item_favorite);
             convertView.setTag(holder);
         } else {
             holder = (ViewHolder) convertView.getTag();
@@ -174,8 +174,13 @@ final class ChannelListAdapter extends BaseAdapter {
 
         if (showingGroups) {
             ChannelCatalog.Group group = groups[position];
-            holder.number.setText(group.source == ChannelCatalog.SOURCE_FAVORITES
-                    ? "★" : String.valueOf(position));
+            boolean favoritesGroup = group.source == ChannelCatalog.SOURCE_FAVORITES;
+            holder.number.setVisibility(favoritesGroup ? View.GONE : View.VISIBLE);
+            holder.number.setText(favoritesGroup ? "" : String.valueOf(position));
+            if (holder.groupFavorite != null) {
+                holder.groupFavorite.setVisibility(favoritesGroup
+                        ? View.VISIBLE : View.GONE);
+            }
             holder.name.setText(group.title);
             holder.count.setText(String.valueOf(group.channels.length));
         } else {
@@ -193,9 +198,8 @@ final class ChannelListAdapter extends BaseAdapter {
             }
             boolean favorite = favoriteListener != null
                     && favoriteListener.isFavorite(position);
-            holder.favorite.setText(favorite ? "★" : "☆");
-            holder.favorite.setTextColor(favoriteFocused ? Color.WHITE : favorite
-                    ? FAVORITE_ACTIVE_COLOR : FAVORITE_INACTIVE_COLOR);
+            holder.favorite.setImageResource(favorite
+                    ? R.drawable.collection_fill : R.drawable.collection);
             holder.favorite.setContentDescription(favorite ? "取消收藏" : "收藏");
             holder.favorite.setSelected(favoriteFocused);
             holder.favorite.setScaleX(favoriteFocused ? 1.08f : 1f);
@@ -212,6 +216,7 @@ final class ChannelListAdapter extends BaseAdapter {
         TextView number;
         TextView name;
         TextView count;
-        TextView favorite;
+        ImageView groupFavorite;
+        ImageView favorite;
     }
 }

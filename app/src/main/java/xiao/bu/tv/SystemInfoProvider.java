@@ -46,7 +46,7 @@ final class SystemInfoProvider {
         this.context = context.getApplicationContext();
     }
 
-    synchronized JSONObject snapshot(String webViewUserAgent) {
+    synchronized JSONObject snapshot() {
         long now = android.os.SystemClock.elapsedRealtime();
         if (cachedJson != null && now - cachedAt < CACHE_MS) {
             try {
@@ -54,20 +54,19 @@ final class SystemInfoProvider {
             } catch (JSONException ignored) {
             }
         }
-        JSONObject result = collect(webViewUserAgent);
+        JSONObject result = collect();
         cachedAt = now;
         cachedJson = result.toString();
         return result;
     }
 
-    private JSONObject collect(String webViewUserAgent) {
+    private JSONObject collect() {
         JSONObject result = new JSONObject();
         try {
             PackageInfo webView = currentWebViewPackage(context);
-            String webViewName = webView == null ? "系统内置 WebView"
+            String webViewName = webView == null ? legacyWebViewName()
                     : applicationLabel(context, webView.packageName);
-            String webViewVersion = webView == null
-                    ? legacyWebViewVersion(webViewUserAgent)
+            String webViewVersion = webView == null ? ""
                     : safe(webView.versionName, "未知版本");
             result.put("android", "Android " + safe(Build.VERSION.RELEASE, "未知")
                     + " · API " + Build.VERSION.SDK_INT + "（"
@@ -78,7 +77,8 @@ final class SystemInfoProvider {
             result.put("device", joinDeviceName());
             result.put("manufacturer", safe(Build.MANUFACTURER, "未知"));
             result.put("model", safe(Build.MODEL, "未知"));
-            result.put("webView", webViewName + " · " + webViewVersion);
+            result.put("webView", webViewVersion.length() == 0 ? webViewName
+                    : webViewName + " · " + webViewVersion);
             result.put("webViewPackage", webView == null ? "android" : webView.packageName);
             result.put("webViewVersion", webViewVersion);
             result.put("webViewArchitectures", webViewArchitectures(webView));
@@ -109,6 +109,12 @@ final class SystemInfoProvider {
     }
 
     private static PackageInfo currentWebViewPackage(Context context) {
+        // Android 4.4's Chromium WebView is bundled with the framework. An
+        // installed browser APK is not its provider and a custom UA is not
+        // reliable system information.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return null;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             PackageInfo current = CurrentWebViewPackage.read();
             if (current != null) {
@@ -152,29 +158,9 @@ final class SystemInfoProvider {
         }
     }
 
-    private static String legacyWebViewVersion(String userAgent) {
-        if (userAgent != null) {
-            String[] markers = new String[] { "Chrome/", "Version/", "AppleWebKit/" };
-            for (String marker : markers) {
-                int start = userAgent.indexOf(marker);
-                if (start >= 0) {
-                    start += marker.length();
-                    int end = start;
-                    while (end < userAgent.length()) {
-                        char value = userAgent.charAt(end);
-                        if (!(value == '.' || (value >= '0' && value <= '9'))) {
-                            break;
-                        }
-                        end++;
-                    }
-                    if (end > start) {
-                        return marker.substring(0, marker.length() - 1) + " "
-                                + userAgent.substring(start, end);
-                    }
-                }
-            }
-        }
-        return "随系统 Android " + safe(Build.VERSION.RELEASE, "未知");
+    private static String legacyWebViewName() {
+        return "系统内置 WebView（Android "
+                + safe(Build.VERSION.RELEASE, "未知") + "）";
     }
 
     private static List<String> supportedAbis() {
@@ -208,7 +194,10 @@ final class SystemInfoProvider {
     /** Reads the ABIs actually packaged with the active WebView provider. */
     private String webViewArchitectures(PackageInfo webView) {
         if (webView == null || webView.applicationInfo == null) {
-            return "系统内置";
+            String architectures = Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP
+                    ? safe(Build.CPU_ABI, "") : join(supportedAbis(), "、");
+            return architectures.length() == 0 ? "系统内置"
+                    : architectures + "（系统内置）";
         }
         String identity = safe(webView.packageName, "android") + ":"
                 + safe(webView.versionName, "");

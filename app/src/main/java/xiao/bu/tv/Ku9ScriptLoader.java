@@ -19,16 +19,17 @@ final class Ku9ScriptLoader {
     private static final String SCRIPT_MARKER = "/ku9/js/";
     private static final String NETWORK_SCRIPT_MARKER = "/k-web/ku9/js/";
     private static final String HNYX_SCRIPT = "hnyx.js";
+    private static final String SCRIPT_DIRECTORY = "js";
     private static final int MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
     private static final long ONLINE_CACHE_MS = 30L * 60L * 1000L;
-    private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9_.-]+\\.js");
+    private static final Pattern SAFE_NAME = Pattern.compile(
+            "[A-Za-z0-9_.-]+\\.js", Pattern.CASE_INSENSITIVE);
 
     private final Activity activity;
-    private final File userDirectory;
 
     Ku9ScriptLoader(Activity activity) {
         this.activity = activity;
-        userDirectory = createUserDirectory(activity);
+        preferredDirectory(activity);
     }
 
     static SavedScript saveUserScript(Activity activity, String fileName, byte[] body)
@@ -37,20 +38,36 @@ final class Ku9ScriptLoader {
         if (!SAFE_NAME.matcher(safeName).matches()) {
             throw new IOException("只支持名称安全的 .js 文件");
         }
+        if (HNYX_SCRIPT.equalsIgnoreCase(safeName)) {
+            safeName = HNYX_SCRIPT;
+        }
         if (body == null || body.length == 0) {
             throw new IOException("JS 文件内容为空");
         }
         if (body.length > MAX_SCRIPT_BYTES) {
             throw new IOException("JS 文件不能超过 2 MB");
         }
-        File directory = createUserDirectory(activity);
+        File directory = preferredDirectory(activity);
         if (directory == null) {
             throw new IOException("无法创建 Ku9 JS 目录");
         }
         File target = new File(directory, safeName);
         boolean replaced = target.isFile();
-        File temporary = new File(directory, "." + safeName + ".uploading");
-        File backup = new File(directory, "." + safeName + ".backup");
+        writeUserScript(target, body);
+        File readable = findUserScript(activity, safeName);
+        if (readable == null || readable.length() != body.length
+                || readFile(readable).length() == 0) {
+            throw new IOException("JS 文件保存后校验失败");
+        }
+        return new SavedScript(safeName, replaced, readable.getAbsolutePath());
+    }
+
+    private static void writeUserScript(File target, byte[] body) throws IOException {
+        File directory = target.getParentFile();
+        String fileName = target.getName();
+        boolean replaced = target.isFile();
+        File temporary = new File(directory, "." + fileName + ".uploading");
+        File backup = new File(directory, "." + fileName + ".backup");
         if (temporary.exists() && !temporary.delete()) {
             throw new IOException("无法准备 JS 临时文件");
         }
@@ -77,7 +94,6 @@ final class Ku9ScriptLoader {
             if (backup.exists() && !backup.delete()) {
                 Log.w(TAG, "Unable to remove user script backup " + backup);
             }
-            return new SavedScript(safeName, replaced);
         } finally {
             if (temporary.exists() && !temporary.delete()) {
                 Log.w(TAG, "Unable to remove temporary user script " + temporary);
@@ -130,11 +146,11 @@ final class Ku9ScriptLoader {
                     ? loadOnlineCache(scriptUrl)
                     : Ku9HttpClient.getText(scriptUrl, null, MAX_SCRIPT_BYTES);
         }
-        return HNYX_SCRIPT.equalsIgnoreCase(fileName) ? toAndroid5Syntax(script) : script;
+        return HNYX_SCRIPT.equalsIgnoreCase(fileName) ? toLegacySyntax(script) : script;
     }
 
     private String readLocal(String fileName) throws IOException {
-        File script = userDirectory == null ? null : new File(userDirectory, fileName);
+        File script = findUserScript(activity, fileName);
         if (script == null || !script.isFile()) {
             throw new IOException("本地缺少 " + fileName + "；请将文件放入 "
                     + directoryHint());
@@ -171,9 +187,33 @@ final class Ku9ScriptLoader {
         }
     }
 
-    private static File createUserDirectory(Activity activity) {
-        File root = activity.getExternalFilesDir(null);
-        File directory = new File(root == null ? activity.getFilesDir() : root, "JS");
+    private static File internalDirectory(Activity activity) {
+        return new File(activity.getFilesDir(), SCRIPT_DIRECTORY);
+    }
+
+    private static File preferredDirectory(Activity activity) {
+        File external = ensureDirectory(externalDirectory(activity));
+        return external == null ? ensureDirectory(internalDirectory(activity)) : external;
+    }
+
+    private static File externalDirectory(Activity activity) {
+        File root = externalFilesRoot(activity);
+        return root == null ? null : new File(root, SCRIPT_DIRECTORY);
+    }
+
+    private static File externalFilesRoot(Activity activity) {
+        try {
+            return activity.getExternalFilesDir(null);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to resolve external user script directory", error);
+            return null;
+        }
+    }
+
+    private static File ensureDirectory(File directory) {
+        if (directory == null) {
+            return null;
+        }
         if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
             Log.w(TAG, "Unable to create user script directory " + directory);
             return null;
@@ -185,15 +225,44 @@ final class Ku9ScriptLoader {
     static final class SavedScript {
         final String name;
         final boolean replaced;
+        final String path;
 
-        SavedScript(String name, boolean replaced) {
+        SavedScript(String name, boolean replaced, String path) {
             this.name = name;
             this.replaced = replaced;
+            this.path = path;
         }
     }
 
     private String directoryHint() {
-        return userDirectory == null ? "应用目录/JS" : userDirectory.getAbsolutePath();
+        File external = externalDirectory(activity);
+        return external == null ? internalDirectory(activity).getAbsolutePath()
+                : external.getAbsolutePath();
+    }
+
+    private static File findScript(File directory, String fileName) {
+        if (directory == null || !directory.isDirectory()) {
+            return null;
+        }
+        File exact = new File(directory, fileName);
+        if (exact.isFile()) {
+            return exact;
+        }
+        File[] files = directory.listFiles();
+        if (files == null) {
+            return null;
+        }
+        for (File file : files) {
+            if (file.isFile() && fileName.equalsIgnoreCase(file.getName())) {
+                return file;
+            }
+        }
+        return null;
+    }
+
+    private static File findUserScript(Activity activity, String fileName) {
+        File script = findScript(externalDirectory(activity), fileName);
+        return script == null ? findScript(internalDirectory(activity), fileName) : script;
     }
 
     private static String readFile(File file) throws IOException {
@@ -206,29 +275,13 @@ final class Ku9ScriptLoader {
     }
 
     private static void writeCache(File directory, File file, String content) {
-        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
-            Log.w(TAG, "Unable to create script cache directory " + directory);
+        if (ensureDirectory(directory) == null) {
             return;
         }
-        File temporary = new File(directory, file.getName() + ".tmp");
         try {
-            FileOutputStream output = new FileOutputStream(temporary);
-            try {
-                output.write(content.getBytes("UTF-8"));
-            } finally {
-                output.close();
-            }
-            if (file.exists() && !file.delete()) {
-                Log.w(TAG, "Unable to replace script cache " + file);
-            } else if (!temporary.renameTo(file)) {
-                Log.w(TAG, "Unable to commit script cache " + file);
-            }
+            writeUserScript(file, content.getBytes("UTF-8"));
         } catch (IOException error) {
             Log.w(TAG, "Unable to write script cache " + file, error);
-        } finally {
-            if (temporary.exists()) {
-                temporary.delete();
-            }
         }
     }
 
@@ -241,7 +294,7 @@ final class Ku9ScriptLoader {
         }
     }
 
-    private static String toAndroid5Syntax(String script) {
+    private static String toLegacySyntax(String script) {
         return script
                 .replaceAll("\\bconst\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=", "var $1 =")
                 .replaceAll("\\blet\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=", "var $1 =");
