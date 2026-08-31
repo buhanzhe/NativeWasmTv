@@ -1,11 +1,11 @@
 {
-    "versionCode": 5,
-    "versionName": "1.5.0",
+    "versionCode": 6,
+    "versionName": "1.6.0",
     "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
     "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
     "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
-    "sha256": "3e8e913b7897b5cac056315c9ecd4cf618fe5ea096f59daff475bd704dfcf518",
-    "sha25632": "3e8e913b7897b5cac056315c9ecd4cf618fe5ea096f59daff475bd704dfcf518",
-    "sha25664": "c086cfba8b06f3ebd05433027fa447f8735e07d022940d94f7b79120e7d374fd",
-    "releaseNotes": "\u65b0\u589e ARM64 \u5b89\u88c5\u5305\uff1b\u66f4\u65b0\u5668\u6309\u5df2\u5b89\u88c5\u5305\u67b6\u6784\u4e0b\u8f7d\u5bf9\u5e94\u7248\u672c\u3002"
+    "sha256": "efdae932d1a98e003050e18b2babd35fd1c2c8e38b9e1e2123c0e3a817fcc3a7",
+    "sha25632": "efdae932d1a98e003050e18b2babd35fd1c2c8e38b9e1e2123c0e3a817fcc3a7",
+    "sha25664": "8a4a4c63b8a714b4275580b6625e9629025d301e2fe562b2cc6a1921d4abe8c8",
+    "releaseNotes": "\u4fee\u590d\u91779\u811a\u672c\u89e3\u6790\u4e0e\u8fde\u7eed\u5207\u53f0\u95ee\u9898\uff0c\u4f18\u5316\u9891\u9053\u6536\u85cf\u56fe\u6807\u53ca\u7cfb\u7edf\u4fe1\u606f\u663e\u793a\u3002"
 }
