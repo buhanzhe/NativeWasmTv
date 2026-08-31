@@ -48,6 +48,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
 final class HlsProxyServer implements Closeable {
     private static final String TAG = "HlsProxyServer";
     static final String VARIANT_QUALITY_HIGH = "high";
@@ -58,6 +62,8 @@ final class HlsProxyServer implements Closeable {
     private static final Pattern STREAM_BANDWIDTH = Pattern.compile("BANDWIDTH=(\\d+)");
     private static final Pattern STREAM_RESOLUTION = Pattern.compile("RESOLUTION=(\\d+)x(\\d+)");
     private static final Pattern MEDIA_SEQUENCE = Pattern.compile("#EXT-X-MEDIA-SEQUENCE:(\\d+)");
+    private static final Pattern HLS_KEY_METHOD = Pattern.compile("(?:^|,)METHOD=([^,]+)");
+    private static final Pattern HLS_KEY_IV = Pattern.compile("(?:^|,)IV=0[xX]([0-9a-fA-F]+)");
     private static final Pattern YANGSHIPIN_SEGMENT_NUMBER =
             Pattern.compile("^(.*_web-)(\\d+)(\\.ts(?:[?#].*)?)$");
     private static final int CMG_SEGMENT_CACHE_LIMIT = 6;
@@ -93,6 +99,7 @@ final class HlsProxyServer implements Closeable {
     private static final int CCTV_MIN_PLAYABLE_SEGMENTS = 2;
     private static final int TS_RESOLUTION_PROBE_BYTES = 384 * 1024;
     private static final int MAX_PREALLOCATED_RESPONSE_BYTES = 8 * 1024 * 1024;
+    private static final int STREAM_COPY_BUFFER_BYTES = 64 * 1024;
     private static final String DEFAULT_USER_AGENT = "nTv/1.0";
     private static final String YANGSHIPIN_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -113,6 +120,7 @@ final class HlsProxyServer implements Closeable {
     // advance it concurrently, or later NALs are decoded with the wrong state.
     private final ExecutorService workers;
     private final ExecutorService cctvPrefetchWorkers;
+    private final ExecutorService genericPrefetchWorkers;
     private final boolean parallelCctvDecrypt;
     private final int cctvLiveEdgeHoldBackSegments;
     private final int cctvStartupDownloadSegments;
@@ -122,6 +130,14 @@ final class HlsProxyServer implements Closeable {
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
     private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
+    private final AtomicLong streamedResponseCount = new AtomicLong();
+    private final AtomicLong streamedResponseBytes = new AtomicLong();
+    private final ThreadLocal<byte[]> streamCopyBuffer = new ThreadLocal<byte[]>() {
+        @Override
+        protected byte[] initialValue() {
+            return new byte[STREAM_COPY_BUFFER_BYTES];
+        }
+    };
     private int cmgSegmentCacheLimit = CMG_SEGMENT_CACHE_LIMIT;
     private int cctvSegmentCacheLimit = CCTV_SEGMENT_CACHE_LIMIT;
     private ServerSocket serverSocket;
@@ -177,6 +193,31 @@ final class HlsProxyServer implements Closeable {
                     return size() > 2048;
                 }
             };
+    /* The compact IJK build deliberately omits FFmpeg's crypto protocol. Standard
+     * AES-128 HLS therefore has to be decrypted by the Java proxy before the clear
+     * MPEG-TS segment is returned to IJK. Both maps are per-channel/proxy instance. */
+    private final Map<String, AesSegmentKey> aesSegmentKeys =
+            new LinkedHashMap<String, AesSegmentKey>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, AesSegmentKey> eldest) {
+                    return size() > 512;
+                }
+            };
+    private final Map<String, byte[]> aesKeyCache =
+            new LinkedHashMap<String, byte[]>(8, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) {
+                    return size() > 16;
+                }
+            };
+    private final Map<String, FutureTask<byte[]>> genericSegmentTasks =
+            new LinkedHashMap<String, FutureTask<byte[]>>(6, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(
+                        Map.Entry<String, FutureTask<byte[]>> eldest) {
+                    return size() > 6;
+                }
+            };
     private String lastCctvRequestedUrl;
     private String lastCctvPlaylistUrl;
     private volatile String monitoredCctvPlaylistUrl;
@@ -214,6 +255,7 @@ final class HlsProxyServer implements Closeable {
                 : (lowResourceDevice
                 ? CCTV_LOW_RAM_DECRYPT_THREADS : CCTV_PARALLEL_DECRYPT_THREADS);
         cctvPrefetchWorkers = newCctvPrefetchExecutor(decryptThreads);
+        genericPrefetchWorkers = Executors.newFixedThreadPool(3);
         Log.i(TAG, "CCTV decrypt profile parallel=" + parallelCctvDecrypt
                 + " prefetchThreads=" + decryptThreads
                 + " statefulSession=" + parallelCctvDecrypt
@@ -370,7 +412,7 @@ final class HlsProxyServer implements Closeable {
             BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
             BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
             String requestLine = readAsciiLine(input);
-            drainHeaders(input);
+            String rangeHeader = readRangeHeader(input);
             if (requestLine == null || !requestLine.startsWith("GET ")) {
                 writeError(output, 400, "Bad request");
                 return;
@@ -386,6 +428,11 @@ final class HlsProxyServer implements Closeable {
 
             String token = path.substring(prefix.length());
             String originUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
+            if (canStreamWithoutRewrite(originUrl) && !hasAesSegmentKey(originUrl)
+                    && !hasGenericSegmentTask(originUrl)) {
+                streamUpstream(originUrl, rangeHeader, output);
+                return;
+            }
             ProxyResponse response = fetch(originUrl);
             if (!running) {
                 return;
@@ -476,6 +523,14 @@ final class HlsProxyServer implements Closeable {
         if (!running) {
             throw new SocketException("Proxy closed");
         }
+        AesSegmentKey aesKey = aesSegmentKey(originUrl);
+        if (aesKey != null) {
+            return new ProxyResponse("video/MP2T", decryptAes128Segment(originUrl, aesKey));
+        }
+        byte[] prefetched = genericPrefetchedSegment(originUrl);
+        if (prefetched != null) {
+            return new ProxyResponse("video/MP2T", prefetched);
+        }
         if (isTransportStream(originUrl, null) && needsH5eDecrypt(originUrl)) {
             return new ProxyResponse("video/MP2T", getCctvSegment(originUrl));
         }
@@ -505,8 +560,15 @@ final class HlsProxyServer implements Closeable {
             if (!running) {
                 throw new SocketException("Proxy closed");
             }
-            if (isPlaylist(originUrl, contentType)) {
-                String playlist = rewritePlaylist(originUrl, new String(body, UTF_8));
+            if (isPlaylist(originUrl, contentType) || isPlaylistBody(body)) {
+                /* HttpURLConnection follows redirects, but HLS relative URIs are
+                 * relative to the final playlist response URL, not the URL that
+                 * initiated the request.  Some IPTV gateways redirect the manifest
+                 * to a short-lived edge host; resolving its segments against the
+                 * gateway produces valid-looking URLs that all return 404. */
+                String responseUrl = connection.getURL().toString();
+                String playlist = rewritePlaylist(originUrl, responseUrl,
+                        new String(body, UTF_8));
                 return new ProxyResponse("application/vnd.apple.mpegurl", playlist.getBytes(UTF_8));
             }
 
@@ -518,17 +580,145 @@ final class HlsProxyServer implements Closeable {
         }
     }
 
-    private String rewritePlaylist(String playlistUrl, String body) throws IOException {
-        URI base = URI.create(playlistUrl);
+    private String rewritePlaylist(String policyUrl, String responseUrl, String body)
+            throws IOException {
+        URI base = URI.create(responseUrl);
         String[] lines = body.split("\\r?\\n", -1);
+        /* Generic third-party HLS may still use the proxy when a WebView supplied
+         * Referer/Cookie headers. It only needs URL rewriting in that case: do not
+         * apply rendition probing, CCTV live-edge holdback, segment prefetch or
+         * decrypt startup gates. */
+        if (!needsSpecialDecrypt(policyUrl)) {
+            if (body.contains("#EXT-X-STREAM-INF")) {
+                return rewriteGenericMasterPlaylist(base, lines);
+            }
+            return rewriteGenericMediaPlaylist(base, lines, body.length());
+        }
         if (body.contains("#EXT-X-STREAM-INF")) {
             return rewriteMasterPlaylist(base, lines);
         }
-        String buffered = rewriteBufferedMediaPlaylist(playlistUrl, base, lines);
-        if (buffered != null) {
-            return buffered;
+        /*
+         * The startup gate and rolling history below are live-stream behavior. Applying
+         * them to VOD used to discard most segments and remove #EXT-X-ENDLIST, which made
+         * CCTV programme pages start on a grey frame or expose a broken duration. Keep a
+         * finite playlist intact and only rewrite its resource URLs through this proxy.
+         */
+        if (!isFiniteMediaPlaylist(body)) {
+            String buffered = rewriteBufferedMediaPlaylist(policyUrl, base, lines);
+            if (buffered != null) {
+                return buffered;
+            }
         }
-        StringBuilder result = new StringBuilder(body.length() + 256);
+        return rewriteDirectPlaylist(base, lines, body.length());
+    }
+
+    /**
+     * Plain media objects do not need playlist rewriting or proprietary decryption.
+     * Stream them as they arrive instead of allocating one full segment byte array and
+     * waiting for the entire download before IJK can consume the first byte.
+     */
+    private static boolean canStreamWithoutRewrite(String originUrl) {
+        if (needsSpecialDecrypt(originUrl) || isPlaylist(originUrl, null)) {
+            return false;
+        }
+        try {
+            String path = URI.create(originUrl).getPath().toLowerCase(Locale.US);
+            return path.endsWith(".ts") || path.endsWith(".m4s")
+                    || path.endsWith(".mp4") || path.endsWith(".flv")
+                    || path.endsWith(".mkv") || path.endsWith(".webm")
+                    || path.endsWith(".mov") || path.endsWith(".avi")
+                    || path.endsWith(".cmfv")
+                    || path.endsWith(".cmfa") || path.endsWith(".aac")
+                    || path.endsWith(".mp3") || path.endsWith(".ac3")
+                    || path.endsWith(".ec3") || path.endsWith(".vtt")
+                    || path.endsWith(".webvtt") || path.endsWith(".key")
+                    || path.endsWith(".bin");
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
+    private void streamUpstream(String originUrl, String rangeHeader, OutputStream output)
+            throws IOException {
+        IOException lastError = null;
+        for (int attempt = 1; attempt <= UPSTREAM_MAX_ATTEMPTS; attempt++) {
+            HttpURLConnection connection = null;
+            boolean responseStarted = false;
+            boolean responseCompleted = false;
+            try {
+                connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+                connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
+                connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
+                connection.setInstanceFollowRedirects(true);
+                applyRequestHeaders(connection, originUrl);
+                if (rangeHeader != null) {
+                    connection.setRequestProperty("Range", rangeHeader);
+                }
+                connection.connect();
+                int status = connection.getResponseCode();
+                if (status != HttpURLConnection.HTTP_OK
+                        && status != HttpURLConnection.HTTP_PARTIAL) {
+                    throw new IOException("Upstream HTTP " + status);
+                }
+                String contentType = sanitizeHeaderValue(connection.getContentType());
+                if (contentType == null) {
+                    contentType = "application/octet-stream";
+                }
+                String contentRange = sanitizeHeaderValue(
+                        connection.getHeaderField("Content-Range"));
+                long contentLength = contentLength(connection);
+                writeStreamingHeaders(output, status, contentType, contentLength, contentRange);
+                responseStarted = true;
+
+                InputStream upstream = connection.getInputStream();
+                try {
+                    // Reuse one copy buffer per bounded worker. A live stream requests
+                    // thousands of segments; avoiding a fresh 64 KiB allocation for every
+                    // request significantly reduces young-generation GC on old TVs.
+                    byte[] buffer = streamCopyBuffer.get();
+                    int count;
+                    while (running && (count = upstream.read(buffer)) != -1) {
+                        output.write(buffer, 0, count);
+                        upstreamDownloadedBytes.addAndGet(count);
+                        streamedResponseBytes.addAndGet(count);
+                    }
+                    output.flush();
+                } finally {
+                    upstream.close();
+                }
+                streamedResponseCount.incrementAndGet();
+                responseCompleted = true;
+                return;
+            } catch (IOException error) {
+                lastError = error;
+                if (responseStarted || attempt == UPSTREAM_MAX_ATTEMPTS
+                        || !isRetryableUpstreamError(error, originUrl)) {
+                    throw error;
+                }
+                SystemClock.sleep((long) UPSTREAM_RETRY_DELAY_MS * attempt);
+            } finally {
+                if (connection != null && !responseCompleted) {
+                    connection.disconnect();
+                }
+            }
+        }
+        throw lastError == null ? new IOException("Upstream request failed") : lastError;
+    }
+
+    private static long contentLength(HttpURLConnection connection) {
+        String value = connection.getHeaderField("Content-Length");
+        if (value == null) {
+            return -1L;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException error) {
+            return -1L;
+        }
+    }
+
+    private String rewriteDirectPlaylist(URI base, String[] lines, int sourceLength) {
+        StringBuilder result = new StringBuilder(sourceLength + 256);
         for (String line : lines) {
             String rewritten = rewritePlaylistTagUris(base, line);
             if (!line.startsWith("#") && line.length() > 0) {
@@ -537,6 +727,314 @@ final class HlsProxyServer implements Closeable {
             result.append(rewritten).append('\n');
         }
         return result.toString();
+    }
+
+    /** Rewrites ordinary HLS and removes standard AES-128 from IJK's responsibility. */
+    private String rewriteGenericMediaPlaylist(URI base, String[] lines, int sourceLength) {
+        StringBuilder result = new StringBuilder(sourceLength + 256);
+        List<String> mediaSegments = new ArrayList<String>();
+        long sequence = parseMediaSequence(lines);
+        AesPlaylistKey currentKey = null;
+        boolean encrypted = false;
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("#EXT-X-KEY:")) {
+                String attributes = trimmed.substring("#EXT-X-KEY:".length());
+                Matcher methodMatcher = HLS_KEY_METHOD.matcher(attributes);
+                String method = methodMatcher.find() ? methodMatcher.group(1).trim() : "";
+                if ("NONE".equalsIgnoreCase(method)) {
+                    currentKey = null;
+                    result.append("#EXT-X-KEY:METHOD=NONE\n");
+                    continue;
+                }
+                Matcher uriMatcher = ATTRIBUTE_URI.matcher(trimmed);
+                if ("AES-128".equalsIgnoreCase(method) && uriMatcher.find()) {
+                    Matcher ivMatcher = HLS_KEY_IV.matcher(attributes);
+                    byte[] explicitIv = ivMatcher.find() ? parseAesIv(ivMatcher.group(1)) : null;
+                    currentKey = new AesPlaylistKey(
+                            base.resolve(uriMatcher.group(1)).toString(), explicitIv);
+                    encrypted = true;
+                    // Segments are returned clear, so prevent old FFmpeg from constructing
+                    // an unsupported crypto+http URL for them.
+                    result.append("#EXT-X-KEY:METHOD=NONE\n");
+                    continue;
+                }
+                currentKey = null;
+                result.append(rewritePlaylistTagUris(base, line)).append('\n');
+                continue;
+            }
+            if (!trimmed.startsWith("#") && trimmed.length() > 0) {
+                String absolute = base.resolve(trimmed).toString();
+                mediaSegments.add(absolute);
+                if (currentKey != null) {
+                    byte[] iv = currentKey.explicitIv == null
+                            ? sequenceIv(sequence) : currentKey.explicitIv;
+                    synchronized (aesSegmentKeys) {
+                        aesSegmentKeys.put(absolute,
+                                new AesSegmentKey(currentKey.keyUrl, iv));
+                    }
+                }
+                result.append(proxyUrl(absolute)).append('\n');
+                sequence++;
+                continue;
+            }
+            result.append(rewritePlaylistTagUris(base, line)).append('\n');
+        }
+        if (!encrypted && needsParallelGenericPrefetch(base.toString())) {
+            prefetchGenericSegments(mediaSegments);
+        }
+        return result.toString();
+    }
+
+    /** Old IJK probes every rendition of some large master playlists. Select one
+     * advertised rendition in the proxy so startup remains deterministic and fast. */
+    private String rewriteGenericMasterPlaylist(URI base, String[] lines) {
+        List<Variant> variants = parseVariants(lines);
+        if (variants.isEmpty()) {
+            return rewriteDirectPlaylist(base, lines, 256);
+        }
+        sortVariants(variants);
+        Variant selected = variants.get(preferredVariantIndex(
+                variants.size(), variantQualityMode));
+        StringBuilder result = new StringBuilder(512);
+        result.append("#EXTM3U\n");
+        for (String line : lines) {
+            if (line.startsWith("#EXT-X-VERSION")
+                    || line.startsWith("#EXT-X-INDEPENDENT-SEGMENTS")
+                    || line.startsWith("#EXT-X-START")
+                    || line.startsWith("#EXT-X-SESSION-DATA")
+                    || line.startsWith("#EXT-X-SESSION-KEY")
+                    || line.startsWith("#EXT-X-MEDIA:")) {
+                result.append(rewritePlaylistTagUris(base, line)).append('\n');
+            }
+        }
+        result.append(selected.info).append('\n')
+                .append(proxyUrl(base.resolve(selected.uri).toString())).append('\n');
+        Log.i(TAG, "Selected generic HLS variant quality=" + variantQualityMode
+                + " choices=" + variants.size() + " bandwidth=" + selected.bandwidth
+                + " advertised=" + selected.width + "x" + selected.height);
+        return result.toString();
+    }
+
+    private static List<Variant> parseVariants(String[] lines) {
+        List<Variant> variants = new ArrayList<Variant>();
+        for (int index = 0; index < lines.length; index++) {
+            String line = lines[index];
+            if (!line.startsWith("#EXT-X-STREAM-INF")) {
+                continue;
+            }
+            Matcher bandwidthMatcher = STREAM_BANDWIDTH.matcher(line);
+            int bandwidth = bandwidthMatcher.find()
+                    ? Integer.parseInt(bandwidthMatcher.group(1)) : 0;
+            Matcher resolutionMatcher = STREAM_RESOLUTION.matcher(line);
+            int width = 0;
+            int height = 0;
+            if (resolutionMatcher.find()) {
+                width = Integer.parseInt(resolutionMatcher.group(1));
+                height = Integer.parseInt(resolutionMatcher.group(2));
+            }
+            for (int uriIndex = index + 1; uriIndex < lines.length; uriIndex++) {
+                String uri = lines[uriIndex].trim();
+                if (uri.length() == 0 || uri.startsWith("#")) {
+                    continue;
+                }
+                variants.add(new Variant(line, uri, bandwidth, width, height));
+                break;
+            }
+        }
+        return variants;
+    }
+
+    private static void sortVariants(List<Variant> variants) {
+        Collections.sort(variants, new Comparator<Variant>() {
+            @Override
+            public int compare(Variant left, Variant right) {
+                long leftQuality = left.advertisedQuality();
+                long rightQuality = right.advertisedQuality();
+                if (leftQuality != rightQuality) {
+                    return leftQuality < rightQuality ? -1 : 1;
+                }
+                return left.bandwidth < right.bandwidth ? -1
+                        : (left.bandwidth == right.bandwidth ? 0 : 1);
+            }
+        });
+    }
+
+    private boolean hasAesSegmentKey(String originUrl) {
+        synchronized (aesSegmentKeys) {
+            return aesSegmentKeys.containsKey(originUrl);
+        }
+    }
+
+    private boolean hasGenericSegmentTask(String originUrl) {
+        synchronized (genericSegmentTasks) {
+            return genericSegmentTasks.containsKey(originUrl);
+        }
+    }
+
+    private byte[] genericPrefetchedSegment(String originUrl) throws IOException {
+        FutureTask<byte[]> task;
+        synchronized (genericSegmentTasks) {
+            task = genericSegmentTasks.get(originUrl);
+        }
+        if (task == null) {
+            return null;
+        }
+        try {
+            byte[] body = task.get();
+            synchronized (genericSegmentTasks) {
+                genericSegmentTasks.remove(originUrl);
+            }
+            return body;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IOException("HLS segment prefetch interrupted", error);
+        } catch (ExecutionException error) {
+            synchronized (genericSegmentTasks) {
+                genericSegmentTasks.remove(originUrl);
+            }
+            Throwable cause = error.getCause();
+            if (cause instanceof IOException) {
+                throw (IOException) cause;
+            }
+            throw new IOException("HLS segment prefetch failed", cause);
+        }
+    }
+
+    private void prefetchGenericSegments(List<String> segments) {
+        if (!running || segments == null || segments.isEmpty()) {
+            return;
+        }
+        // IJK starts live HLS at -3. Fetch that segment and the next two concurrently;
+        // this specifically helps per-connection-throttled IPTV servers without keeping
+        // a large rolling cache on Android 4.x televisions.
+        int start = Math.max(0, segments.size() - 3);
+        int end = Math.min(segments.size(), start + 3);
+        for (int index = start; index < end; index++) {
+            final String url = segments.get(index);
+            FutureTask<byte[]> task;
+            synchronized (genericSegmentTasks) {
+                task = genericSegmentTasks.get(url);
+                if (task != null) {
+                    continue;
+                }
+                task = new FutureTask<byte[]>(new Callable<byte[]>() {
+                    @Override
+                    public byte[] call() throws Exception {
+                        return downloadRaw(url);
+                    }
+                });
+                genericSegmentTasks.put(url, task);
+            }
+            genericPrefetchWorkers.execute(task);
+        }
+    }
+
+    private static boolean needsParallelGenericPrefetch(String playlistUrl) {
+        if (playlistUrl == null) {
+            return false;
+        }
+        String value = playlistUrl.toLowerCase(Locale.US);
+        return value.contains(":9901/tsfile/live/") || value.contains("key=txiptv");
+    }
+
+    private AesSegmentKey aesSegmentKey(String originUrl) {
+        synchronized (aesSegmentKeys) {
+            return aesSegmentKeys.get(originUrl);
+        }
+    }
+
+    private byte[] decryptAes128Segment(String originUrl, AesSegmentKey segmentKey)
+            throws IOException {
+        byte[] encrypted = downloadRaw(originUrl);
+        if ((encrypted.length & 15) != 0) {
+            throw new IOException("AES-128 segment length is not block aligned");
+        }
+        byte[] key;
+        synchronized (aesKeyCache) {
+            key = aesKeyCache.get(segmentKey.keyUrl);
+        }
+        if (key == null) {
+            key = downloadRaw(segmentKey.keyUrl);
+            if (key.length != 16) {
+                throw new IOException("Invalid AES-128 key length " + key.length);
+            }
+            synchronized (aesKeyCache) {
+                aesKeyCache.put(segmentKey.keyUrl, key);
+            }
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
+                    new IvParameterSpec(segmentKey.iv));
+            return cipher.doFinal(encrypted);
+        } catch (Exception error) {
+            throw new IOException("Unable to decrypt AES-128 HLS segment", error);
+        }
+    }
+
+    private byte[] downloadRaw(String originUrl) throws IOException {
+        HttpURLConnection connection = null;
+        boolean consumed = false;
+        try {
+            connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+            connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
+            connection.setInstanceFollowRedirects(true);
+            applyRequestHeaders(connection, originUrl);
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) {
+                throw new IOException("Upstream HTTP " + status);
+            }
+            byte[] body = readUpstreamFully(connection.getInputStream(),
+                    connection.getContentLength());
+            consumed = true;
+            return body;
+        } finally {
+            if (connection != null && !consumed) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static byte[] parseAesIv(String value) {
+        String hex = value == null ? "" : value.trim();
+        if (hex.length() > 32) {
+            hex = hex.substring(hex.length() - 32);
+        }
+        StringBuilder padded = new StringBuilder(32);
+        for (int index = hex.length(); index < 32; index++) {
+            padded.append('0');
+        }
+        padded.append(hex);
+        byte[] iv = new byte[16];
+        for (int index = 0; index < iv.length; index++) {
+            try {
+                iv[index] = (byte) Integer.parseInt(
+                        padded.substring(index * 2, index * 2 + 2), 16);
+            } catch (NumberFormatException ignored) {
+                return new byte[16];
+            }
+        }
+        return iv;
+    }
+
+    private static byte[] sequenceIv(long sequence) {
+        byte[] iv = new byte[16];
+        for (int index = 15; index >= 8; index--) {
+            iv[index] = (byte) (sequence & 0xffL);
+            sequence >>>= 8;
+        }
+        return iv;
+    }
+
+    private static boolean isFiniteMediaPlaylist(String body) {
+        if (body == null) {
+            return false;
+        }
+        String upper = body.toUpperCase(Locale.US);
+        return upper.contains("#EXT-X-ENDLIST")
+                || upper.contains("#EXT-X-PLAYLIST-TYPE:VOD");
     }
 
     private String rewriteBufferedMediaPlaylist(String playlistUrl, URI base, String[] lines)
@@ -1327,45 +1825,11 @@ final class HlsProxyServer implements Closeable {
     }
 
     private String rewriteMasterPlaylist(URI base, String[] lines) throws IOException {
-        List<Variant> variants = new ArrayList<Variant>();
-        for (int index = 0; index < lines.length; index++) {
-            String line = lines[index];
-            if (!line.startsWith("#EXT-X-STREAM-INF")) {
-                continue;
-            }
-            Matcher matcher = STREAM_BANDWIDTH.matcher(line);
-            int bandwidth = matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
-            Matcher resolutionMatcher = STREAM_RESOLUTION.matcher(line);
-            int width = 0;
-            int height = 0;
-            if (resolutionMatcher.find()) {
-                width = Integer.parseInt(resolutionMatcher.group(1));
-                height = Integer.parseInt(resolutionMatcher.group(2));
-            }
-            for (int uriIndex = index + 1; uriIndex < lines.length; uriIndex++) {
-                String uri = lines[uriIndex];
-                if (uri.length() == 0 || uri.startsWith("#")) {
-                    continue;
-                }
-                variants.add(new Variant(line, uri, bandwidth, width, height));
-                break;
-            }
-        }
+        List<Variant> variants = parseVariants(lines);
         if (variants.isEmpty()) {
             return "#EXTM3U\n";
         }
-        Collections.sort(variants, new Comparator<Variant>() {
-            @Override
-            public int compare(Variant left, Variant right) {
-                long leftQuality = left.advertisedQuality();
-                long rightQuality = right.advertisedQuality();
-                if (leftQuality != rightQuality) {
-                    return leftQuality < rightQuality ? -1 : 1;
-                }
-                return left.bandwidth < right.bandwidth ? -1
-                        : (left.bandwidth == right.bandwidth ? 0 : 1);
-            }
-        });
+        sortVariants(variants);
 
         String requestedQuality = configuredVariantQualityEnabled
                 ? variantQualityMode : VARIANT_QUALITY_HIGH;
@@ -1524,6 +1988,31 @@ final class HlsProxyServer implements Closeable {
         return lowerUrl.contains(".m3u8") || lowerType.contains("mpegurl");
     }
 
+    private static boolean isPlaylistBody(byte[] body) {
+        if (body == null || body.length < 7) {
+            return false;
+        }
+        int offset = 0;
+        if (body.length >= 3 && (body[0] & 0xff) == 0xef
+                && (body[1] & 0xff) == 0xbb && (body[2] & 0xff) == 0xbf) {
+            offset = 3;
+        }
+        while (offset < body.length && (body[offset] == ' ' || body[offset] == '\t'
+                || body[offset] == '\r' || body[offset] == '\n')) {
+            offset++;
+        }
+        byte[] marker = "#EXTM3U".getBytes(UTF_8);
+        if (body.length - offset < marker.length) {
+            return false;
+        }
+        for (int index = 0; index < marker.length; index++) {
+            if (body[offset + index] != marker[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean isTransportStream(String url, String contentType) {
         String lowerPath = URI.create(url).getPath().toLowerCase(Locale.US);
         String lowerType = contentType == null ? "" : contentType.toLowerCase(Locale.US);
@@ -1576,6 +2065,10 @@ final class HlsProxyServer implements Closeable {
 
     private static boolean needsCmgDecrypt(String url) {
         return isYangshipinUrl(url);
+    }
+
+    static boolean needsSpecialDecrypt(String url) {
+        return needsH5eDecrypt(url) || needsCmgDecrypt(url);
     }
 
     private static boolean isYangshipinUrl(String url) {
@@ -2096,11 +2589,19 @@ final class HlsProxyServer implements Closeable {
         return value == -1 && line.length() == 0 ? null : line.toString();
     }
 
-    private static void drainHeaders(InputStream input) throws IOException {
+    private static String readRangeHeader(InputStream input) throws IOException {
         String line;
+        String range = null;
         do {
             line = readAsciiLine(input);
+            if (line != null && line.regionMatches(true, 0, "Range:", 0, 6)) {
+                String value = sanitizeHeaderValue(line.substring(6));
+                if (value != null && value.startsWith("bytes=")) {
+                    range = value;
+                }
+            }
         } while (line != null && line.length() > 0);
+        return range;
     }
 
     private static void writeOk(OutputStream output, String contentType, byte[] body) throws IOException {
@@ -2112,6 +2613,27 @@ final class HlsProxyServer implements Closeable {
                 + "Connection: close\r\n\r\n";
         output.write(headers.getBytes(UTF_8));
         output.write(body);
+        output.flush();
+    }
+
+    private static void writeStreamingHeaders(OutputStream output, int status,
+            String contentType, long contentLength, String contentRange) throws IOException {
+        StringBuilder headers = new StringBuilder(256);
+        headers.append("HTTP/1.1 ").append(status)
+                .append(status == HttpURLConnection.HTTP_PARTIAL
+                        ? " Partial Content\r\n" : " OK\r\n")
+                .append("Content-Type: ").append(contentType).append("\r\n");
+        if (contentLength >= 0L) {
+            headers.append("Content-Length: ").append(contentLength).append("\r\n");
+        }
+        if (contentRange != null) {
+            headers.append("Content-Range: ").append(contentRange).append("\r\n");
+        }
+        headers.append("Accept-Ranges: bytes\r\n")
+                .append("Cache-Control: no-store, no-cache, must-revalidate\r\n")
+                .append("Pragma: no-cache\r\n")
+                .append("Connection: close\r\n\r\n");
+        output.write(headers.toString().getBytes(UTF_8));
         output.flush();
     }
 
@@ -2128,6 +2650,9 @@ final class HlsProxyServer implements Closeable {
 
     @Override
     public void close() {
+        Log.i(TAG, "Proxy closing streamedResponses=" + streamedResponseCount.get()
+                + " streamedBytes=" + streamedResponseBytes.get()
+                + " upstreamBytes=" + upstreamDownloadedBytes.get());
         running = false;
         monitoredCctvPlaylistUrl = null;
         NativeH5eDecryptor.cancelPendingDecrypts();
@@ -2158,6 +2683,15 @@ final class HlsProxyServer implements Closeable {
         synchronized (recordingTokens) {
             recordingTokens.clear();
         }
+        List<FutureTask<byte[]>> pendingGenericTasks;
+        synchronized (genericSegmentTasks) {
+            pendingGenericTasks =
+                    new ArrayList<FutureTask<byte[]>>(genericSegmentTasks.values());
+            genericSegmentTasks.clear();
+        }
+        for (FutureTask<byte[]> task : pendingGenericTasks) {
+            task.cancel(true);
+        }
         List<FutureTask<byte[]>> pendingCmgTasks;
         synchronized (cmgSegmentTasks) {
             pendingCmgTasks = new ArrayList<FutureTask<byte[]>>(cmgSegmentTasks.values());
@@ -2175,6 +2709,7 @@ final class HlsProxyServer implements Closeable {
             }
         }
         cctvPrefetchWorkers.shutdownNow();
+        genericPrefetchWorkers.shutdownNow();
         workers.shutdownNow();
         try {
             if (!cctvPrefetchWorkers.awaitTermination(
@@ -2632,6 +3167,26 @@ final class HlsProxyServer implements Closeable {
             this.sequence = sequence;
             this.url = url;
             this.tags = tags;
+        }
+    }
+
+    private static final class AesPlaylistKey {
+        final String keyUrl;
+        final byte[] explicitIv;
+
+        AesPlaylistKey(String keyUrl, byte[] explicitIv) {
+            this.keyUrl = keyUrl;
+            this.explicitIv = explicitIv;
+        }
+    }
+
+    private static final class AesSegmentKey {
+        final String keyUrl;
+        final byte[] iv;
+
+        AesSegmentKey(String keyUrl, byte[] iv) {
+            this.keyUrl = keyUrl;
+            this.iv = iv;
         }
     }
 

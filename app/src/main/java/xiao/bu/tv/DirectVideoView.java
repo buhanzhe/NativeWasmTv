@@ -1,7 +1,10 @@
 package xiao.bu.tv;
 
 import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.PorterDuff;
 import android.util.AttributeSet;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -94,6 +97,39 @@ public final class DirectVideoView extends SurfaceView implements SurfaceHolder.
         // stretches to the full window while a channel switch is resolving.
         getHolder().setSizeFromLayout();
         requestLayout();
+    }
+
+    /** Replaces queued decoder buffers so a released channel cannot flash again. */
+    boolean clearLastFrame() {
+        SurfaceHolder holder = activeHolder;
+        if (holder == null || holder.getSurface() == null
+                || !holder.getSurface().isValid()) {
+            return false;
+        }
+        boolean cleared = false;
+        // Surface queues are commonly double-buffered on legacy televisions. Posting
+        // two opaque black buffers prevents an older decoder buffer from resurfacing.
+        for (int pass = 0; pass < 2; pass++) {
+            Canvas canvas = null;
+            try {
+                canvas = holder.lockCanvas();
+                if (canvas == null) {
+                    break;
+                }
+                canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC);
+                cleared = true;
+            } catch (RuntimeException error) {
+                return cleared;
+            } finally {
+                if (canvas != null) {
+                    try {
+                        holder.unlockCanvasAndPost(canvas);
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
+        }
+        return cleared;
     }
 
     void onPause() {

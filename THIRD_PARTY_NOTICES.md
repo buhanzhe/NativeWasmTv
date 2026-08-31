@@ -16,10 +16,12 @@ Files under `app/src/main/jni/wasm-rt` come from
 
 License: Apache License 2.0. See `third_party/WABT.LICENSE`.
 
-## ijkplayer
+## ijkplayer and FFmpeg
 
-The Android app depends on
-[bilibili/ijkplayer](https://github.com/bilibili/ijkplayer) `0.8.8`
-through its published Android AAR artifacts.
+The Android app uses [bilibili/ijkplayer](https://github.com/bilibili/ijkplayer)
+`0.8.8`. Its Android native libraries are rebuilt from the corresponding
+upstream sources with the small feature profile in `tools/ijk/module-ntv.sh`.
+The profile adds RTSP over TCP/UDP and the MP2 audio decoder to the upstream
+lite configuration. The Java API continues to use the published 0.8.8 AAR.
 
 License: LGPL-2.1. See the upstream project for the complete notice.

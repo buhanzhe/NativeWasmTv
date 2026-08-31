@@ -165,7 +165,8 @@ final class YangshipinWebResolver {
                     + "})();";
 
     private final Activity activity;
-    private final WebView webView;
+    private final FrameLayout root;
+    private WebView webView;
     private final boolean keepTracePage;
     private final SharedPreferences resolverPrefs;
     private final Runnable timeout = new Runnable() {
@@ -197,6 +198,7 @@ final class YangshipinWebResolver {
     @SuppressLint("SetJavaScriptEnabled")
     YangshipinWebResolver(Activity activity, FrameLayout root, boolean keepTracePage) {
         this.activity = activity;
+        this.root = root;
         this.keepTracePage = keepTracePage;
         resolverPrefs = activity.getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE);
         long savedAt = resolverPrefs.getLong("clock_saved_at", 0L);
@@ -204,6 +206,13 @@ final class YangshipinWebResolver {
         long savedAge = System.currentTimeMillis() - savedAt;
         if (savedOffset != Long.MIN_VALUE && savedAge >= 0L && savedAge < CLOCK_CACHE_MS) {
             serverClockOffsetMs = savedOffset;
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void ensureWebView() {
+        if (webView != null) {
+            return;
         }
         webView = new WebView(activity.getApplicationContext());
         webView.setBackgroundColor(Color.TRANSPARENT);
@@ -313,7 +322,6 @@ final class YangshipinWebResolver {
                     return;
                 }
                 pendingRequest = new Pending(requestId, channel, definition, callback);
-                webView.setVisibility(View.VISIBLE);
                 String cacheKey = pendingRequest.cacheKey();
                 CachedUrl cached = apiCache.get(cacheKey);
                 if (cached == null) {
@@ -333,6 +341,8 @@ final class YangshipinWebResolver {
                     return;
                 }
                 try {
+                    ensureWebView();
+                    webView.setVisibility(View.VISIBLE);
                     boolean clockKnown = serverClockOffsetMs != Long.MIN_VALUE;
                     long guidTimeMs = clockKnown
                             ? System.currentTimeMillis() + serverClockOffsetMs
@@ -634,6 +644,9 @@ final class YangshipinWebResolver {
 
     void destroy() {
         clearPending(false);
+        if (webView == null) {
+            return;
+        }
         webView.removeCallbacks(traceKeepAlive);
         webView.stopLoading();
         webView.loadUrl("about:blank");
@@ -642,6 +655,7 @@ final class YangshipinWebResolver {
             parent.removeView(webView);
         }
         webView.destroy();
+        webView = null;
     }
 
     private void maybeResolve(String url) {
@@ -887,29 +901,35 @@ final class YangshipinWebResolver {
     }
 
     private void clearPending(boolean stopPage) {
-        webView.removeCallbacks(timeout);
-        webView.removeCallbacks(pollPage);
+        WebView currentWebView = webView;
+        if (currentWebView != null) {
+            currentWebView.removeCallbacks(timeout);
+            currentWebView.removeCallbacks(pollPage);
+        }
         pendingRequest = null;
+        if (currentWebView == null) {
+            return;
+        }
         if (stopPage) {
             if (keepTracePage) {
-                webView.setVisibility(View.VISIBLE);
-                webView.onResume();
+                currentWebView.setVisibility(View.VISIBLE);
+                currentWebView.onResume();
                 startTraceKeepAlive();
                 return;
             }
-            webView.removeCallbacks(traceKeepAlive);
+            currentWebView.removeCallbacks(traceKeepAlive);
             pauseWebMedia();
-            webView.stopLoading();
-            webView.loadDataWithBaseURL("about:blank", "", "text/html", "UTF-8", null);
-            webView.setVisibility(View.GONE);
-            webView.onPause();
+            currentWebView.stopLoading();
+            currentWebView.loadDataWithBaseURL("about:blank", "", "text/html", "UTF-8", null);
+            currentWebView.setVisibility(View.GONE);
+            currentWebView.onPause();
         } else {
-            webView.removeCallbacks(traceKeepAlive);
+            currentWebView.removeCallbacks(traceKeepAlive);
         }
     }
 
     private void startTraceKeepAlive() {
-        if (!keepTracePage) {
+        if (!keepTracePage || webView == null) {
             return;
         }
         webView.removeCallbacks(traceKeepAlive);
@@ -917,7 +937,8 @@ final class YangshipinWebResolver {
     }
 
     private void keepTracePlaybackAlive() {
-        if (!keepTracePage || Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
+        if (!keepTracePage || webView == null
+                || Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
             return;
         }
         try {
@@ -951,7 +972,7 @@ final class YangshipinWebResolver {
     }
 
     private void pauseWebMedia() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
+        if (webView == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
             return;
         }
         try {

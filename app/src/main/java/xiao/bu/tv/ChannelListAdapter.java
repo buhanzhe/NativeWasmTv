@@ -3,6 +3,7 @@ package xiao.bu.tv;
 import android.content.Context;
 import android.graphics.Color;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
@@ -18,9 +19,12 @@ final class ChannelListAdapter extends BaseAdapter {
     }
 
     private final LayoutInflater inflater;
+    private final UiScaleHelper uiScaleHelper;
+    private float uiScale = 1f;
     private ChannelCatalog.Group[] groups = ChannelCatalog.GROUPS;
     private Channel[] channels = ChannelCatalog.CCTV_CHANNELS;
     private int selectedIndex;
+    private int channelGroupIndex = -1;
     private boolean showingGroups = true;
     private int favoriteFocusIndex = -1;
     private int playingIndex = -1;
@@ -36,9 +40,48 @@ final class ChannelListAdapter extends BaseAdapter {
             favoriteListener.onFavoriteClick((Integer) view.getTag());
         }
     };
+    private final View.OnTouchListener favoriteTouchListener =
+            new View.OnTouchListener() {
+        @Override
+        public boolean onTouch(View view, MotionEvent event) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                view.setPressed(true);
+                if (view.getParent() != null) {
+                    view.getParent().requestDisallowInterceptTouchEvent(true);
+                }
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP) {
+                view.setPressed(false);
+                if (view.getParent() != null) {
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                view.performClick();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                view.setPressed(false);
+                if (view.getParent() != null) {
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                return true;
+            }
+            return true;
+        }
+    };
 
-    ChannelListAdapter(Context context) {
+    ChannelListAdapter(Context context, UiScaleHelper uiScaleHelper) {
         inflater = LayoutInflater.from(context);
+        this.uiScaleHelper = uiScaleHelper;
+    }
+
+    void setUiScale(float uiScale) {
+        if (Math.abs(this.uiScale - uiScale) < 0.001f) {
+            return;
+        }
+        this.uiScale = uiScale;
+        notifyDataSetChanged();
     }
 
     void showGroups(ChannelCatalog.Group[] groups, int selectedIndex) {
@@ -48,8 +91,9 @@ final class ChannelListAdapter extends BaseAdapter {
         notifyDataSetChanged();
     }
 
-    void showChannels(Channel[] channels, int selectedIndex,
+    void showChannels(int groupIndex, Channel[] channels, int selectedIndex,
             int playingIndex, int playingSourceIndex) {
+        this.channelGroupIndex = groupIndex;
         this.channels = channels;
         this.selectedIndex = selectedIndex;
         this.playingIndex = playingIndex;
@@ -113,6 +157,7 @@ final class ChannelListAdapter extends BaseAdapter {
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
         ViewHolder holder;
+        boolean favoriteFocused = !showingGroups && position == favoriteFocusIndex;
         if (convertView == null) {
             convertView = inflater.inflate(showingGroups
                     ? R.layout.item_channel_group : R.layout.item_channel, parent, false);
@@ -125,6 +170,7 @@ final class ChannelListAdapter extends BaseAdapter {
         } else {
             holder = (ViewHolder) convertView.getTag();
         }
+        uiScaleHelper.apply(convertView, uiScale);
 
         if (showingGroups) {
             ChannelCatalog.Group group = groups[position];
@@ -134,7 +180,8 @@ final class ChannelListAdapter extends BaseAdapter {
             holder.count.setText(String.valueOf(group.channels.length));
         } else {
             Channel channel = channels[position];
-            holder.number.setText(channel.number);
+            holder.number.setText(ChannelCatalog.displayNumber(
+                    channelGroupIndex, position));
             holder.name.setText(channel.name);
             int sourceCount = Math.max(1, channel.sourceCount());
             if (position == playingIndex) {
@@ -147,14 +194,17 @@ final class ChannelListAdapter extends BaseAdapter {
             boolean favorite = favoriteListener != null
                     && favoriteListener.isFavorite(position);
             holder.favorite.setText(favorite ? "★" : "☆");
-            holder.favorite.setTextColor(favorite
+            holder.favorite.setTextColor(favoriteFocused ? Color.WHITE : favorite
                     ? FAVORITE_ACTIVE_COLOR : FAVORITE_INACTIVE_COLOR);
             holder.favorite.setContentDescription(favorite ? "取消收藏" : "收藏");
-            holder.favorite.setSelected(position == favoriteFocusIndex);
+            holder.favorite.setSelected(favoriteFocused);
+            holder.favorite.setScaleX(favoriteFocused ? 1.08f : 1f);
+            holder.favorite.setScaleY(favoriteFocused ? 1.08f : 1f);
             holder.favorite.setTag(Integer.valueOf(position));
             holder.favorite.setOnClickListener(favoriteClickListener);
+            holder.favorite.setOnTouchListener(favoriteTouchListener);
         }
-        convertView.setActivated(position == selectedIndex);
+        convertView.setActivated(position == selectedIndex && !favoriteFocused);
         return convertView;
     }
 

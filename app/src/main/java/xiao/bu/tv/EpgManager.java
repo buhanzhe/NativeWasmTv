@@ -1,6 +1,7 @@
 package xiao.bu.tv;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.util.Log;
 import android.util.Xml;
 
@@ -8,6 +9,7 @@ import org.xmlpull.v1.XmlPullParser;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -31,6 +33,9 @@ final class EpgManager {
     static final String DEFAULT_URL = "https://iptv.burningc4.com/guide.xml";
     private static final String TAG = "EpgManager";
     private static final String CACHE_FILE = "epg-guide-cache.xml";
+    private static final String CACHE_PREFS = "epg_cache";
+    private static final String CACHE_SOURCE_URL = "source_url";
+    private static final long CACHE_VALID_MS = 10L * 60L * 1000L;
     private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
     private static final long KEEP_PAST_MS = 6L * 60L * 60L * 1000L;
     private static final long KEEP_FUTURE_MS = 36L * 60L * 60L * 1000L;
@@ -113,16 +118,31 @@ final class EpgManager {
             @Override
             public void run() {
                 try {
+                    String normalizedUrl = sourceUrl == null ? "" : sourceUrl.trim();
                     byte[] cached = readCache();
-                    if (cached.length > 0 && requestId == refreshGeneration) {
-                        publish(parse(cached), sourceUrl);
-                        notifyListener(listener);
+                    boolean cacheMatches = normalizedUrl.equals(context
+                            .getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
+                            .getString(CACHE_SOURCE_URL, ""));
+                    if (cached.length > 0 && cacheMatches
+                            && requestId == refreshGeneration) {
+                        try {
+                            publish(parse(cached), normalizedUrl);
+                            if (isCacheFresh()) {
+                                return;
+                            }
+                            // Show stale data while the refresh is downloading. A fresh
+                            // cache is notified once from finally after loading is cleared.
+                            notifyListener(listener);
+                        } catch (Exception cacheError) {
+                            context.deleteFile(CACHE_FILE);
+                            Log.w(TAG, "Ignoring invalid EPG cache", cacheError);
+                        }
                     }
-                    byte[] downloaded = download(sourceUrl);
+                    byte[] downloaded = download(normalizedUrl);
                     Guide parsed = parse(downloaded);
-                    writeCache(downloaded);
+                    writeCache(downloaded, normalizedUrl);
                     if (requestId == refreshGeneration) {
-                        publish(parsed, sourceUrl);
+                        publish(parsed, normalizedUrl);
                     }
                 } catch (Exception error) {
                     if (requestId == refreshGeneration) {
@@ -165,13 +185,24 @@ final class EpgManager {
         }
     }
 
-    private void writeCache(byte[] bytes) throws IOException {
+    private boolean isCacheFresh() {
+        File cache = context.getFileStreamPath(CACHE_FILE);
+        long age = System.currentTimeMillis() - cache.lastModified();
+        return cache.isFile() && age >= 0L && age < CACHE_VALID_MS;
+    }
+
+    private void writeCache(byte[] bytes, String sourceUrl) throws IOException {
         FileOutputStream output = context.openFileOutput(CACHE_FILE, Context.MODE_PRIVATE);
         try {
             output.write(bytes);
         } finally {
             output.close();
         }
+        SharedPreferences preferences = context.getSharedPreferences(
+                CACHE_PREFS, Context.MODE_PRIVATE);
+        // Keep the cache file and its source identity in sync across cold starts.
+        //noinspection ApplySharedPref
+        preferences.edit().putString(CACHE_SOURCE_URL, sourceUrl).commit();
     }
 
     private static byte[] download(String sourceUrl) throws IOException {

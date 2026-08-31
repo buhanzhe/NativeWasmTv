@@ -15,11 +15,24 @@ import java.util.Locale;
 
 final class EpgListAdapter extends BaseAdapter {
     private final LayoutInflater inflater;
+    private final UiScaleHelper uiScaleHelper;
+    private final float density;
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
     private List<EpgManager.Program> programs = Collections.emptyList();
+    private float uiScale = 1f;
 
-    EpgListAdapter(Context context) {
+    EpgListAdapter(Context context, UiScaleHelper uiScaleHelper) {
         inflater = LayoutInflater.from(context);
+        this.uiScaleHelper = uiScaleHelper;
+        density = context.getResources().getDisplayMetrics().density;
+    }
+
+    void setUiScale(float uiScale) {
+        if (Math.abs(this.uiScale - uiScale) < 0.001f) {
+            return;
+        }
+        this.uiScale = uiScale;
+        notifyDataSetChanged();
     }
 
     void showPrograms(List<EpgManager.Program> programs) {
@@ -65,11 +78,20 @@ final class EpgListAdapter extends BaseAdapter {
         } else {
             holder = (ViewHolder) convertView.getTag();
         }
+        uiScaleHelper.apply(convertView, uiScale);
+        convertView.setMinimumHeight(Math.round(52f * density * uiScale));
         EpgManager.Program program = getItem(position);
         holder.time.setText(timeFormat.format(new Date(program.startMillis)) + "–"
                 + timeFormat.format(new Date(program.stopMillis)));
         holder.title.setText(program.title);
-        convertView.setActivated(program.isPlaying(System.currentTimeMillis()));
+        boolean current = program.isPlaying(System.currentTimeMillis());
+        convertView.setBackgroundResource(current
+                ? R.drawable.epg_program_current_background
+                : R.drawable.epg_program_background);
+        convertView.setActivated(current);
+        holder.time.setActivated(current);
+        holder.title.setActivated(current);
+        convertView.refreshDrawableState();
         return convertView;
     }
 

@@ -3,18 +3,27 @@ package xiao.bu.tv;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.WebBackForwardList;
+import android.webkit.WebHistoryItem;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import java.util.Locale;
 import java.net.URLDecoder;
@@ -24,19 +33,26 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.util.LinkedHashSet;
 
 import org.json.JSONObject;
 
 public final class WebSourceView extends FrameLayout {
+    private static final int VIEWPORT_2K_WIDTH = 2560;
+    private static final int VIEWPORT_2K_HEIGHT = 1440;
     private static final int VIEWPORT_1080P_WIDTH = 1920;
     private static final int VIEWPORT_1080P_HEIGHT = 1080;
     private static final int VIEWPORT_720P_WIDTH = 1280;
     private static final int VIEWPORT_720P_HEIGHT = 720;
-    private static final int VIEWPORT_480P_WIDTH = 854;
-    private static final int VIEWPORT_480P_HEIGHT = 480;
-    private static final String DESKTOP_USER_AGENT =
+    private static final String WINDOWS_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 nTvWebView/1.5";
+                    + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    private static final String MACOS_USER_AGENT =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                    + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    private static final String IPAD_USER_AGENT =
+            "Mozilla/5.0 (iPad; CPU OS 17_1 like Mac OS X) AppleWebKit/605.1.15 "
+                    + "(KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1";
     interface Listener {
         void onPageStarted(int requestId, String url);
         void onPageReady(int requestId, String url, String title);
@@ -46,19 +62,26 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private static final String TAG = "WebSourceView";
-    private final WebView webView;
+    private WebView webView;
+    private final LinearLayout loadingOverlay;
+    private String browserUserAgent;
+    private ProgressBar loadingProgress;
+    private TextView loadingText;
     private Listener listener;
     private int requestId = -1;
     private volatile String pageUrl;
-    private String lastStreamUrl;
-    private boolean streamReported;
+    private final LinkedHashSet<String> discoveredStreamUrls =
+            new LinkedHashSet<String>();
     private boolean pageActive;
+    private boolean clearInitialHistory;
     private boolean destroyed;
     private int resetGeneration;
-    private String viewportMode = "1080p";
+    private String viewportMode = "720p";
+    private String userAgentMode = "windows";
+    private volatile String activeUserAgent = WINDOWS_USER_AGENT;
     private boolean loadImages = true;
-    private int viewportWidth = VIEWPORT_1080P_WIDTH;
-    private int viewportHeight = VIEWPORT_1080P_HEIGHT;
+    private int viewportWidth = VIEWPORT_720P_WIDTH;
+    private int viewportHeight = VIEWPORT_720P_HEIGHT;
     private int compatibilityInjectionCount;
     private String compatibilityBundleUrl;
     private byte[] compatibilityBundle;
@@ -72,11 +95,43 @@ public final class WebSourceView extends FrameLayout {
         super(context, attrs);
         setBackgroundColor(0xff000000);
         setClipChildren(true);
-        webView = new WebView(context);
-        webView.setPivotX(0f);
-        webView.setPivotY(0f);
-        addView(webView, new LayoutParams(viewportWidth, viewportHeight));
-        WebSettings settings = webView.getSettings();
+        // Creating even a hidden WebView initializes the Chromium/WebKit runtime and
+        // noticeably delays native-channel startup on Android 4.x televisions. Keep
+        // the browser lazy and create it only when a web channel is actually opened.
+        webView = null;
+        loadingOverlay = createLoadingOverlay(context);
+        addView(loadingOverlay, new LayoutParams(
+                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        setVisibility(View.GONE);
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private WebView createWebView(Context context) {
+        WebView nextWebView = new WebView(context);
+        WebSettings settings = nextWebView.getSettings();
+        if (browserUserAgent == null) {
+            browserUserAgent = settings.getUserAgentString();
+        }
+        if ("native".equals(userAgentMode)) {
+            activeUserAgent = browserUserAgent;
+        }
+        configureWebViewSettings(settings);
+        nextWebView.setPivotX(0f);
+        nextWebView.setPivotY(0f);
+        nextWebView.setInitialScale(cssInitialScalePercent());
+        nextWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public Bitmap getDefaultVideoPoster() {
+                Bitmap poster = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+                poster.eraseColor(Color.TRANSPARENT);
+                return poster;
+            }
+        });
+        nextWebView.setWebViewClient(new SourceClient());
+        return nextWebView;
+    }
+
+    private void configureWebViewSettings(WebSettings settings) {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
@@ -84,20 +139,109 @@ public final class WebSourceView extends FrameLayout {
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
-        settings.setLoadsImagesAutomatically(true);
-        settings.setBlockNetworkImage(false);
-        settings.setUserAgentString(DESKTOP_USER_AGENT);
-        webView.setInitialScale(cssInitialScalePercent());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-            settings.setMediaPlaybackRequiresUserGesture(false);
-        }
+        settings.setLoadsImagesAutomatically(loadImages);
+        settings.setBlockNetworkImage(!loadImages);
+        settings.setUserAgentString(activeUserAgent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
         CookieManager.getInstance().setAcceptCookie(true);
-        webView.setWebChromeClient(new WebChromeClient());
-        webView.setWebViewClient(new SourceClient());
-        setVisibility(View.GONE);
+    }
+
+    private void replaceWebViewForNewPage() {
+        WebView previous = webView;
+        if (previous != null) {
+            previous.stopLoading();
+            previous.setWebViewClient(null);
+            previous.setWebChromeClient(null);
+            previous.onPause();
+            removeView(previous);
+            previous.removeAllViews();
+            previous.destroy();
+        }
+        webView = createWebView(getContext());
+        addView(webView, 0, new LayoutParams(viewportWidth, viewportHeight));
+        updateDesktopViewport(getWidth(), getHeight());
+    }
+
+    private void destroyCurrentWebView() {
+        WebView current = webView;
+        webView = null;
+        if (current == null) {
+            return;
+        }
+        current.stopLoading();
+        current.setWebViewClient(null);
+        current.setWebChromeClient(null);
+        current.onPause();
+        removeView(current);
+        current.removeAllViews();
+        current.destroy();
+    }
+
+    /*
+     * A stopped WebView can still deliver resource callbacks that were queued by the
+     * previous document. Reusing that instance lets an old channel's M3U8 be reported
+     * with the new request id. A fresh instance gives every web channel an isolated
+     * request pipeline while retaining the shared WebView cookie/cache stores.
+     */
+    private void prepareFreshPage() {
+        pageActive = false;
+        requestId = -1;
+        resetGeneration++;
+        replaceWebViewForNewPage();
+    }
+
+    private LinearLayout createLoadingOverlay(Context context) {
+        LinearLayout card = new LinearLayout(context);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+
+        loadingProgress = new ProgressBar(context, null,
+                android.R.attr.progressBarStyleSmall);
+        card.addView(loadingProgress);
+
+        loadingText = new TextView(context);
+        loadingText.setText("网页加载中，请稍候…");
+        loadingText.setTextColor(0xffffffff);
+        card.addView(loadingText);
+        applyLoadingOverlayMetrics(card, 1f);
+        card.setVisibility(View.GONE);
+        return card;
+    }
+
+    private void applyLoadingOverlayMetrics(LinearLayout card, float scale) {
+        int horizontalPadding = scaledDp(20f, scale);
+        int verticalPadding = scaledDp(14f, scale);
+        card.setPadding(horizontalPadding, verticalPadding,
+                horizontalPadding, verticalPadding);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xe6222228);
+        background.setCornerRadius(scaledDp(16f, scale));
+        card.setBackgroundDrawable(background);
+
+        int progressSize = scaledDp(28f, scale);
+        loadingProgress.setLayoutParams(new LinearLayout.LayoutParams(
+                progressSize, progressSize));
+        loadingText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f * scale);
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+        textParams.leftMargin = scaledDp(12f, scale);
+        loadingText.setLayoutParams(textParams);
+        card.requestLayout();
+        card.invalidate();
+    }
+
+    private int scaledDp(float value, float scale) {
+        return Math.max(1, Math.round(value * scale
+                * getResources().getDisplayMetrics().density));
+    }
+
+    private void setLoadingVisible(boolean visible) {
+        loadingOverlay.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (visible) {
+            loadingOverlay.bringToFront();
+        }
     }
 
     @Override
@@ -112,17 +256,27 @@ public final class WebSourceView extends FrameLayout {
 
     private void updateDesktopViewport(int width, int height) {
         // Configuration is applied during Activity startup, before this container has
-        // a measured size. Always update the WebView's virtual resolution first; only
-        // the final fit-to-screen transform needs the measured parent dimensions.
-        if ("480p".equals(viewportMode)) {
-            viewportWidth = VIEWPORT_480P_WIDTH;
-            viewportHeight = VIEWPORT_480P_HEIGHT;
-        } else if ("720p".equals(viewportMode)) {
-            viewportWidth = VIEWPORT_720P_WIDTH;
-            viewportHeight = VIEWPORT_720P_HEIGHT;
-        } else {
+        // a measured size. The configured resolution controls the virtual width; the
+        // virtual height follows the real WebView area so pages fill every aspect ratio.
+        if ("2k".equals(viewportMode)) {
+            viewportWidth = VIEWPORT_2K_WIDTH;
+        } else if ("1080p".equals(viewportMode)) {
             viewportWidth = VIEWPORT_1080P_WIDTH;
+        } else {
+            viewportWidth = VIEWPORT_720P_WIDTH;
+        }
+        if (width > 0 && height > 0) {
+            viewportHeight = Math.max(1,
+                    Math.round(viewportWidth * (height / (float) width)));
+        } else if (viewportWidth == VIEWPORT_2K_WIDTH) {
+            viewportHeight = VIEWPORT_2K_HEIGHT;
+        } else if (viewportWidth == VIEWPORT_1080P_WIDTH) {
             viewportHeight = VIEWPORT_1080P_HEIGHT;
+        } else {
+            viewportHeight = VIEWPORT_720P_HEIGHT;
+        }
+        if (webView == null) {
+            return;
         }
         LayoutParams params = (LayoutParams) webView.getLayoutParams();
         if (params.width != viewportWidth || params.height != viewportHeight) {
@@ -133,17 +287,18 @@ public final class WebSourceView extends FrameLayout {
         if (width <= 0 || height <= 0) {
             return;
         }
-        float scale = Math.min(width / (float) viewportWidth,
-                height / (float) viewportHeight);
-        float contentWidth = viewportWidth * scale;
-        float contentHeight = viewportHeight * scale;
-        webView.setScaleX(scale);
-        webView.setScaleY(scale);
-        webView.setTranslationX((width - contentWidth) / 2f);
-        webView.setTranslationY((height - contentHeight) / 2f);
+        // Rounding the virtual height can leave a sub-pixel difference. Independent
+        // final scales remove that difference without changing the effective ratio.
+        webView.setScaleX(width / (float) viewportWidth);
+        webView.setScaleY(height / (float) viewportHeight);
+        webView.setTranslationX(0f);
+        webView.setTranslationY(0f);
     }
 
     private void applyDesktopViewport() {
+        if (webView == null) {
+            return;
+        }
         String initialScale = String.format(Locale.US, "%.4f", cssInitialScale());
         String content = "width=" + viewportWidth
                 + ",initial-scale=" + initialScale
@@ -189,24 +344,34 @@ public final class WebSourceView extends FrameLayout {
         return Math.max(1, Math.round(cssInitialScale() * 100f));
     }
 
-    void applyConfiguration(String requestedViewportMode, boolean requestedLoadImages) {
-        String nextMode = "480p".equals(requestedViewportMode)
-                || "720p".equals(requestedViewportMode)
-                ? requestedViewportMode : "1080p";
-        boolean changed = !nextMode.equals(viewportMode) || loadImages != requestedLoadImages;
+    void applyConfiguration(String requestedViewportMode, boolean requestedLoadImages,
+            String requestedUserAgentMode) {
+        String nextMode = "2k".equals(requestedViewportMode)
+                || "1080p".equals(requestedViewportMode)
+                ? requestedViewportMode : "720p";
+        String nextUserAgentMode = sanitizeUserAgentMode(requestedUserAgentMode);
+        String nextUserAgent = userAgentForMode(nextUserAgentMode);
+        boolean changed = !nextMode.equals(viewportMode) || loadImages != requestedLoadImages
+                || !nextUserAgentMode.equals(userAgentMode);
         viewportMode = nextMode;
         loadImages = requestedLoadImages;
-        WebSettings settings = webView.getSettings();
-        settings.setLoadsImagesAutomatically(loadImages);
-        settings.setBlockNetworkImage(!loadImages);
-        webView.setInitialScale(cssInitialScalePercent());
+        userAgentMode = nextUserAgentMode;
+        activeUserAgent = nextUserAgent;
+        if (webView != null) {
+            WebSettings settings = webView.getSettings();
+            settings.setLoadsImagesAutomatically(loadImages);
+            settings.setBlockNetworkImage(!loadImages);
+            settings.setUserAgentString(activeUserAgent);
+            webView.setInitialScale(cssInitialScalePercent());
+        }
         updateDesktopViewport(getWidth(), getHeight());
-        if (changed && pageActive) {
+        if (changed && pageActive && webView != null) {
             final int expectedRequestId = requestId;
             webView.post(new Runnable() {
                 @Override
                 public void run() {
                     if (pageActive && requestId == expectedRequestId && !destroyed) {
+                        setLoadingVisible(true);
                         webView.setInitialScale(cssInitialScalePercent());
                         webView.reload();
                     }
@@ -220,19 +385,17 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void open(int newRequestId, String url) {
-        // Every web channel is a new, temporary page. Do not let a page opened by a
-        // previous channel remain in WebView's back/forward list.
-        webView.stopLoading();
-        webView.clearHistory();
+        prepareFreshPage();
         requestId = newRequestId;
         pageUrl = url;
-        lastStreamUrl = null;
-        streamReported = false;
+        discoveredStreamUrls.clear();
         pageActive = true;
+        clearInitialHistory = true;
         compatibilityInjectionCount = 0;
         resetGeneration++;
         setVisibility(View.VISIBLE);
         bringToFront();
+        setLoadingVisible(true);
         webView.onResume();
         updateDesktopViewport(getWidth(), getHeight());
         webView.setInitialScale(cssInitialScalePercent());
@@ -244,16 +407,25 @@ public final class WebSourceView extends FrameLayout {
             return;
         }
         if (!pageActive && requestId < 0 && getVisibility() != View.VISIBLE) {
+            if (webView == null) {
+                return;
+            }
             webView.clearHistory();
             return;
         }
         final int generation = ++resetGeneration;
         pageActive = false;
+        clearInitialHistory = false;
         requestId = -1;
         pageUrl = null;
-        lastStreamUrl = null;
-        streamReported = true;
+        discoveredStreamUrls.clear();
+        if (webView == null) {
+            setLoadingVisible(false);
+            setVisibility(View.GONE);
+            return;
+        }
         webView.stopLoading();
+        setLoadingVisible(false);
         webView.clearHistory();
         webView.loadUrl("about:blank");
         webView.clearHistory();
@@ -273,6 +445,88 @@ public final class WebSourceView extends FrameLayout {
 
     boolean isPageVisible() {
         return getVisibility() == View.VISIBLE;
+    }
+
+    boolean hasRetainedPage() {
+        return !destroyed && pageActive && requestId >= 0;
+    }
+
+    void hideForStreamPlayback() {
+        if (!hasRetainedPage()) {
+            return;
+        }
+        setLoadingVisible(false);
+        webView.onPause();
+        setVisibility(View.GONE);
+    }
+
+    boolean restoreAfterStreamPlayback() {
+        if (!hasRetainedPage()) {
+            return false;
+        }
+        setVisibility(View.VISIBLE);
+        bringToFront();
+        webView.onResume();
+        webView.requestFocus();
+        updateDesktopViewport(getWidth(), getHeight());
+        return true;
+    }
+
+    private String userAgentForMode(String mode) {
+        if ("macos".equals(mode)) {
+            return MACOS_USER_AGENT;
+        }
+        if ("ipad".equals(mode)) {
+            return IPAD_USER_AGENT;
+        }
+        if ("native".equals(mode)) {
+            return browserUserAgent;
+        }
+        return WINDOWS_USER_AGENT;
+    }
+
+    private static String sanitizeUserAgentMode(String mode) {
+        if ("macos".equals(mode) || "ipad".equals(mode) || "native".equals(mode)) {
+            return mode;
+        }
+        return "windows";
+    }
+
+    boolean goBackIfPossible() {
+        if (!isPageVisible() || destroyed || !pageActive) {
+            return false;
+        }
+        WebBackForwardList history = webView.copyBackForwardList();
+        int currentIndex = history == null ? -1 : history.getCurrentIndex();
+        int targetIndex = previousWebPageIndex(history, currentIndex);
+        if (targetIndex < 0) {
+            return false;
+        }
+        setLoadingVisible(true);
+        webView.goBackOrForward(targetIndex - currentIndex);
+        return true;
+    }
+
+    private static int previousWebPageIndex(WebBackForwardList history, int currentIndex) {
+        if (history == null || currentIndex <= 0) {
+            return -1;
+        }
+        for (int index = currentIndex - 1; index >= 0; index--) {
+            WebHistoryItem item = history.getItemAtIndex(index);
+            if (item != null && isWebPage(item.getUrl())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    void setInterfaceScale(float scale) {
+        float safeScale = Math.max(0.9f, Math.min(2f, scale));
+        // Resize each native element instead of scaling a pre-rendered card. Scaling the
+        // whole hierarchy makes text and the spinner visibly soft on 4K televisions.
+        loadingOverlay.setScaleX(1f);
+        loadingOverlay.setScaleY(1f);
+        applyLoadingOverlayMetrics(loadingOverlay, safeScale);
     }
 
     void scrollByRemote(int deltaY) {
@@ -321,9 +575,11 @@ public final class WebSourceView extends FrameLayout {
         if (destroyed) {
             return;
         }
-        webView.clearCache(true);
-        webView.clearHistory();
-        webView.clearFormData();
+        if (webView != null) {
+            webView.clearCache(true);
+            webView.clearHistory();
+            webView.clearFormData();
+        }
         android.webkit.WebStorage.getInstance().deleteAllData();
     }
 
@@ -331,6 +587,10 @@ public final class WebSourceView extends FrameLayout {
         long bytes = measureFiles(getContext().getCacheDir(), true);
         File webViewData = getContext().getDir("webview", Context.MODE_PRIVATE);
         return bytes + measureFiles(webViewData, false);
+    }
+
+    String browserUserAgent() {
+        return browserUserAgent == null ? activeUserAgent : browserUserAgent;
     }
 
     private static long measureFiles(File file, boolean insideCache) {
@@ -367,13 +627,11 @@ public final class WebSourceView extends FrameLayout {
     void destroyPage() {
         destroyed = true;
         pageActive = false;
+        clearInitialHistory = false;
         requestId = -1;
         resetGeneration++;
-        webView.stopLoading();
-        webView.loadUrl("about:blank");
-        webView.clearHistory();
-        webView.removeAllViews();
-        webView.destroy();
+        setLoadingVisible(false);
+        destroyCurrentWebView();
     }
 
     private void observeResource(String url) {
@@ -381,22 +639,19 @@ public final class WebSourceView extends FrameLayout {
             return;
         }
         final String streamUrl = normalizeMediaPlaylist(url);
-        if (streamReported || streamUrl == null) {
+        if (streamUrl == null) {
             return;
         }
-        if (streamUrl.equals(lastStreamUrl)) {
-            return;
-        }
-        lastStreamUrl = streamUrl;
         final int observedRequestId = requestId;
         final String observedUrl = streamUrl;
         post(new Runnable() {
             @Override
             public void run() {
-                if (streamReported || observedRequestId != requestId || listener == null) {
+                if (observedRequestId != requestId || listener == null
+                        || discoveredStreamUrls.contains(observedUrl)) {
                     return;
                 }
-                streamReported = true;
+                discoveredStreamUrls.add(observedUrl);
                 String currentPage = webView.getUrl();
                 if (currentPage == null || currentPage.startsWith("about:")) {
                     currentPage = pageUrl;
@@ -472,6 +727,7 @@ public final class WebSourceView extends FrameLayout {
             }
             pageUrl = url;
             compatibilityInjectionCount = 0;
+            setLoadingVisible(true);
             updateDesktopViewport(getWidth(), getHeight());
             view.setInitialScale(cssInitialScalePercent());
             if (listener != null) {
@@ -485,13 +741,17 @@ public final class WebSourceView extends FrameLayout {
                 return;
             }
             pageUrl = url;
+            if (clearInitialHistory) {
+                // clearHistory() before loadUrl() cannot remove the current about:blank
+                // item on several vendor WebViews. Clear once the first real document
+                // becomes current so Back never exposes that blank bootstrap page.
+                clearInitialHistory = false;
+                view.clearHistory();
+            }
             applyDesktopViewport();
             scheduleDesktopViewport(250L);
             scheduleDesktopViewport(1000L);
-            // A web channel is not a browser session. Clearing after every completed
-            // top-level navigation also prevents scripts/redirects from rebuilding a
-            // back stack that could expose an older channel.
-            view.clearHistory();
+            setLoadingVisible(false);
             if (listener != null) {
                 listener.onPageReady(requestId, url, view.getTitle());
             }
@@ -526,6 +786,7 @@ public final class WebSourceView extends FrameLayout {
             }
             Log.w(TAG, "Web source failed code=" + errorCode + " url=" + failingUrl
                     + " description=" + description);
+            setLoadingVisible(false);
             if (listener != null) {
                 listener.onPageError(requestId,
                         description == null ? "网页加载失败" : description);
@@ -598,7 +859,7 @@ public final class WebSourceView extends FrameLayout {
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(20000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", DESKTOP_USER_AGENT);
+        connection.setRequestProperty("User-Agent", activeUserAgent);
         connection.setRequestProperty("Accept", "application/javascript,*/*;q=0.8");
         String referer = pageUrl;
         if (referer != null && referer.length() > 0) {
@@ -656,5 +917,13 @@ public final class WebSourceView extends FrameLayout {
 
     private static boolean isBlankPage(String url) {
         return url == null || url.startsWith("about:");
+    }
+
+    private static boolean isWebPage(String url) {
+        if (url == null) {
+            return false;
+        }
+        String lower = url.toLowerCase(Locale.US);
+        return lower.startsWith("http://") || lower.startsWith("https://");
     }
 }

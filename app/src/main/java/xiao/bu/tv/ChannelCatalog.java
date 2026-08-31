@@ -17,7 +17,6 @@ final class ChannelCatalog {
             channel("3", "CCTV-3 综艺", "cctv3", "600001801", "2024068501"),
             channel("4", "CCTV-4 中文国际（亚）", "cctv4", "600001814", "2029797101"),
             channel("5", "CCTV-5 体育", "cctv5", "600001818", "2024078401"),
-            channel("5+", "CCTV-5+ 体育赛事", "cctv5plus", "600001817", "2024078001"),
             channel("6", "CCTV-6 电影", "cctv6", "600108442", "2013693901"),
             channel("7", "CCTV-7 国防军事", "cctv7", "600004092", "2024072001"),
             channel("8", "CCTV-8 电视剧", "cctv8", "600001803", "2029793001"),
@@ -30,6 +29,7 @@ final class ChannelCatalog {
             channel("15", "CCTV-15 音乐", "cctv15", "600001815", "2027249001"),
             channel("16", "CCTV-16 奥林匹克", "cctv16", "600098637", "2027249101"),
             channel("17", "CCTV-17 农业农村", "cctv17", "600001810", "2027249401"),
+            channel("18", "CCTV-5+ 体育赛事", "cctv5plus", "600001817", "2024078001"),
             channel("4欧", "CCTV-4 中文国际（欧）", "cctveurope", null, null),
             channel("4美", "CCTV-4 中文国际（美）", "cctvamerica", null, null)
     };
@@ -44,19 +44,19 @@ final class ChannelCatalog {
             yangshipinChannel("3", "CCTV3", "600001801", "2024068501"),
             yangshipinChannel("4", "CCTV4", "600001814", "2029797101"),
             yangshipinChannel("5", "CCTV5", "600001818", "2024078401"),
-            yangshipinChannel("6", "CCTV5+", "600001817", "2024078001"),
-            yangshipinChannel("7", "CCTV6", "600108442", "2013693901"),
-            yangshipinChannel("8", "CCTV7", "600004092", "2024072001"),
-            yangshipinChannel("9", "CCTV8", "600001803", "2029793001"),
-            yangshipinChannel("10", "CCTV9", "600004078", "2024078601"),
-            yangshipinChannel("11", "CCTV10", "600001805", "2024078701"),
-            yangshipinChannel("12", "CCTV11", "600001806", "2027248701"),
-            yangshipinChannel("13", "CCTV12", "600001807", "2027248801"),
-            yangshipinChannel("14", "CCTV13", "600001811", "2029797201"),
-            yangshipinChannel("15", "CCTV14", "600001809", "2027248901"),
-            yangshipinChannel("16", "CCTV15", "600001815", "2027249001"),
-            yangshipinChannel("17", "CCTV16-HD", "600098637", "2027249101"),
-            yangshipinChannel("18", "CCTV16(4K）", "600099502", "2027249301"),
+            yangshipinChannel("6", "CCTV6", "600108442", "2013693901"),
+            yangshipinChannel("7", "CCTV7", "600004092", "2024072001"),
+            yangshipinChannel("8", "CCTV8", "600001803", "2029793001"),
+            yangshipinChannel("9", "CCTV9", "600004078", "2024078601"),
+            yangshipinChannel("10", "CCTV10", "600001805", "2024078701"),
+            yangshipinChannel("11", "CCTV11", "600001806", "2027248701"),
+            yangshipinChannel("12", "CCTV12", "600001807", "2027248801"),
+            yangshipinChannel("13", "CCTV13", "600001811", "2029797201"),
+            yangshipinChannel("14", "CCTV14", "600001809", "2027248901"),
+            yangshipinChannel("15", "CCTV15", "600001815", "2027249001"),
+            yangshipinChannel("16", "CCTV16-HD", "600098637", "2027249101"),
+            yangshipinChannel("17", "CCTV16(4K）", "600099502", "2027249301"),
+            yangshipinChannel("18", "CCTV5+", "600001817", "2024078001"),
             yangshipinChannel("19", "CCTV17", "600001810", "2027249401"),
             yangshipinChannel("20", "CCTV4K", "600002264", "2029810301"),
             yangshipinChannel("21", "CCTV8K", "600156816", "2026774101"),
@@ -118,8 +118,7 @@ final class ChannelCatalog {
     }
 
     static synchronized void setCustomGroups(Group[] customGroups) {
-        ChannelCatalog.customGroups = customGroups == null
-                ? new Group[0] : customGroups;
+        ChannelCatalog.customGroups = normalizeCustomGroups(customGroups);
         GROUPS = buildGroups();
     }
 
@@ -129,10 +128,182 @@ final class ChannelCatalog {
     }
 
     private static Group[] buildGroups() {
-        Group[] groups = new Group[1 + customGroups.length];
+        Group[] visibleGroups = hasPlayableChannels(customGroups)
+                ? customGroups : builtInFallbackGroups();
+        Group[] groups = new Group[1 + visibleGroups.length];
         groups[0] = new Group("我的收藏", SOURCE_FAVORITES, favoriteChannels);
-        System.arraycopy(customGroups, 0, groups, 1, customGroups.length);
+        System.arraycopy(visibleGroups, 0, groups, 1, visibleGroups.length);
         return groups;
+    }
+
+    private static boolean hasPlayableChannels(Group[] groups) {
+        if (groups == null) {
+            return false;
+        }
+        for (Group group : groups) {
+            if (group != null && group.channels != null && group.channels.length > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Group[] builtInFallbackGroups() {
+        return new Group[] {
+                new Group("央视频道", SOURCE_CCTV_WEB, CCTV_CHANNELS),
+                new Group("卫视频道", SOURCE_YSP_SATELLITE, SATELLITE_CHANNELS)
+        };
+    }
+
+    /**
+     * Small, allocation-only catalog used before the first frame.
+     *
+     * <p>Do not read or parse the bundled M3U here. The full M3U/SQLite catalog is
+     * loaded on the background path after playback has started. When a last-channel
+     * snapshot exists, keep that one-channel group so even an external channel can be
+     * resumed without waiting for its source file.</p>
+     */
+    static Group[] startupGroups(Group preferredGroup) {
+        Group[] fallback = builtInFallbackGroups();
+        if (preferredGroup == null || preferredGroup.channels == null
+                || preferredGroup.channels.length == 0) {
+            return fallback;
+        }
+        for (int index = 0; index < fallback.length; index++) {
+            if (fallback[index].title.equals(preferredGroup.title)) {
+                fallback[index] = preferredGroup;
+                return fallback;
+            }
+        }
+        Group[] groups = new Group[fallback.length + 1];
+        groups[0] = preferredGroup;
+        System.arraycopy(fallback, 0, groups, 1, fallback.length);
+        return groups;
+    }
+
+    private static Group[] normalizeCustomGroups(Group[] groups) {
+        if (groups == null || groups.length == 0) {
+            return new Group[0];
+        }
+        Group[] normalized = new Group[groups.length];
+        for (int index = 0; index < groups.length; index++) {
+            Group group = groups[index];
+            Channel[] channels = group.channels;
+            if ("央视频道".equals(group.title)) {
+                channels = moveCctv5PlusToPosition18(channels);
+            }
+            normalized[index] = new Group(group.title, group.source, channels);
+        }
+        return normalized;
+    }
+
+    private static Channel[] moveCctv5PlusToPosition18(Channel[] channels) {
+        if (channels == null || channels.length < 18) {
+            return channels;
+        }
+        int sourceIndex = -1;
+        for (int index = 0; index < channels.length; index++) {
+            String name = channels[index].name == null ? ""
+                    : channels[index].name.toUpperCase(java.util.Locale.US)
+                            .replace("-", "").replace(" ", "");
+            if (name.startsWith("CCTV5+")) {
+                sourceIndex = index;
+                break;
+            }
+        }
+        int targetIndex = 17;
+        if (sourceIndex < 0 || sourceIndex == targetIndex) {
+            return channels;
+        }
+        Channel[] reordered = channels.clone();
+        Channel moved = reordered[sourceIndex];
+        if (sourceIndex < targetIndex) {
+            System.arraycopy(reordered, sourceIndex + 1, reordered, sourceIndex,
+                    targetIndex - sourceIndex);
+        } else {
+            System.arraycopy(reordered, targetIndex, reordered, targetIndex + 1,
+                    sourceIndex - targetIndex);
+        }
+        reordered[targetIndex] = moved;
+        return reordered;
+    }
+
+    static String displayNumber(int groupIndex, int channelIndex) {
+        int number = globalNumber(groupIndex, channelIndex);
+        if (number > 0) {
+            return String.valueOf(number);
+        }
+        if (groupIndex >= 0 && groupIndex < GROUPS.length
+                && channelIndex >= 0 && channelIndex < GROUPS[groupIndex].channels.length) {
+            return GROUPS[groupIndex].channels[channelIndex].number;
+        }
+        return "";
+    }
+
+    private static int globalNumber(int groupIndex, int channelIndex) {
+        if (groupIndex < 0 || groupIndex >= GROUPS.length
+                || channelIndex < 0 || channelIndex >= GROUPS[groupIndex].channels.length) {
+            return -1;
+        }
+        Group requestedGroup = GROUPS[groupIndex];
+        Channel requested = requestedGroup.channels[channelIndex];
+        int number = 0;
+        for (int currentGroupIndex = 0; currentGroupIndex < GROUPS.length;
+                currentGroupIndex++) {
+            Group group = GROUPS[currentGroupIndex];
+            if (group.source == SOURCE_FAVORITES) {
+                continue;
+            }
+            for (int currentChannelIndex = 0;
+                    currentChannelIndex < group.channels.length; currentChannelIndex++) {
+                number++;
+                if (currentGroupIndex == groupIndex && currentChannelIndex == channelIndex) {
+                    return number;
+                }
+                if (requestedGroup.source == SOURCE_FAVORITES
+                        && isFavoriteOrigin(requested, group,
+                                group.channels[currentChannelIndex])) {
+                    return number;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isFavoriteOrigin(Channel favorite, Group group,
+            Channel channel) {
+        if (favorite.favoriteKey == null) {
+            return false;
+        }
+        String prefix = group.title + "\u001f" + channel.name + "\u001f";
+        return favorite.favoriteKey.startsWith(prefix);
+    }
+
+    static int[] findGlobalChannel(String requestedNumber) {
+        int wanted;
+        try {
+            wanted = Integer.parseInt(requestedNumber);
+        } catch (NumberFormatException error) {
+            return null;
+        }
+        if (wanted <= 0) {
+            return null;
+        }
+        int number = 0;
+        for (int groupIndex = 0; groupIndex < GROUPS.length; groupIndex++) {
+            Group group = GROUPS[groupIndex];
+            if (group.source == SOURCE_FAVORITES) {
+                continue;
+            }
+            for (int channelIndex = 0; channelIndex < group.channels.length;
+                    channelIndex++) {
+                number++;
+                if (number == wanted) {
+                    return new int[] { groupIndex, channelIndex };
+                }
+            }
+        }
+        return null;
     }
 
     static int wrapGroupIndex(int index) {
@@ -181,7 +352,9 @@ final class ChannelCatalog {
         if (group.source == SOURCE_CUSTOM) {
             if ("央视频道".equals(group.title)) {
                 for (int index = 0; index < group.channels.length; index++) {
-                    if (group.channels[index].name.startsWith("CCTV-13")) {
+                    Channel channel = group.channels[index];
+                    if ("600001859".equals(channel.yangshipinPid)
+                            || "1".equals(channel.number)) {
                         return index;
                     }
                 }

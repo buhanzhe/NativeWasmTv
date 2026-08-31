@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
+import android.view.KeyEvent;
 import android.widget.Toast;
 
 import org.json.JSONException;
@@ -42,6 +43,7 @@ final class AutoUpdater {
     private volatile boolean destroyed;
     private boolean checking;
     private boolean promptShowing;
+    private AlertDialog promptDialog;
     private ProgressDialog progressDialog;
 
     AutoUpdater(Activity activity) {
@@ -81,6 +83,10 @@ final class AutoUpdater {
 
     void destroy() {
         destroyed = true;
+        if (promptDialog != null) {
+            promptDialog.dismiss();
+            promptDialog = null;
+        }
         if (progressDialog != null) {
             progressDialog.dismiss();
             progressDialog = null;
@@ -136,7 +142,7 @@ final class AutoUpdater {
         promptShowing = true;
         String notes = update.releaseNotes.length() == 0 ? "包含功能改进和问题修复。"
                 : update.releaseNotes;
-        AlertDialog dialog = new AlertDialog.Builder(activity)
+        final AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setTitle(activity.getString(R.string.update_available_title, update.versionName))
                 .setMessage(activity.getString(R.string.update_available_message,
                         BuildConfig.VERSION_NAME, update.versionName, notes))
@@ -154,10 +160,35 @@ final class AutoUpdater {
                     }
                 })
                 .create();
+        promptDialog = dialog;
+        dialog.setCancelable(true);
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+            @Override
+            public boolean onKey(DialogInterface dialogInterface, int keyCode,
+                    KeyEvent event) {
+                if (keyCode == KeyEvent.KEYCODE_BACK) {
+                    if (event.getAction() == KeyEvent.ACTION_UP) {
+                        dialogInterface.dismiss();
+                    }
+                    return true;
+                }
+                return false;
+            }
+        });
         dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
             @Override
             public void onCancel(DialogInterface dialogInterface) {
                 promptShowing = false;
+            }
+        });
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(DialogInterface dialogInterface) {
+                promptShowing = false;
+                if (promptDialog == dialog) {
+                    promptDialog = null;
+                }
             }
         });
         dialog.show();

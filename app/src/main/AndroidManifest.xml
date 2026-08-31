@@ -40,8 +40,9 @@
 
         <activity
             android:name=".ManagementActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullSensor"
             android:theme="@style/ManagementTheme" />
 
         <receiver

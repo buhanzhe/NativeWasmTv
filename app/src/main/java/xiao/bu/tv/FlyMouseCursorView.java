@@ -10,6 +10,8 @@ import android.util.AttributeSet;
 import android.view.View;
 
 public final class FlyMouseCursorView extends View {
+    private static final long CURSOR_IDLE_TIMEOUT_MS = 5000L;
+    private static final float MIN_VISIBLE_MOVEMENT_PX = 0.25f;
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path cursorPath = new Path();
@@ -18,7 +20,15 @@ public final class FlyMouseCursorView extends View {
     private float targetX = -1f;
     private float targetY = -1f;
     private boolean moveAnimationRunning;
+    private boolean cursorVisible = true;
     private long clickPulseUntil;
+    private final Runnable hideIdleCursor = new Runnable() {
+        @Override
+        public void run() {
+            cursorVisible = false;
+            invalidate();
+        }
+    };
     private final Runnable moveAnimationFrame = new Runnable() {
         @Override
         public void run() {
@@ -70,12 +80,16 @@ public final class FlyMouseCursorView extends View {
             cursorY = getHeight() / 2f;
             targetX = cursorX;
             targetY = cursorY;
-            invalidate();
         }
+        revealCursor();
     }
 
     void moveBy(float dx, float dy) {
         ensurePosition();
+        if (Math.abs(dx) + Math.abs(dy) < MIN_VISIBLE_MOVEMENT_PX) {
+            return;
+        }
+        revealCursor();
         float inset = dp(8f);
         targetX = clamp(targetX + dx, inset, Math.max(inset, getWidth() - inset));
         targetY = clamp(targetY + dy, inset, Math.max(inset, getHeight() - inset));
@@ -97,6 +111,7 @@ public final class FlyMouseCursorView extends View {
     }
 
     void pulseClick() {
+        revealCursor();
         clickPulseUntil = SystemClock.uptimeMillis() + 180L;
         invalidate();
         postInvalidateDelayed(190L);
@@ -121,6 +136,9 @@ public final class FlyMouseCursorView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         ensurePosition();
+        if (!cursorVisible) {
+            return;
+        }
         float scale = getResources().getDisplayMetrics().density;
         float x = cursorX;
         float y = cursorY;
@@ -149,7 +167,30 @@ public final class FlyMouseCursorView extends View {
     protected void onDetachedFromWindow() {
         moveAnimationRunning = false;
         removeCallbacks(moveAnimationFrame);
+        removeCallbacks(hideIdleCursor);
         super.onDetachedFromWindow();
+    }
+
+    @Override
+    protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        // View's constructor may dispatch visibility before subclass fields exist.
+        if (changedView != this || hideIdleCursor == null) {
+            return;
+        }
+        removeCallbacks(hideIdleCursor);
+        if (visibility == View.VISIBLE) {
+            revealCursor();
+        } else {
+            cursorVisible = false;
+        }
+    }
+
+    private void revealCursor() {
+        cursorVisible = true;
+        removeCallbacks(hideIdleCursor);
+        postDelayed(hideIdleCursor, CURSOR_IDLE_TIMEOUT_MS);
+        invalidate();
     }
 
     private void ensurePosition() {

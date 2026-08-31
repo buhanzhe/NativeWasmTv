@@ -84,16 +84,16 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|right"
         android:layout_marginTop="8dp"
-        android:layout_marginRight="10dp"
+        android:layout_marginRight="12dp"
         android:fontFamily="monospace"
         android:gravity="right"
         android:includeFontPadding="false"
-        android:maxLines="3"
+        android:maxLines="2"
         android:shadowColor="#E6000000"
         android:shadowDx="1"
         android:shadowDy="1"
         android:shadowRadius="2"
-        android:text="视频 --  --fps  --  --\n音频 --  --\nCPU（本应用） --"
+        android:text="视频 --  --fps  --  --　音频 --  --\nCPU（系统） --　源 --"
         android:textColor="#FFFFFFFF"
         android:textSize="12sp"
         android:visibility="gone"
@@ -170,15 +170,34 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/channel_name"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FFFFFFFF"
-                android:textSize="18sp"
-                android:textStyle="bold" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/channel_name"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/video_info"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginLeft="8dp"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="--×-- · --fps"
+                    android:textColor="#78FFFFFF"
+                    android:textSize="10sp"
+                    tools:ignore="HardcodedText" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/status_text"
@@ -189,17 +208,6 @@
                 android:maxLines="1"
                 android:textColor="#B8FFFFFF"
                 android:textSize="12sp" />
-
-            <TextView
-                android:id="@+id/channel_source_path"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:ellipsize="middle"
-                android:maxLines="1"
-                android:textColor="#9FFFFFFF"
-                android:textSize="10sp"
-                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/channel_epg"
@@ -213,25 +221,6 @@
                 android:visibility="gone" />
         </LinearLayout>
 
-        <View
-            android:layout_width="1dp"
-            android:layout_height="38dp"
-            android:layout_marginLeft="14dp"
-            android:layout_marginRight="14dp"
-            android:background="#24FFFFFF" />
-
-        <TextView
-            android:id="@+id/video_info"
-            android:layout_width="250dp"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:gravity="right|center_vertical"
-            android:maxLines="2"
-            android:text="-- × -- · -- fps · --&#10;IJK 硬解"
-            android:textColor="#C8FFFFFF"
-            android:textSize="11sp"
-            android:lineSpacingExtra="2dp"
-            tools:ignore="HardcodedText,RtlHardcoded" />
     </LinearLayout>
 
     <LinearLayout
@@ -286,17 +275,20 @@
                 android:paddingBottom="2dp" />
 
             <View
+                android:id="@+id/channel_epg_divider"
                 android:layout_width="1dp"
                 android:layout_height="match_parent"
                 android:layout_marginLeft="8dp"
                 android:layout_marginRight="8dp"
-                android:background="@color/divider" />
+                android:background="@color/divider"
+                android:visibility="gone" />
 
             <LinearLayout
                 android:id="@+id/epg_column"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:visibility="gone">
 
                 <TextView
                     android:id="@+id/epg_status"

@@ -19,6 +19,11 @@ import java.net.SocketException;
 import java.net.URLDecoder;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 final class LocalControlServer implements Closeable {
     interface Listener {
@@ -27,7 +32,10 @@ final class LocalControlServer implements Closeable {
         String pointer(JSONObject request) throws Exception;
         String settings(JSONObject request) throws Exception;
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
+        Resource playlistSource(String location) throws Exception;
+        String mergePlaylist(JSONObject request) throws Exception;
         Resource recording(String token) throws Exception;
+        Resource page(String path) throws Exception;
     }
 
     static final class Resource {
@@ -43,9 +51,15 @@ final class LocalControlServer implements Closeable {
     private static final String TAG = "LocalControlServer";
     static final int PREFERRED_PORT = 9966;
     static final int MAX_PORT = 9975;
-    private static final int MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+    private static final int SOCKET_TIMEOUT_MS = 30000;
+    private static final int MIN_REQUEST_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REQUEST_BYTES = 64 * 1024 * 1024;
     private final byte[] indexHtml;
     private final Listener listener;
+    private final ExecutorService clientWorkers = new ThreadPoolExecutor(
+            2, 4, 30L, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<Runnable>(16),
+            new ThreadPoolExecutor.AbortPolicy());
     private volatile boolean running;
     private ServerSocket serverSocket;
     private Thread acceptThread;
@@ -108,13 +122,19 @@ final class LocalControlServer implements Closeable {
         while (running) {
             try {
                 final Socket socket = serverSocket.accept();
-                Thread worker = new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        handle(socket);
+                try {
+                    clientWorkers.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            handle(socket);
+                        }
+                    });
+                } catch (RejectedExecutionException error) {
+                    socket.close();
+                    if (running) {
+                        Log.w(TAG, "Management worker pool rejected connection", error);
                     }
-                }, "local-control-client");
-                worker.start();
+                }
             } catch (IOException error) {
                 if (running) {
                     Log.w(TAG, "Unable to accept management connection", error);
@@ -125,7 +145,7 @@ final class LocalControlServer implements Closeable {
 
     private void handle(Socket socket) {
         try {
-            socket.setSoTimeout(25000);
+            socket.setSoTimeout(SOCKET_TIMEOUT_MS);
             BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
             String requestLine = readLine(input);
             if (requestLine == null) {
@@ -140,19 +160,31 @@ final class LocalControlServer implements Closeable {
             String method = requestParts[0];
             String path = requestParts[1];
             int contentLength = 0;
+            boolean invalidContentLength = false;
             String line;
             while ((line = readLine(input)) != null && line.length() > 0) {
                 int colon = line.indexOf(':');
                 if (colon > 0 && "content-length".equalsIgnoreCase(line.substring(0, colon))) {
                     try {
-                        contentLength = Integer.parseInt(line.substring(colon + 1).trim());
-                    } catch (NumberFormatException ignored) {
+                        long parsedLength = Long.parseLong(line.substring(colon + 1).trim());
+                        if (parsedLength < 0L || parsedLength > Integer.MAX_VALUE) {
+                            invalidContentLength = true;
+                        } else {
+                            contentLength = (int) parsedLength;
+                        }
+                    } catch (NumberFormatException error) {
+                        invalidContentLength = true;
                     }
                 }
             }
-            if (contentLength < 0 || contentLength > MAX_REQUEST_BYTES) {
+            if (invalidContentLength) {
+                send(socket, 400, "application/json; charset=utf-8",
+                        jsonError("请求长度无效"));
+                return;
+            }
+            if (contentLength > requestBodyLimit()) {
                 send(socket, 413, "application/json; charset=utf-8",
-                        jsonError("请求内容过大"));
+                        jsonError("请求内容超过设备可安全处理的大小"));
                 return;
             }
             byte[] body = new byte[contentLength];
@@ -193,6 +225,11 @@ final class LocalControlServer implements Closeable {
         }
         if ("GET".equals(method) && ("/".equals(path) || "/index.html".equals(path))) {
             send(socket, 200, "text/html; charset=utf-8", indexHtml);
+        } else if ("GET".equals(method) && ("/flymouse.html".equals(path)
+                || "/video-recorder.html".equals(path)
+                || "/mp4-finalizer.js".equals(path))) {
+            Resource resource = listener.page(path.substring(1));
+            send(socket, 200, resource.contentType, resource.body);
         } else if ("GET".equals(method) && "/api/state".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.stateJson().getBytes("UTF-8"));
@@ -210,6 +247,14 @@ final class LocalControlServer implements Closeable {
             String fileName = queryParameter(requestTarget, "name");
             send(socket, 200, "application/json; charset=utf-8",
                     listener.uploadPlaylist(sourceId, fileName, body).getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/playlist/source".equals(path)) {
+            Resource resource = listener.playlistSource(
+                    queryParameter(requestTarget, "location"));
+            send(socket, 200, resource.contentType, resource.body);
+        } else if ("POST".equals(method) && "/api/playlist/merge".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.mergePlaylist(new JSONObject(new String(body, "UTF-8")))
+                            .getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/recording/playlist".equals(path)) {
             Resource resource = listener.recording(null);
             send(socket, 200, resource.contentType, resource.body);
@@ -303,6 +348,8 @@ final class LocalControlServer implements Closeable {
     }
 
     private static String findLanAddress() {
+        String preferred = null;
+        int preferredRank = Integer.MAX_VALUE;
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             if (interfaces == null) {
@@ -316,14 +363,40 @@ final class LocalControlServer implements Closeable {
                     String host = address.getHostAddress();
                     if (!address.isLoopbackAddress() && host.indexOf(':') < 0
                             && address.isSiteLocalAddress()) {
-                        return host;
+                        int rank = ipv4Preference(host);
+                        if (rank < preferredRank) {
+                            preferred = host;
+                            preferredRank = rank;
+                            if (rank == 0) {
+                                return preferred;
+                            }
+                        }
                     }
                 }
             }
         } catch (SocketException error) {
             Log.w(TAG, "Unable to inspect network interfaces", error);
         }
-        return null;
+        return preferred;
+    }
+
+    private static int requestBodyLimit() {
+        long heapBudget = Runtime.getRuntime().maxMemory() / 4L;
+        return (int) Math.max(MIN_REQUEST_BYTES,
+                Math.min(MAX_REQUEST_BYTES, heapBudget));
+    }
+
+    private static int ipv4Preference(String address) {
+        if (address != null && address.startsWith("192.")) {
+            return 0;
+        }
+        if (address != null && address.startsWith("10.")) {
+            return 1;
+        }
+        if (address != null && address.startsWith("172.")) {
+            return 2;
+        }
+        return 3;
     }
 
     @Override
@@ -336,5 +409,6 @@ final class LocalControlServer implements Closeable {
             }
             serverSocket = null;
         }
+        clientWorkers.shutdownNow();
     }
 }

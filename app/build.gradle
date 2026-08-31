@@ -13,7 +13,7 @@ if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
 }
 def releaseSigningProperties = new Properties()
 def configuredVersionCode = project.hasProperty('versionCodeOverride')
-        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 5
+        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 6
 if (releaseSigningAvailable) {
     releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
     ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
@@ -40,13 +40,14 @@ android {
     }
 
     defaultConfig {
-        applicationId 'xiao.bu.tv'
+        applicationId project.hasProperty('applicationIdOverride')
+                ? project.property('applicationIdOverride').toString() : 'xiao.bu.tv'
         minSdkVersion 14
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion 25
         versionCode configuredVersionCode
-        versionName '1.5.0'
+        versionName '1.6.0'
     }
 
     flavorDimensions 'architecture'
@@ -71,11 +72,35 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (releaseSigningAvailable) {
+                signingConfig signingConfigs.iptvRelease
+            }
+            buildConfigField 'boolean', 'EMBED_CONTROL_PAGES', 'true'
+            buildConfigField 'String', 'RECOMMENDED_JOY_SOURCE_URL',
+                    '"https://raw.githubusercontent.com/buhanzhe/webSourceM3U8/refs/heads/main/JoyPage.txt"'
+            buildConfigField 'String', 'RECOMMENDED_WEBVIEW_SOURCE_URL',
+                    '"https://raw.githubusercontent.com/buhanzhe/webSourceM3U8/refs/heads/main/webview.txt"'
+            buildConfigField 'String', 'FLY_MOUSE_PAGE_SOURCE_URL', '""'
+            buildConfigField 'String', 'VIDEO_RECORDER_PAGE_SOURCE_URL', '""'
+            buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL', '""'
+        }
         release {
             minifyEnabled false
             if (releaseSigningAvailable) {
                 signingConfig signingConfigs.iptvRelease
             }
+            buildConfigField 'boolean', 'EMBED_CONTROL_PAGES', 'false'
+            buildConfigField 'String', 'RECOMMENDED_JOY_SOURCE_URL',
+                    '"https://github.com/buhanzhe/webSourceM3U8/releases/latest/download/JoyPage.txt"'
+            buildConfigField 'String', 'RECOMMENDED_WEBVIEW_SOURCE_URL',
+                    '"https://github.com/buhanzhe/webSourceM3U8/releases/latest/download/webview.txt"'
+            buildConfigField 'String', 'FLY_MOUSE_PAGE_SOURCE_URL',
+                    '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/flymouse.html"'
+            buildConfigField 'String', 'VIDEO_RECORDER_PAGE_SOURCE_URL',
+                    '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/video-recorder.html"'
+            buildConfigField 'String', 'MP4_FINALIZER_SOURCE_URL',
+                    '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/mp4-finalizer.js"'
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
@@ -84,6 +109,11 @@ android {
         main {
             jni.srcDirs = []
             jniLibs.srcDirs = ['src/main/libs']
+        }
+        debug {
+            // Debug builds serve the Pages files directly from the TV. Release builds
+            // fetch the same files through GithubProxy and therefore do not package them.
+            assets.srcDirs = [rootProject.file('docs')]
         }
     }
 
@@ -95,8 +125,6 @@ android {
 
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
-    arm32Implementation 'tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8'
-    arm64Implementation 'tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8'
 }
 
 task generateVersionFile {
