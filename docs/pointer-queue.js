@@ -51,9 +51,14 @@
         tail.body.dx = Math.max(-240, Math.min(240, tail.body.dx + body.dx));
         tail.body.dy = Math.max(-240, Math.min(240, tail.body.dy + body.dy));
       } else if (!done && tail && !tail.done && body.action === "scroll" && tail.body.action === "scroll") {
-        // Reversing direction cancels unsent momentum instead of replaying it later.
-        var total = tail.body.scrollY * body.scrollY < 0 ? body.scrollY : tail.body.scrollY + body.scrollY;
-        tail.body.scrollY = Math.max(-1440, Math.min(1440, total));
+        // Merge each axis independently. Reversing one axis cancels only that
+        // axis, which keeps diagonal Mac-style scrolling responsive.
+        var oldX = tail.body.scrollX || 0, nextX = body.scrollX || 0,
+          oldY = tail.body.scrollY || 0, nextY = body.scrollY || 0;
+        tail.body.scrollX = Math.max(-1440, Math.min(1440,
+          oldX * nextX < 0 ? nextX : oldX + nextX));
+        tail.body.scrollY = Math.max(-1440, Math.min(1440,
+          oldY * nextY < 0 ? nextY : oldY + nextY));
       } else {
         // Bound backlog during network stalls, without dropping just an UP edge.
         if (queue.length >= 64) {
@@ -131,11 +136,88 @@
       var blend = 1 - Math.exp(-elapsed / 22);
       speed += (Math.abs(delta) / elapsed - speed) * blend;
       var gain = 1.6 + Math.min(5.4, speed * 2.8);
-      // Negative finger movement -> negative wheel delta -> page scrolls upward.
-      remainder += delta * gain * Math.max(0.75, Math.min(3, scale || 1));
+      // Content follows both fingers: swipe up moves page content up, swipe down
+      // moves it down. The Android receiver converts this page direction to the
+      // opposite AXIS_VSCROLL sign expected by mouse-wheel input.
+      remainder -= delta * gain * Math.max(0.75, Math.min(3, scale || 1));
       var value = remainder < 0 ? Math.ceil(remainder) : Math.floor(remainder);
       remainder -= value;
       return value;
+    };
+  };
+
+  /** Two-finger pan/pinch recognizer. It tracks finger identity so adding,
+   * removing or replacing a touch never creates a jump. */
+  global.NtvTrackpadGesture = function () {
+    var ids = [], startX = 0, startY = 0, lastX = 0, lastY = 0,
+      startDistance = 0, lastDistance = 0, lastAt = 0, speed = 0,
+      remainderX = 0, remainderY = 0, mode = "";
+    function points(touches) {
+      var found = {}, i;
+      for (i = 0; i < touches.length; i++) found[String(touches[i].identifier)] = touches[i];
+      return found;
+    }
+    function metrics(touches) {
+      var found = points(touches), a = found[ids[0]], b = found[ids[1]], dx, dy;
+      if (!a || !b) return null;
+      dx = b.clientX - a.clientX;
+      dy = b.clientY - a.clientY;
+      return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2,
+        distance: Math.sqrt(dx * dx + dy * dy) };
+    }
+    this.begin = function (touches, time) {
+      var dx, dy;
+      mode = ""; speed = 0; remainderX = 0; remainderY = 0;
+      ids = [String(touches[0].identifier), String(touches[1].identifier)];
+      startX = lastX = (touches[0].clientX + touches[1].clientX) / 2;
+      startY = lastY = (touches[0].clientY + touches[1].clientY) / 2;
+      dx = touches[1].clientX - touches[0].clientX;
+      dy = touches[1].clientY - touches[0].clientY;
+      startDistance = lastDistance = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+      lastAt = time;
+    };
+    this.update = function (touches, time, scale) {
+      if (touches.length !== 2) return null;
+      var value = metrics(touches);
+      if (!value) { this.begin(touches, time); return null; }
+      var totalX = value.x - startX, totalY = value.y - startY,
+        pan = Math.sqrt(totalX * totalX + totalY * totalY),
+        pinch = Math.abs(value.distance - startDistance), activated = false;
+      if (!mode) {
+        if (pinch >= Math.max(7, startDistance * 0.045) && pinch > pan * 0.72) mode = "pinch";
+        else if (pan >= 4) mode = "scroll";
+        else { lastX = value.x; lastY = value.y; lastDistance = value.distance; return null; }
+        activated = true;
+      }
+      if (mode === "pinch") {
+        var factor = value.distance / Math.max(1, lastDistance);
+        lastX = value.x; lastY = value.y; lastDistance = value.distance; lastAt = time;
+        factor = Math.max(0.86, Math.min(1.16, factor));
+        return Math.abs(factor - 1) < 0.002 ? null : { type: "pinch", factor: factor };
+      }
+      var elapsed = Math.max(4, Math.min(80, time - lastAt || 16)),
+        dx = activated ? totalX : value.x - lastX,
+        dy = activated ? totalY : value.y - lastY,
+        distance = Math.sqrt(dx * dx + dy * dy);
+      lastX = value.x; lastY = value.y; lastDistance = value.distance; lastAt = time;
+      if (distance > 180) { speed = 0; remainderX = 0; remainderY = 0; return null; }
+      speed += (distance / elapsed - speed) * (1 - Math.exp(-elapsed / 24));
+      var gain = (1.35 + Math.min(4.65, speed * 2.7)) * Math.max(0.75, Math.min(3, scale || 1));
+      remainderX -= dx * gain;
+      // Convert finger travel to content travel. The Android bridge converts this
+      // value once more to AXIS_VSCROLL, so an upward two-finger swipe must be
+      // positive here to move the webpage upward like a Mac trackpad.
+      remainderY -= dy * gain;
+      var scrollX = remainderX < 0 ? Math.ceil(remainderX) : Math.floor(remainderX),
+        scrollY = remainderY < 0 ? Math.ceil(remainderY) : Math.floor(remainderY);
+      remainderX -= scrollX; remainderY -= scrollY;
+      return scrollX || scrollY ? { type: "scroll", scrollX: scrollX, scrollY: scrollY } : null;
+    };
+    this.summary = function (touches) {
+      var value = touches && touches.length === 2 ? metrics(touches) : null;
+      return { mode: mode, dx: (value ? value.x : lastX) - startX,
+        dy: (value ? value.y : lastY) - startY,
+        scale: (value ? value.distance : lastDistance) / Math.max(1, startDistance) };
     };
   };
 })(window);

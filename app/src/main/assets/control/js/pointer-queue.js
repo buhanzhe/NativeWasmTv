@@ -204,10 +204,10 @@
       speed += (distance / elapsed - speed) * (1 - Math.exp(-elapsed / 24));
       var gain = (1.35 + Math.min(4.65, speed * 2.7)) * Math.max(0.75, Math.min(3, scale || 1));
       remainderX -= dx * gain;
-      // WebView's vertical wheel axis is inverted once by the Android input
-      // bridge. Keep the finger direction here so a two-finger swipe up scrolls
-      // the webpage up, matching a Mac trackpad.
-      remainderY += dy * gain;
+      // Convert finger travel to content travel. The Android bridge converts this
+      // value once more to AXIS_VSCROLL, so an upward two-finger swipe must be
+      // positive here to move the webpage upward like a Mac trackpad.
+      remainderY -= dy * gain;
       var scrollX = remainderX < 0 ? Math.ceil(remainderX) : Math.floor(remainderX),
         scrollY = remainderY < 0 ? Math.ceil(remainderY) : Math.floor(remainderY);
       remainderX -= scrollX; remainderY -= scrollY;
