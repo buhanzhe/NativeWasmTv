@@ -4400,12 +4400,11 @@ public final class MainActivity extends Activity {
         }
         if (post) {
             if (webViewCastManager != null && webViewCastManager.isRunning()) {
-                // The virtual display has its own 30/60/120 fps clock. Its next
-                // capture calls prepareCastUiFrame() and consumes the freshest
-                // coordinate; phone-display VSYNC would incorrectly cap this at
-                // the physical screen refresh rate. This callback is only a stall/
-                // shutdown fallback and is normally removed by the capture tick.
-                root.postDelayed(applyPendingFlyMouseMove, 40L);
+                // Apply input on the next main-loop turn instead of making the
+                // cursor wait for a potentially expensive WebView capture. The
+                // capture path still flushes any coordinate that arrived between
+                // this task and root.draw(), so encoded frames stay current too.
+                root.post(applyPendingFlyMouseMove);
             } else if (Build.VERSION.SDK_INT >= 16) {
                 root.postOnAnimation(applyPendingFlyMouseMove);
             } else {

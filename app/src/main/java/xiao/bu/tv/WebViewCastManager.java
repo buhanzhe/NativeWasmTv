@@ -17,10 +17,12 @@ import android.media.projection.MediaProjection;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.Surface;
 
 import org.json.JSONException;
@@ -45,6 +47,11 @@ final class WebViewCastManager implements Closeable {
     private static final int AUDIO_PCM_BYTES_PER_FRAME = AUDIO_CHANNELS * 2;
     private static final int AUDIO_INPUT_BYTES = AUDIO_FRAME_SAMPLES * AUDIO_PCM_BYTES_PER_FRAME;
     private static final int AUDIO_BITRATE = 160000;
+    // New viewers and packet-loss recovery request an IDR immediately below. A
+    // one-second periodic IDR creates a large, visible encoder spike on animated
+    // webpages, so retain only a sparse fallback for vendor codecs that reject
+    // PARAMETER_KEY_REQUEST_SYNC_FRAME.
+    private static final int PERIODIC_SYNC_FRAME_SECONDS = 5;
     private static volatile Boolean hevcEncodingSupported;
 
     private final Activity activity;
@@ -64,6 +71,7 @@ final class WebViewCastManager implements Closeable {
     private CastGlCompositor compositor;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private Runnable uiRenderTick;
+    private Choreographer.FrameCallback uiFrameCallback;
     private Thread videoDrainThread;
     private Thread videoSendThread;
     private volatile CastVideoQueue videoQueue;
@@ -185,7 +193,7 @@ final class WebViewCastManager implements Closeable {
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         format.setInteger(MediaFormat.KEY_BIT_RATE, value.bitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, value.fps);
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, PERIODIC_SYNC_FRAME_SECONDS);
         if (lowLatency && Build.VERSION.SDK_INT >= 26) format.setInteger("latency", 0);
         if (lowLatency && Build.VERSION.SDK_INT >= 29) format.setInteger("max-bframes", 0);
         if (CastConfig.CODEC_H264.equals(value.codec) && value.width <= 1280
@@ -253,29 +261,60 @@ final class WebViewCastManager implements Closeable {
             throws IOException {
         compositor = new CastGlCompositor(encoderSurface, value.width, value.height,
                 value.fps, includeVideoLayer);
-        final long intervalUs = 1000000L / Math.max(1, value.fps);
-        uiRenderTick = new Runnable() {
-            private long nextFrameAtUs = SystemClock.uptimeMillis() * 1000L;
+        final long intervalNs = 1000000000L / Math.max(1, value.fps);
+        final PowerManager power = (PowerManager) activity.getSystemService(
+                Activity.POWER_SERVICE);
+        final long[] lastVsyncNs = new long[] { 0L };
+        final long[] nextFrameNs = new long[] { 0L };
 
+        // Capture on the display clock while it is running. WebView's
+        // requestAnimationFrame uses the same clock, so this avoids the slow
+        // phase drift where an independent Handler periodically lands in the
+        // middle of WebView rendering. The deadline accumulator intentionally
+        // drops missed frames instead of issuing a catch-up burst.
+        uiFrameCallback = new Choreographer.FrameCallback() {
+            @Override
+            public void doFrame(long frameTimeNanos) {
+                if (!running || compositor == null || uiFrameCallback != this) return;
+                lastVsyncNs[0] = frameTimeNanos;
+                if (nextFrameNs[0] == 0L || frameTimeNanos >= nextFrameNs[0]) {
+                    renderUiFrame(value.width, value.height);
+                    long following = nextFrameNs[0] == 0L
+                            ? frameTimeNanos + intervalNs : nextFrameNs[0] + intervalNs;
+                    nextFrameNs[0] = following <= frameTimeNanos
+                            ? frameTimeNanos + intervalNs : following;
+                }
+                Choreographer.getInstance().postFrameCallback(this);
+            }
+        };
+        uiRenderTick = new Runnable() {
             @Override
             public void run() {
-                if (!running || compositor == null) {
-                    return;
-                }
+                if (!running || compositor == null || uiRenderTick != this) return;
                 Throwable compositorFailure = compositor.failure();
                 if (compositorFailure != null) {
                     failAsync("GPU 投送合成器异常", compositorFailure);
                     return;
                 }
-                renderUiFrame(value.width, value.height);
-                nextFrameAtUs += intervalUs;
-                long now = SystemClock.uptimeMillis();
-                if (nextFrameAtUs <= now * 1000L) {
-                    nextFrameAtUs = now * 1000L + intervalUs;
+                long nowNs = System.nanoTime();
+                boolean interactive = power == null || Build.VERSION.SDK_INT < 20
+                        || power.isInteractive();
+                // Choreographer pauses when the display sleeps. Keep the encoder
+                // and RTSP session alive from the monotonic fallback clock, but do
+                // not race it while display VSYNC is healthy.
+                if (!interactive || lastVsyncNs[0] == 0L
+                        || nowNs - lastVsyncNs[0] > Math.max(50_000_000L,
+                                intervalNs * 3L)) {
+                    if (nextFrameNs[0] == 0L || nowNs >= nextFrameNs[0]) {
+                        renderUiFrame(value.width, value.height);
+                        nextFrameNs[0] = nowNs + intervalNs;
+                    }
                 }
-                uiHandler.postAtTime(this, (nextFrameAtUs + 999L) / 1000L);
+                uiHandler.postDelayed(this, Math.max(1L,
+                        (intervalNs + 999_999L) / 1_000_000L));
             }
         };
+        Choreographer.getInstance().postFrameCallback(uiFrameCallback);
         uiHandler.post(uiRenderTick);
     }
 
@@ -416,7 +455,7 @@ final class WebViewCastManager implements Closeable {
                     parameters.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
                     try { encoder.setParameters(parameters); }
                     catch (IllegalArgumentException unsupported) {
-                        // The periodic 1-second IDR remains the fallback on old codecs.
+                        // A sparse periodic IDR remains the fallback on old codecs.
                         Log.w(TAG, "Encoder does not support on-demand sync frame", unsupported);
                     }
                     lastSyncRequestNs = now;
@@ -610,6 +649,10 @@ final class WebViewCastManager implements Closeable {
             if (uiRenderTick != null) {
                 uiHandler.removeCallbacks(uiRenderTick);
                 uiRenderTick = null;
+            }
+            if (uiFrameCallback != null) {
+                Choreographer.getInstance().removeFrameCallback(uiFrameCallback);
+                uiFrameCallback = null;
             }
             if (compositor != null) {
                 compositor.close();

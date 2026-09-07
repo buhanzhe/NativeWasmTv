@@ -259,6 +259,7 @@ final class CastGlCompositor implements Closeable {
         }
 
         void draw() {
+            boolean consumedUiFrame = false;
             if (includeVideoLayer && videoFrameAvailable) {
                 videoFrameAvailable = false;
                 videoTexture.updateTexImage();
@@ -268,22 +269,30 @@ final class CastGlCompositor implements Closeable {
                 uiFrameAvailable = false;
                 uiTexture.updateTexImage();
                 uiTexture.getTransformMatrix(uiMatrix);
-                releaseUiFrame();
+                consumedUiFrame = true;
             }
-            GLES20.glViewport(0, 0, width, height);
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-            if (includeVideoLayer) {
-                setVideoVertices();
-                drawTexture(videoTextureId, videoMatrix, videoVertices, false);
+            try {
+                GLES20.glViewport(0, 0, width, height);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                if (includeVideoLayer) {
+                    setVideoVertices();
+                    drawTexture(videoTextureId, videoMatrix, videoVertices, false);
+                }
+                drawTexture(uiTextureId, uiMatrix, uiVertices, true);
+                long ptsNs = System.nanoTime();
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
+                check(EGL14.eglSwapBuffers(eglDisplay, eglSurface), "eglSwapBuffers");
+                if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
+                    android.util.Log.i("NtvCastLatency", "GL pts=" + ptsNs / 1000L
+                            + " ui=" + uiTexture.getTimestamp() / 1000L
+                            + " end=" + System.nanoTime() / 1000L);
+            } finally {
+                // Keep the producer slot occupied through eglSwapBuffers. When
+                // MediaCodec is back-pressured (most visibly on a large IDR), the
+                // UI thread then skips capture instead of blocking WebView and
+                // pointer input on another full-resolution Surface draw.
+                if (consumedUiFrame) releaseUiFrame();
             }
-            drawTexture(uiTextureId, uiMatrix, uiVertices, true);
-            long ptsNs = System.nanoTime();
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
-            check(EGL14.eglSwapBuffers(eglDisplay, eglSurface), "eglSwapBuffers");
-            if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
-                android.util.Log.i("NtvCastLatency", "GL pts=" + ptsNs / 1000L
-                        + " ui=" + uiTexture.getTimestamp() / 1000L
-                        + " end=" + System.nanoTime() / 1000L);
         }
 
         void drawTexture(int textureId, float[] matrix, FloatBuffer vertices,
