@@ -3,10 +3,8 @@ package xiao.bu.tv;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.hardware.Sensor;
@@ -357,22 +355,8 @@ public final class ManagementActivity extends Activity {
     }
 
     private void finishOrConfirmTakeover() {
-        if (!takeoverMode) {
-            finish();
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("退出接管")
-                .setMessage("是否退出对电视的接管？")
-                .setNegativeButton("继续接管", null)
-                .setPositiveButton("退出接管", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        setResult(RESULT_OK);
-                        finish();
-                    }
-                })
-                .show();
+        if (takeoverMode) setResult(RESULT_OK);
+        finish();
     }
 
     private final class NativeDeviceBridge implements SensorEventListener {

@@ -49,7 +49,7 @@ final class RemoteCatalogClient {
     private static final int POINTER_CONNECT_TIMEOUT_MS = 1500;
     private static final int POINTER_READ_TIMEOUT_MS = 2500;
     private static final long RESOLVE_TIMEOUT_MS = 30000L;
-    private static final long TAKEOVER_HEARTBEAT_MS = 4000L;
+    private static final long TAKEOVER_HEARTBEAT_MS = 1000L;
     private final Object takeoverSessionLock = new Object();
     private volatile int takeoverSessionGeneration;
     private volatile String takeoverSessionId = "";
@@ -552,7 +552,7 @@ final class RemoteCatalogClient {
                         return;
                     } catch (Exception ignored) {
                         // Wi-Fi handovers can break an established socket. Reconnect
-                        // with the same session id before the receiver's 10 s lease
+                        // with the same session id before the receiver's 3 s lease
                         // expires instead of leaving a stale takeover behind.
                     } finally {
                         synchronized (takeoverSessionLock) {

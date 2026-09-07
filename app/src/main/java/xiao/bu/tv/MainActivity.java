@@ -210,7 +210,7 @@ public final class MainActivity extends Activity {
     private static final long PLAYBACK_BUFFERING_RECOVERY_MS = 10000L;
     private static final long PLAYBACK_STALL_RECOVERY_MS = 10000L;
     private static final long NTV_CAST_STALL_RECOVERY_MS = 5000L;
-    private static final long TAKEOVER_SESSION_TIMEOUT_MS = 15000L;
+    private static final long TAKEOVER_SESSION_TIMEOUT_MS = 3000L;
     private static final long PLAYBACK_RECOVERY_HEALTHY_RESET_MS = 30000L;
     private static final int PLAYBACK_RECOVERY_MAX_ATTEMPTS = 5;
     private static final long CUSTOM_SOURCE_TIMEOUT_MS = 5000L;
@@ -808,6 +808,13 @@ public final class MainActivity extends Activity {
                 openManagementPage();
             }
         });
+        receiverTakeoverOverlay.findViewById(R.id.receiver_takeover_stop)
+                .setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        exitReceiverTakeover(false);
+                    }
+                });
         root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View view, int left, int top, int right, int bottom,

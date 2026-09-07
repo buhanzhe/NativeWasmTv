@@ -32,5 +32,17 @@
             android:text="画面仅在电视端显示\n点击屏幕返回管理界面"
             android:textColor="#FF9CA3AF"
             android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/receiver_takeover_stop"
+            android:layout_width="160dp"
+            android:layout_height="48dp"
+            android:layout_marginTop="28dp"
+            android:background="@drawable/takeover_stop_button_background"
+            android:gravity="center"
+            android:text="结束投屏"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp" />
     </LinearLayout>
 </FrameLayout>

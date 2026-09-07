@@ -151,7 +151,7 @@
   global.NtvTrackpadGesture = function () {
     var ids = [], startX = 0, startY = 0, lastX = 0, lastY = 0,
       startDistance = 0, lastDistance = 0, lastAt = 0, speed = 0,
-      remainderX = 0, remainderY = 0, mode = "";
+      remainderX = 0, remainderY = 0, mode = "", pinchVotes = 0;
     function points(touches) {
       var found = {}, i;
       for (i = 0; i < touches.length; i++) found[String(touches[i].identifier)] = touches[i];
@@ -167,7 +167,7 @@
     }
     this.begin = function (touches, time) {
       var dx, dy;
-      mode = ""; speed = 0; remainderX = 0; remainderY = 0;
+      mode = ""; speed = 0; remainderX = 0; remainderY = 0; pinchVotes = 0;
       ids = [String(touches[0].identifier), String(touches[1].identifier)];
       startX = lastX = (touches[0].clientX + touches[1].clientX) / 2;
       startY = lastY = (touches[0].clientY + touches[1].clientY) / 2;
@@ -182,15 +182,23 @@
       if (!value) { this.begin(touches, time); return null; }
       var totalX = value.x - startX, totalY = value.y - startY,
         pan = Math.sqrt(totalX * totalX + totalY * totalY),
-        pinch = Math.abs(value.distance - startDistance), activated = false;
+        pinch = Math.abs(value.distance - startDistance), activated = false,
+        pinchThreshold = Math.max(12, startDistance * 0.08),
+        pinchCandidate = pinch >= pinchThreshold && pinch > pan * 1.4;
       if (!mode) {
-        if (pinch >= Math.max(7, startDistance * 0.045) && pinch > pan * 0.72) mode = "pinch";
-        else if (pan >= 4) mode = "scroll";
+        // A vertical two-finger swipe often changes the measured finger spacing by
+        // a few pixels. Require two consecutive, clearly dominant spacing changes
+        // before locking into zoom; ordinary scrolling should win immediately.
+        pinchVotes = pinchCandidate ? pinchVotes + 1 : 0;
+        if (pinchVotes >= 2) mode = "pinch";
+        else if (pan >= 5) mode = "scroll";
         else { lastX = value.x; lastY = value.y; lastDistance = value.distance; return null; }
         activated = true;
       }
       if (mode === "pinch") {
-        var factor = value.distance / Math.max(1, lastDistance);
+        // Include the deliberate movement used to cross the stronger threshold so
+        // zoom still starts promptly once the gesture is unambiguous.
+        var factor = value.distance / Math.max(1, activated ? startDistance : lastDistance);
         lastX = value.x; lastY = value.y; lastDistance = value.distance; lastAt = time;
         factor = Math.max(0.86, Math.min(1.16, factor));
         return Math.abs(factor - 1) < 0.002 ? null : { type: "pinch", factor: factor };
