@@ -4,8 +4,11 @@ import java.util.ArrayDeque;
 
 /** Bounded encoded access units. After a drop, resume only at a fresh IDR. */
 final class CastVideoQueue {
-    static final long MAX_AGE_NS = 80_000_000L;
-    private static final int MAX_FRAMES = 3;
+    // A large HEVC IDR can occupy the network sender for several display
+    // intervals. Keep enough room for that short, predictable burst. The age
+    // bound still prevents a slow link from turning this into pointer latency.
+    static final long MAX_AGE_NS = 100_000_000L;
+    static final int MAX_FRAMES = 6;
     private static final int MAX_BYTES = 3 * 1024 * 1024;
     static final class Frame {
         final byte[] data;

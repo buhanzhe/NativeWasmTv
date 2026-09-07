@@ -87,10 +87,12 @@ final class RtspCastServer implements Closeable {
         this.audioEnabled = audioEnabled;
         this.videoCodec = "h265".equals(videoCodec) ? "h265" : "h264";
         this.videoFps = Math.max(1, videoFps);
-        // About one access unit, bounded even for large requested rates.
-        // A fixed 32 KiB window throttles 30 Mbps streams unnecessarily.
-        sendBufferBytes = Math.max(32 * 1024,
-                Math.min(192 * 1024, bitrate / 8 / this.videoFps));
+        // Reserve roughly 250 ms of the requested bitrate for a large H.265 IDR.
+        // A one-frame buffer is too small because an IDR is much larger than an
+        // average P frame; it then blocks the send thread while the receiver drains
+        // TCP and makes the following GOP miss its low-latency queue deadline.
+        sendBufferBytes = Math.max(128 * 1024,
+                Math.min(1024 * 1024, bitrate / 8 / 4));
         serverSocket = bindServer();
         serverSocket.setSoTimeout(100);
         videoSocket = new DatagramSocket();

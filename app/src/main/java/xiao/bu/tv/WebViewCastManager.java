@@ -76,6 +76,7 @@ final class WebViewCastManager implements Closeable {
     private Thread videoSendThread;
     private volatile CastVideoQueue videoQueue;
     private volatile long lastVideoSendUs;
+    private volatile long peakVideoSendUs;
     private volatile CastBitrateController bitrateController;
     private volatile long encodedVideoBytes;
     private volatile double encodeDelayMs = -1d;
@@ -111,6 +112,7 @@ final class WebViewCastManager implements Closeable {
         renderedUiFrames = 0L;
         lastVideoPresentationTimeUs = 0L;
         lastVideoSendUs = 0L;
+        peakVideoSendUs = 0L;
         encodedVideoBytes = 0L;
         encodeDelayMs = -1d;
         rtspVideoBitrate.reset();
@@ -403,6 +405,7 @@ final class WebViewCastManager implements Closeable {
                         boolean connected = server.hasVideoClient();
                         server.sendVideo(frame.data, frame.ptsUs, frame.flags);
                         lastVideoSendUs = (System.nanoTime() - begin) / 1000L;
+                        peakVideoSendUs = Math.max(peakVideoSendUs, lastVideoSendUs);
                         if (connected) bitrate.recordSend(lastVideoSendUs * 1000L);
                         if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                             Log.i("NtvCastLatency", "SEND pts=" + frame.ptsUs
@@ -450,7 +453,7 @@ final class WebViewCastManager implements Closeable {
                     }
                 }
                 if ((queue.needsSyncFrame() || server.needsSyncFrame())
-                        && now - lastSyncRequestNs > 250_000_000L) {
+                        && now - lastSyncRequestNs > 100_000_000L) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
                     try { encoder.setParameters(parameters); }
@@ -535,6 +538,7 @@ final class WebViewCastManager implements Closeable {
                     .put("encodeDelayMs", encodeDelayMs < 0d
                             ? -1L : Math.round(encodeDelayMs))
                     .put("lastVideoSendMs", lastVideoSendUs / 1000d)
+                    .put("peakVideoSendMs", peakVideoSendUs / 1000d)
                     .put("queuedVideoFrames", videoQueue == null ? 0 : videoQueue.size())
                     .put("droppedVideoFrames", videoQueue == null ? 0 : videoQueue.droppedFrames())
                     .put("rtspUrl", rtspUrl());

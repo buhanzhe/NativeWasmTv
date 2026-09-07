@@ -491,6 +491,8 @@ public final class MainActivity extends Activity {
     private final MediaBitrateEstimator playerTransportBitrate =
             new MediaBitrateEstimator();
     private IjkMediaPlayer sampledBitratePlayer;
+    private IjkMediaPlayer sampledMetadataPlayer;
+    private PlaybackDebugStats cachedIjkMetadata;
     private long measuredTransportBytesPerSecond = -1L;
     private final long[] networkSpeedSampleBytes = new long[6];
     private final long[] networkSpeedSampleTimes = new long[6];
@@ -3333,11 +3335,16 @@ public final class MainActivity extends Activity {
         long duration = 0L;
         long position = 0L;
         boolean playing = false;
+        float outputFps = 0f;
+        long videoCachedDurationMs = 0L;
         if (activePlayer != null && prepared) {
             try {
                 duration = Math.max(0L, activePlayer.getDuration());
                 position = Math.max(0L, activePlayer.getCurrentPosition());
                 playing = activePlayer.isPlaying();
+                outputFps = Math.max(0f, activePlayer.getVideoOutputFramesPerSecond());
+                videoCachedDurationMs = Math.max(0L,
+                        activePlayer.getVideoCachedDuration());
             } catch (RuntimeException error) {
                 Log.w(TAG, "Unable to read media controller state", error);
             }
@@ -3352,6 +3359,8 @@ public final class MainActivity extends Activity {
                         && favoriteChannelKeys.contains(favoriteKey(group, channel)))
                 .put("positionMs", position)
                 .put("durationMs", duration)
+                .put("outputFps", Math.round(outputFps * 10f) / 10.0d)
+                .put("videoCachedDurationMs", videoCachedDurationMs)
                 .put("seekable", prepared && duration > 0L)
                 .put("speed", Math.round(playbackSpeed * 100f) / 100.0d)
                 .put("previousAvailable", adjacentChannelLocation(
@@ -6900,10 +6909,11 @@ public final class MainActivity extends Activity {
         requestPlaybackAudioFocus();
         float playbackVolume = isPlaybackMuted() ? 0f : 1f;
         nextPlayer.setVolume(playbackVolume, playbackVolume);
-        // A local 60/120fps cast has bounded sender/receiver queues already. IJK's
-        // generic live framedrop otherwise discards valid RTSP frames to chase audio.
+        // Pace the decoded picture queue on its sender PTS clock. If a short
+        // decoder stall builds a backlog, discard only pictures that have already
+        // missed their deadline instead of submitting a 100+ fps catch-up burst.
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop",
-                realtimeCastSource ? 0 : softwareDecode ? 5 : 1);
+                realtimeCastSource ? 1 : softwareDecode ? 5 : 1);
         if (realtimeCastSource) receiverNetworkLease.acquire(this);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "ntv-live-video",
                 realtimeCastSource ? 1 : 0);
@@ -9599,6 +9609,8 @@ public final class MainActivity extends Activity {
         estimatedAudioBitrate = -1L;
         playerTransportBitrate.reset();
         sampledBitratePlayer = null;
+        sampledMetadataPlayer = null;
+        cachedIjkMetadata = null;
         measuredTransportBytesPerSecond = -1L;
         resetNetworkSpeedSamples();
         clearSubtitleText();
@@ -10189,31 +10201,66 @@ public final class MainActivity extends Activity {
     }
 
     private void applyIjkMetadata(PlaybackDebugStats stats) {
+        IjkMediaPlayer activePlayer = player;
+        if (activePlayer == null) {
+            return;
+        }
+        if (sampledMetadataPlayer != activePlayer) {
+            sampledMetadataPlayer = activePlayer;
+            cachedIjkMetadata = null;
+        }
+        if (cachedIjkMetadata != null) {
+            applyCachedIjkMetadata(stats, cachedIjkMetadata);
+            return;
+        }
         try {
-            IjkMediaMeta meta = IjkMediaMeta.parse(player.getMediaMeta());
+            IjkMediaMeta meta = IjkMediaMeta.parse(activePlayer.getMediaMeta());
             if (meta == null) {
                 return;
             }
+            PlaybackDebugStats parsed = new PlaybackDebugStats();
             IjkMediaMeta.IjkStreamMeta video = meta.mVideoStream;
             if (video != null) {
                 if (video.mWidth > 0 && video.mHeight > 0) {
-                    stats.width = video.mWidth;
-                    stats.height = video.mHeight;
+                    parsed.width = video.mWidth;
+                    parsed.height = video.mHeight;
                 }
-                if (stats.frameRate <= 0.01f && video.mFpsNum > 0 && video.mFpsDen > 0) {
-                    stats.frameRate = (float) video.mFpsNum / video.mFpsDen;
+                if (video.mFpsNum > 0 && video.mFpsDen > 0) {
+                    parsed.frameRate = (float) video.mFpsNum / video.mFpsDen;
                 }
-                stats.videoCodec = readableCodec(video.mCodecName, null);
-                stats.videoBitrate = video.mBitrate;
+                parsed.videoCodec = readableCodec(video.mCodecName, null);
+                parsed.videoBitrate = video.mBitrate;
             }
             IjkMediaMeta.IjkStreamMeta audio = meta.mAudioStream;
             if (audio != null) {
-                stats.audioCodec = readableCodec(audio.mCodecName, null);
-                stats.audioBitrate = audio.mBitrate;
+                parsed.audioCodec = readableCodec(audio.mCodecName, null);
+                parsed.audioBitrate = audio.mBitrate;
+            }
+            if (video != null || audio != null) {
+                cachedIjkMetadata = parsed;
+                applyCachedIjkMetadata(stats, parsed);
             }
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to read IJK stream metadata", error);
         }
+    }
+
+    private static void applyCachedIjkMetadata(PlaybackDebugStats stats,
+            PlaybackDebugStats cached) {
+        // onVideoSizeChanged is authoritative for adaptive streams. Metadata
+        // dimensions are only a fallback when the decoder has not reported them.
+        if ((stats.width <= 0 || stats.height <= 0)
+                && cached.width > 0 && cached.height > 0) {
+            stats.width = cached.width;
+            stats.height = cached.height;
+        }
+        if (stats.frameRate <= 0.01f && cached.frameRate > 0.01f) {
+            stats.frameRate = cached.frameRate;
+        }
+        stats.videoCodec = cached.videoCodec;
+        stats.videoBitrate = cached.videoBitrate;
+        stats.audioCodec = cached.audioCodec;
+        stats.audioBitrate = cached.audioBitrate;
     }
 
     /** Uses encoded packet bytes/media duration, with transport bytes as RTSP fallback. */
