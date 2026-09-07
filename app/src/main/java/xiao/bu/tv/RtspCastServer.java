@@ -22,15 +22,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
+import java.util.concurrent.locks.LockSupport;
 
 /** Small single-viewer RTSP server with H.264/H.265 and optional AAC RTP tracks. */
 final class RtspCastServer implements Closeable {
     private static final String TAG = "RtspCastServer";
     private static final int FIRST_PORT = 8554;
     private static final int LAST_PORT = 8564;
-    private static final int RTP_PAYLOAD_BYTES = 1200;
+    private static final int RTP_PAYLOAD_BYTES = 1400;
+    private static final int UDP_PACE_AFTER_FRAGMENTS = 12;
+    private static final int UDP_PACE_MIN_NAL_BYTES = RTP_PAYLOAD_BYTES * 24;
+    private static final long UDP_PACE_NS = 350_000L;
     // Interleaved TCP has no datagram MTU. Larger chunks avoid thousands of
-    // packet allocations/locks per second at 4K bitrates; UDP retains 1200 bytes.
+    // packet allocations/locks per second at 4K bitrates; UDP retains a 1400-byte MTU-safe payload.
     private static final int TCP_RTP_PAYLOAD_BYTES = 16 * 1024;
     private static final int VIDEO_PAYLOAD_TYPE = 96;
     private static final int AUDIO_PAYLOAD_TYPE = 97;
@@ -66,6 +70,8 @@ final class RtspCastServer implements Closeable {
     private byte[] vps;
     private byte[] audioConfig = new byte[] { 0x11, (byte) 0x90 };
     private volatile boolean syncFrameRequested;
+    private volatile int startupSyncFramesRemaining;
+    private volatile long nextStartupSyncRequestNs;
     private volatile long slowWriteDisconnects;
     private volatile long sentVideoBytes;
     private volatile long sentAudioBytes;
@@ -130,7 +136,10 @@ final class RtspCastServer implements Closeable {
         return serverSocket.getLocalPort();
     }
 
-    boolean needsSyncFrame() { return syncFrameRequested; }
+    boolean needsSyncFrame() {
+        return syncFrameRequested || startupSyncFramesRemaining > 0
+                && System.nanoTime() >= nextStartupSyncRequestNs;
+    }
 
     boolean hasVideoClient() {
         Client target = playingClient();
@@ -210,7 +219,16 @@ final class RtspCastServer implements Closeable {
         Client snapshot = playingClient();
         if (snapshot == null) return;
         if (snapshot.awaitingKeyFrame && !keyFrame) return;
-        if (keyFrame) { snapshot.awaitingKeyFrame = false; syncFrameRequested = false; }
+        if (keyFrame) {
+            snapshot.awaitingKeyFrame = false;
+            if (startupSyncFramesRemaining > 0) startupSyncFramesRemaining--;
+            syncFrameRequested = false;
+            if (startupSyncFramesRemaining > 0) {
+                // A second startup IDR covers receivers that were still opening their
+                // UDP socket when the first burst arrived.
+                nextStartupSyncRequestNs = System.nanoTime() + 1_000_000_000L;
+            }
+        }
         if (keyFrame) {
             if (vps != null) {
                 sendVideoNal(snapshot, vps, 0, vps.length, timestamp, false);
@@ -272,6 +290,7 @@ final class RtspCastServer implements Closeable {
         int nalHeader = nal[start] & 0xff;
         int offset = isHevc() ? 2 : 1;
         if (length <= offset) return;
+        int fragmentsSincePause = 0;
         while (offset < length) {
             if (target.socket.isClosed()) return;
             int fragmentHeaderBytes = isHevc() ? 3 : 2;
@@ -295,6 +314,14 @@ final class RtspCastServer implements Closeable {
                 send(target, true, packet, 4, 14 + count, false);
             }
             offset += count;
+            if (!target.tcp && length >= UDP_PACE_MIN_NAL_BYTES && !last
+                    && ++fragmentsSincePause >= UDP_PACE_AFTER_FRAGMENTS) {
+                // Large IDRs otherwise arrive as hundreds of back-to-back datagrams.
+                // Weak receivers lose fragments before their RTSP thread is scheduled,
+                // then remain gray until the next key frame.
+                LockSupport.parkNanos(UDP_PACE_NS);
+                fragmentsSincePause = 0;
+            }
         }
     }
 
@@ -555,6 +582,8 @@ final class RtspCastServer implements Closeable {
                         // An old IDR plus current P frames is not a valid GOP.
                         next.awaitingKeyFrame = true;
                         next.playing = true;
+                        startupSyncFramesRemaining = 2;
+                        nextStartupSyncRequestNs = 0L;
                         syncFrameRequested = true;
                     }
                 } else if ("PAUSE".equals(method)) {

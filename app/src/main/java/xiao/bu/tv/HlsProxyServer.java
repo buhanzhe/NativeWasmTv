@@ -40,6 +40,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -427,12 +428,18 @@ final class HlsProxyServer implements Closeable {
         while (running) {
             try {
                 final Socket socket = serverSocket.accept();
-                workers.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        handle(socket);
-                    }
-                });
+                try {
+                    workers.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            handle(socket);
+                        }
+                    });
+                } catch (RejectedExecutionException closing) {
+                    // close() can stop the pool just after accept() returns.
+                    try { socket.close(); } catch (IOException ignored) { }
+                    if (running) Log.w(TAG, "Proxy worker rejected connection", closing);
+                }
             } catch (IOException error) {
                 if (running) {
                     Log.e(TAG, "Proxy accept failed", error);

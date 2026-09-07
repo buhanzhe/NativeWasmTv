@@ -48,9 +48,9 @@ final class WebViewCastManager implements Closeable {
     private static final int AUDIO_INPUT_BYTES = AUDIO_FRAME_SAMPLES * AUDIO_PCM_BYTES_PER_FRAME;
     private static final int AUDIO_BITRATE = 160000;
     // Recovery is requested immediately when a viewer joins or a queue is
-    // invalidated. A 30-second fallback avoids the 5-second, one-second-long IDR
-    // stalls seen on old TV TCP stacks without making vendor-codec recovery slow.
-    private static final int PERIODIC_SYNC_FRAME_SECONDS = 30;
+    // invalidated. UDP access-unit pacing now prevents the old key-frame burst,
+    // so a five-second fallback also repairs packet loss promptly.
+    private static final int PERIODIC_SYNC_FRAME_SECONDS = 5;
     private static volatile Boolean hevcEncodingSupported;
 
     private final Activity activity;

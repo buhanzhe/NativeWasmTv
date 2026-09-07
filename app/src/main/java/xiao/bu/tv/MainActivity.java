@@ -6979,7 +6979,7 @@ public final class MainActivity extends Activity {
                         : cctvSource ? 45000
                         : (genericThirdPartyHls ? 30000 : 45000));
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "first-high-water-mark-ms",
-                realtimeCastSource ? 40
+                realtimeCastSource ? 100
                         : remoteCatalogPlayback ? 800
                         : cctvSource ? cctvIjkFirstBufferMs()
                         : (genericThirdPartyHls ? 2000 : 5000));
@@ -7023,10 +7023,9 @@ public final class MainActivity extends Activity {
                         : remoteCatalogPlayback ? 1024 * 1024
                         : genericThirdPartySource ? 4 * 1024 * 1024 : 256 * 1024);
         if (realtimeCastSource) {
-            // A cast IDR arrives as a short RTP burst. KitKat's default UDP receive
-            // buffer is only about 160 KiB and can lose the middle of that burst,
-            // producing green/gray macroblocks until the next key frame. This is a
-            // socket buffer only; packet-buffering remains disabled below.
+            // Keep enough socket space for one paced IDR on old kernels. The sender
+            // now spreads large access units over a few milliseconds, preventing
+            // this safety window from receiving a single destructive packet burst.
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
                     "buffer_size", 512 * 1024);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
@@ -7034,9 +7033,9 @@ public final class MainActivity extends Activity {
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
                     "fflags", "nobuffer");
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
-                    "max_delay", 100000);
+                    "max_delay", 30000);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
-                    "reorder_queue_size", 0);
+                    "reorder_queue_size", 16);
         }
         if (genericThirdPartySource) {
             // Legacy TS services may announce audio late or begin between GOPs. The

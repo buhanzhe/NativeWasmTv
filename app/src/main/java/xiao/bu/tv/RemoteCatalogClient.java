@@ -275,7 +275,11 @@ final class RemoteCatalogClient {
             castWidth = 3840;
             castHeight = 2160;
         }
-        int castFps = 30;
+        // Old/low-RAM receivers in practice top out near 25 decoded frames per
+        // second at 720p. Sending 30 fps fills their UDP/socket queue by roughly
+        // four frames every second and turns a healthy 20 ms link into 500+ ms
+        // pointer lag. Modern receivers still advertise 30/60/120 fps profiles.
+        int castFps = lowResourceReceiver ? 25 : 30;
         if (!lowResourceReceiver) {
             int[] limit = hardwareCastLimit();
             if (limit[0] > 0) {
