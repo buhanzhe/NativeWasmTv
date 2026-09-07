@@ -29,11 +29,13 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 import java.util.zip.ZipFile;
 
-/** Checks the repository manifest, downloads a newer APK, and opens the system installer. */
+/** Checks release manifests, downloads a compatible APK, and opens the system installer. */
 final class AutoUpdater {
     private static final String TAG = "AutoUpdater";
-    private static final String VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
+    private static final String IMPORTANT_VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
             + "releases/latest/download/version.json";
+    private static final String LITE_VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
+            + "releases/latest/download/version-lite.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;
@@ -41,7 +43,13 @@ final class AutoUpdater {
 
     private final Activity activity;
     private volatile boolean destroyed;
-    private boolean checking;
+    private volatile boolean importantChecking;
+    private volatile boolean liteChecking;
+    private volatile String liteState = "idle";
+    private volatile String liteMessage = "点击检查更新";
+    private volatile int liteVersionCode;
+    private volatile String liteVersionName = "";
+    private volatile boolean liteArchitectureUpgrade;
     private boolean promptShowing;
     private AlertDialog promptDialog;
     private ProgressDialog progressDialog;
@@ -51,20 +59,20 @@ final class AutoUpdater {
     }
 
     void checkForUpdates() {
-        if (checking || destroyed) {
+        if (importantChecking || destroyed) {
             return;
         }
-        checking = true;
+        importantChecking = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    final UpdateInfo update = loadUpdateInfo();
+                    final UpdateInfo update = loadUpdateInfo(IMPORTANT_VERSION_URL, false);
                     if (update.versionCode <= BuildConfig.VERSION_CODE || destroyed) {
                         return;
                     }
                     Log.i(TAG, "Update available: " + update.versionName + ", asset="
-                            + BuildConfig.UPDATE_APK_ASSET);
+                            + update.apkAsset);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -75,10 +83,78 @@ final class AutoUpdater {
                     // Startup checks are intentionally silent when the device is offline.
                     Log.w(TAG, "Update check failed", error);
                 } finally {
-                    checking = false;
+                    importantChecking = false;
                 }
             }
         }, "update-check").start();
+    }
+
+    synchronized String checkLiteForUpdates() {
+        if (destroyed) return stateResponse(false, "更新服务已关闭");
+        if (liteChecking) return stateResponse(true, "正在检查更新");
+        liteChecking = true;
+        liteState = "checking";
+        liteMessage = "正在读取最新 Release…";
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    final UpdateInfo update = loadUpdateInfo(LITE_VERSION_URL, true);
+                    boolean newer = update.versionCode > BuildConfig.VERSION_CODE;
+                    boolean architectureUpgrade = update.architectureUpgrade
+                            && update.versionCode >= BuildConfig.VERSION_CODE;
+                    liteVersionCode = update.versionCode;
+                    liteVersionName = update.versionName;
+                    liteArchitectureUpgrade = architectureUpgrade;
+                    if (!newer && !architectureUpgrade) {
+                        liteState = "current";
+                        liteMessage = "已是最新版本";
+                        return;
+                    }
+                    liteState = "available";
+                    liteMessage = architectureUpgrade
+                            ? "可升级到 64 位版本" : "发现新版本 " + update.versionName;
+                    activity.runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            showUpdatePrompt(update);
+                        }
+                    });
+                } catch (Exception error) {
+                    liteState = "error";
+                    liteMessage = "检查失败：" + readableMessage(error);
+                    Log.w(TAG, "Lightweight update check failed", error);
+                } finally {
+                    liteChecking = false;
+                }
+            }
+        }, "update-lite-check").start();
+        return stateResponse(true, "正在检查更新");
+    }
+
+    JSONObject stateJson() {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("state", liteState);
+            result.put("checking", liteChecking);
+            result.put("message", liteMessage);
+            result.put("versionCode", liteVersionCode);
+            result.put("versionName", liteVersionName);
+            result.put("architectureUpgrade", liteArchitectureUpgrade);
+            result.put("installed64Bit", is64BitBuild());
+            result.put("supports64Bit", supports64Bit());
+        } catch (JSONException ignored) {
+        }
+        return result;
+    }
+
+    private String stateResponse(boolean ok, String message) {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("ok", ok);
+            result.put("message", message);
+            result.put("update", stateJson());
+        } catch (JSONException ignored) {
+        }
+        return result.toString();
     }
 
     void destroy() {
@@ -93,9 +169,10 @@ final class AutoUpdater {
         }
     }
 
-    private UpdateInfo loadUpdateInfo() throws IOException, JSONException {
+    private UpdateInfo loadUpdateInfo(String manifestUrl, boolean allowArchitectureUpgrade)
+            throws IOException, JSONException {
         // The selected accelerator also covers update metadata and APK downloads.
-        HttpURLConnection connection = openConnection(GithubProxy.apply(activity, VERSION_URL)
+        HttpURLConnection connection = openConnection(GithubProxy.apply(activity, manifestUrl)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Cache-Control", "no-cache");
@@ -115,24 +192,40 @@ final class AutoUpdater {
         JSONObject object = new JSONObject(json);
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
-        String apkUrl = object.optString(BuildConfig.UPDATE_APK_URL_FIELD, "").trim();
-        String sha256 = object.optString(BuildConfig.UPDATE_SHA256_FIELD, "")
+        boolean architectureUpgrade = allowArchitectureUpgrade
+                && !is64BitBuild() && supports64Bit();
+        String urlField = architectureUpgrade ? "apk64Url" : BuildConfig.UPDATE_APK_URL_FIELD;
+        String shaField = architectureUpgrade ? "sha25664" : BuildConfig.UPDATE_SHA256_FIELD;
+        String apkAsset = architectureUpgrade ? "nTv64.apk" : BuildConfig.UPDATE_APK_ASSET;
+        String apkUrl = object.optString(urlField, "").trim();
+        String sha256 = object.optString(shaField, "")
                 .trim().toLowerCase(Locale.US);
         String releaseNotes = object.optString("releaseNotes", "").trim();
         if (versionCode < 1 || versionName.length() == 0) {
             throw new JSONException("Invalid version metadata");
         }
         if (apkUrl.length() == 0) {
-            throw new JSONException("Missing APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+            throw new JSONException("Missing APK URL for " + apkAsset);
         }
-        if (!apkUrl.endsWith("/" + BuildConfig.UPDATE_APK_ASSET)) {
-            throw new JSONException("Wrong APK URL for " + BuildConfig.UPDATE_APK_ASSET);
+        if (!apkUrl.endsWith("/" + apkAsset)) {
+            throw new JSONException("Wrong APK URL for " + apkAsset);
         }
         apkUrl = proxiedGithubUrl(apkUrl);
         if (sha256.length() > 0 && !sha256.matches("[0-9a-f]{64}")) {
             throw new JSONException("Invalid APK SHA-256");
         }
-        return new UpdateInfo(versionCode, versionName, apkUrl, sha256, releaseNotes);
+        return new UpdateInfo(versionCode, versionName, apkUrl, sha256, releaseNotes,
+                apkAsset, architectureUpgrade);
+    }
+
+    private static boolean is64BitBuild() {
+        return "arm64".equals(BuildConfig.FLAVOR);
+    }
+
+    private static boolean supports64Bit() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+                && Build.SUPPORTED_64_BIT_ABIS != null
+                && Build.SUPPORTED_64_BIT_ABIS.length > 0;
     }
 
     private void showUpdatePrompt(final UpdateInfo update) {
@@ -142,10 +235,18 @@ final class AutoUpdater {
         promptShowing = true;
         String notes = update.releaseNotes.length() == 0 ? "包含功能改进和问题修复。"
                 : update.releaseNotes;
+        String title = update.architectureUpgrade
+                && update.versionCode == BuildConfig.VERSION_CODE
+                ? activity.getString(R.string.update_64bit_title)
+                : activity.getString(R.string.update_available_title, update.versionName);
+        String message = activity.getString(R.string.update_available_message,
+                BuildConfig.VERSION_NAME, update.versionName, notes);
+        if (update.architectureUpgrade) {
+            message += "\n\n" + activity.getString(R.string.update_64bit_notice);
+        }
         final AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle(activity.getString(R.string.update_available_title, update.versionName))
-                .setMessage(activity.getString(R.string.update_available_message,
-                        BuildConfig.VERSION_NAME, update.versionName, notes))
+                .setTitle(title)
+                .setMessage(message)
                 .setPositiveButton(R.string.update_now, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialogInterface, int which) {
@@ -212,7 +313,7 @@ final class AutoUpdater {
                     if (directory == null || (!directory.isDirectory() && !directory.mkdirs())) {
                         throw new IOException("无法创建更新目录");
                     }
-                    File apk = new File(directory, BuildConfig.UPDATE_APK_ASSET
+                    File apk = new File(directory, update.apkAsset
                             .replace(".apk", "-" + update.versionCode + ".apk"));
                     if (apk.isFile() && verifySha256(apk, update.sha256) && isApk(apk)) {
                         finishDownload(apk);
@@ -498,14 +599,19 @@ final class AutoUpdater {
         final String apkUrl;
         final String sha256;
         final String releaseNotes;
+        final String apkAsset;
+        final boolean architectureUpgrade;
 
         UpdateInfo(int versionCode, String versionName, String apkUrl,
-                String sha256, String releaseNotes) {
+                String sha256, String releaseNotes, String apkAsset,
+                boolean architectureUpgrade) {
             this.versionCode = versionCode;
             this.versionName = versionName;
             this.apkUrl = apkUrl;
             this.sha256 = sha256;
             this.releaseNotes = releaseNotes;
+            this.apkAsset = apkAsset;
+            this.architectureUpgrade = architectureUpgrade;
         }
     }
 }

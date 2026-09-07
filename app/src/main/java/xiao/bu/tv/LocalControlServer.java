@@ -44,6 +44,7 @@ final class LocalControlServer implements Closeable {
         void takeoverSessionMessage(JSONObject request) throws Exception;
         void takeoverSessionClosed(String sessionId);
         String settings(JSONObject request) throws Exception;
+        String checkUpdate() throws Exception;
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
         String uploadKu9Script(String fileName, byte[] body) throws Exception;
         String pushApk(String receiverUrl, String fileName, byte[] body) throws Exception;
@@ -435,6 +436,9 @@ final class LocalControlServer implements Closeable {
         } else if ("POST".equals(method) && "/api/settings".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.settings(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/update/check".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.checkUpdate().getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/playlist/upload".equals(path)) {
             String sourceId = queryParameter(requestTarget, "id");
             String fileName = queryParameter(requestTarget, "name");

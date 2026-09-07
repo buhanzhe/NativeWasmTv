@@ -139,7 +139,7 @@ dependencies {
 
 task generateVersionFile {
     group = 'distribution'
-    description = 'Generate the GitHub update manifest at the repository root.'
+    description = 'Generate the lightweight update manifest; important manifests are opt-in.'
 
     doLast {
         Closure<String> fileSha256 = { String propertyName ->
@@ -180,11 +180,14 @@ task generateVersionFile {
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
-        File output = rootProject.file('version.json')
-        File legacyOutput = rootProject.file('version-iptv.json')
-        output.setText(manifestJson, 'UTF-8')
-        legacyOutput.setText(manifestJson, 'UTF-8')
-        logger.lifecycle("Generated ${output} and ${legacyOutput} (arm32=${sha25632 ?: 'unset'}, "
-                + "arm64=${sha25664 ?: 'unset'})")
+        File liteOutput = rootProject.file('version-lite.json')
+        liteOutput.setText(manifestJson, 'UTF-8')
+        boolean importantUpdate = project.findProperty('importantUpdate') == 'true'
+        if (importantUpdate) {
+            rootProject.file('version.json').setText(manifestJson, 'UTF-8')
+            rootProject.file('version-iptv.json').setText(manifestJson, 'UTF-8')
+        }
+        logger.lifecycle("Generated ${liteOutput} (arm32=${sha25632 ?: 'unset'}, "
+                + "arm64=${sha25664 ?: 'unset'}, important=${importantUpdate})")
     }
 }

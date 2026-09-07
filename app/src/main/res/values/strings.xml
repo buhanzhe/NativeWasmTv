@@ -10,6 +10,8 @@
     <string name="update_available_message">当前版本：%1$s\n新版本：%2$s\n\n%3$s</string>
     <string name="update_now">立即更新</string>
     <string name="update_later">稍后</string>
+    <string name="update_64bit_title">建议升级到 64 位版本</string>
+    <string name="update_64bit_notice">64 位版本可提升编码性能，但可能会占用更多内存。</string>
     <string name="update_downloading">正在下载更新</string>
     <string name="update_download_failed">更新下载失败：%1$s</string>
     <string name="update_install_failed">无法打开系统安装器</string>

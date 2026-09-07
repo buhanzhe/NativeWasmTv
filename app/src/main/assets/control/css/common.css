@@ -1369,6 +1369,45 @@ a.settings-entry {
   font-size: 10px;
   line-height: 1.55;
 }
+.system-update-row {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+.system-update-row:active {
+  transform: none;
+  background: #f2f2f7;
+}
+.system-update-row > span small {
+  display: block;
+  margin-top: 2px;
+  color: #8e8e93;
+  font-size: 9px;
+  font-weight: 500;
+}
+.system-update-row b {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.system-update-row b span {
+  color: inherit;
+  font: inherit;
+}
+.system-update-row b i {
+  color: #c7c7cc;
+  font-size: 21px;
+  font-style: normal;
+  line-height: 0.8;
+}
 .system-info-note {
   margin: 9px 3px 0;
   color: #8e8e93;

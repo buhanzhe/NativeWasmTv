@@ -2164,6 +2164,15 @@ public final class MainActivity extends Activity {
                 }
 
                 @Override
+                public String checkUpdate() throws Exception {
+                    if (autoUpdater == null) {
+                        return new JSONObject().put("ok", false)
+                                .put("message", "更新服务尚未启动").toString();
+                    }
+                    return autoUpdater.checkLiteForUpdates();
+                }
+
+                @Override
                 public String uploadPlaylist(String sourceId, String fileName, byte[] body)
                         throws Exception {
                     PlaylistManager.ImportedFile imported = playlistManager.importLocalPlaylist(
@@ -2582,6 +2591,8 @@ public final class MainActivity extends Activity {
             if (full || "system".equals(view)) {
                 root.put("system", systemInfoProvider == null ? new JSONObject()
                         : systemInfoProvider.snapshot());
+                root.put("update", autoUpdater == null ? new JSONObject()
+                        : autoUpdater.stateJson());
             }
             if (full || "cast".equals(view) || "flymouse".equals(view)) {
                 JSONObject castState = webViewCastManager == null ? new JSONObject()

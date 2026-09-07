@@ -3,6 +3,7 @@ param(
     [string]$OutputDirectory,
     [string]$JavaHome,
     [string]$ReleaseNotes = '修复问题并提升播放体验。',
+    [switch]$ImportantUpdate,
     [switch]$Clean,
     [switch]$SkipClean
 )
@@ -225,6 +226,9 @@ $manifestTasks = @(
     "-PreleaseNotes=$ReleaseNotes",
     '--no-daemon'
 )
+if ($ImportantUpdate) {
+    $manifestTasks += '-PimportantUpdate=true'
+}
 Push-Location $repoRoot
 try {
     & (Join-Path $repoRoot 'gradlew.bat') @manifestTasks
@@ -235,18 +239,29 @@ try {
     Pop-Location
 }
 
+$liteVersionPath = Join-Path $repoRoot 'version-lite.json'
 $versionPath = Join-Path $repoRoot 'version.json'
 $legacyVersionPath = Join-Path $repoRoot 'version-iptv.json'
-$version = Get-Content -LiteralPath $versionPath -Raw | ConvertFrom-Json
+$version = Get-Content -LiteralPath $liteVersionPath -Raw | ConvertFrom-Json
 if ($version.sha25632 -ne $arm32Result.SHA256 -or
         $version.sha25664 -ne $arm64Result.SHA256) {
     throw 'Generated update metadata does not match the release APK hashes.'
 }
-Copy-Item -LiteralPath $versionPath -Destination (Join-Path $OutputDirectory 'version.json') -Force
-Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirectory 'version-iptv.json') -Force
+Copy-Item -LiteralPath $liteVersionPath -Destination (Join-Path $OutputDirectory 'version-lite.json') -Force
+if ($ImportantUpdate) {
+    Copy-Item -LiteralPath $versionPath -Destination (Join-Path $OutputDirectory 'version.json') -Force
+    Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirectory 'version-iptv.json') -Force
+} else {
+    foreach ($staleManifest in @('version.json', 'version-iptv.json')) {
+        $stalePath = Join-Path $OutputDirectory $staleManifest
+        if (Test-Path -LiteralPath $stalePath) {
+            Remove-Item -LiteralPath $stalePath -Force
+        }
+    }
+}
 
 Write-Host ''
 Write-Host 'Release artifacts:'
 $results | Format-List APK, ABI, SizeMB, SHA256, Obfuscation, Metadata, Path
-Write-Host "Update metadata: $versionPath"
-Write-Host "Legacy metadata: $legacyVersionPath"
+Write-Host "Lightweight metadata: $liteVersionPath"
+Write-Host ($(if ($ImportantUpdate) { "Important metadata updated: $versionPath" } else { 'Important metadata not included (use -ImportantUpdate when required).' }))

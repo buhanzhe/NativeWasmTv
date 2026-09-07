@@ -105,6 +105,8 @@ Android 8.0 及以上系统如果阻止安装，请根据系统提示，允许�
 
 默认采用增量构建，避免 Windows 文件占用导致 `:app:clean` 失败；需要完整清理时可执行 `build-release.bat -Clean`。命令行也可继续传递 `-SkipClean` 等原脚本参数。
 
+日常打包只在输出目录生成 `version-lite.json`，设备信息页使用它检查应用版本。只有解码器等重要更新才使用 `build-release.bat -ImportantUpdate`，额外生成启动检查使用的 `version.json` 和兼容旧版的 `version-iptv.json`。
+
 ## 说明
 
 请仅播放您有权访问的直播内容。频道可用性、清晰度和线路数量可能随上游服务变化。

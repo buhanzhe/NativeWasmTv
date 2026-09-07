@@ -4,6 +4,49 @@ function setSystemInfo(id, value) {
 }
 
 var apkUploadActive = false;
+var updateCheckRequested = false,
+  updatePollTimer = null;
+
+function updateStatusText(update) {
+  if (!update || !update.state || update.state === "idle") return "点击检查更新";
+  if (update.state === "checking") return "正在检查最新 Release…";
+  if (update.state === "available" && update.architectureUpgrade)
+    return "可升级 64 位版本 · 点击再次检查";
+  return update.message || "点击检查更新";
+}
+
+function renderAppUpdate() {
+  var update = (state && state.update) || {},
+    button = document.getElementById("appUpdateButton"),
+    status = document.getElementById("sysUpdateStatus");
+  button.disabled = update.state === "checking";
+  status.textContent = updateStatusText(update);
+  if (updatePollTimer) {
+    clearTimeout(updatePollTimer);
+    updatePollTimer = null;
+  }
+  if (update.state === "checking") {
+    updatePollTimer = setTimeout(refresh, 700);
+  }
+}
+
+function checkAppUpdate(automatic) {
+  var button = document.getElementById("appUpdateButton");
+  button.disabled = true;
+  document.getElementById("sysUpdateStatus").textContent = "正在检查最新 Release…";
+  api("/api/update/check", {}, function (error, result) {
+    if (error) {
+      button.disabled = false;
+      document.getElementById("sysUpdateStatus").textContent = "检查失败，点击重试";
+      if (!automatic) toast(error.message, true);
+      return;
+    }
+    if (state) state.update = result.update || {};
+    renderAppUpdate();
+    if (!automatic && result.update && result.update.state !== "checking")
+      toast(updateStatusText(result.update), result.update.state === "error");
+  });
+}
 
 function apkLanPrefix() {
   var hosts = [], management = (state && state.managementUrl) || "";
@@ -218,6 +261,11 @@ function renderSystemInfo() {
   setSystemInfo("sysIpv4", info.lanIpv4);
   setSystemInfo("sysIpv6", info.publicIpv6);
   setSystemInfo("sysApp", info.app);
+  renderAppUpdate();
+  if (!updateCheckRequested) {
+    updateCheckRequested = true;
+    checkAppUpdate(true);
+  }
 }
 function renderPageState() {
   renderSystemInfo();

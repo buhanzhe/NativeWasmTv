@@ -29,7 +29,11 @@
             <span>Android 系统</span><b id="sysAndroid">正在读取…</b>
           </div>
           <div class="system-info-row"><span>设备型号</span><b id="sysDevice">正在读取…</b></div>
-          <div class="system-info-row"><span>应用版本</span><b id="sysApp">正在读取…</b></div>
+          <button id="appUpdateButton" class="system-info-row system-update-row" type="button"
+            onclick="checkAppUpdate(false)">
+            <span>应用版本<small id="sysUpdateStatus">点击检查更新</small></span>
+            <b><span id="sysApp">正在读取…</span><i aria-hidden="true">›</i></b>
+          </button>
           <div class="system-info-row webview-info-row">
             <span>WebView</span><b id="sysWebViewSummary">正在读取…</b>
           </div>

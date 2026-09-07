@@ -1,0 +1,11 @@
+{
+    "versionCode": 6,
+    "versionName": "1.6.0",
+    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+    "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+    "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
+    "sha256": "b96fe4eec14d89ec30e1e74cbb1fd3aa2af193b2fd401ce479e83e62d1f1c4b2",
+    "sha25632": "b96fe4eec14d89ec30e1e74cbb1fd3aa2af193b2fd401ce479e83e62d1f1c4b2",
+    "sha25664": "e832054e222cf6cfd789fd7c8f1629b4aca24530348ba3d59dfb766d795c6e9f",
+    "releaseNotes": "\u4fee\u590d\u95ee\u9898\u5e76\u63d0\u5347\u64ad\u653e\u4f53\u9a8c\u3002"
+}
