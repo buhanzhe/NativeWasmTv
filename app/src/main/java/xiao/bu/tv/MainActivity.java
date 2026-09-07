@@ -589,6 +589,8 @@ public final class MainActivity extends Activity {
     private volatile long takeoverNetworkDelayMs = -1L;
     private volatile long remoteNetworkDelayMs = -1L;
     private volatile long remoteEncodeDelayMs = -1L;
+    private volatile long remoteVideoQueueDelayMs = -1L;
+    private volatile long remoteVideoSendDelayMs = -1L;
     private volatile int remoteCatalogGeneration = -1;
     private volatile int appliedRemoteCatalogGeneration = -1;
     private volatile TakeoverChannelSelection pendingTakeoverChannelSelection;
@@ -3118,6 +3120,16 @@ public final class MainActivity extends Activity {
                                 ? -1L : webViewCastManager.encodeDelayMs();
                     }
 
+                    @Override public long videoQueueDelayMs() {
+                        return webViewCastManager == null
+                                ? -1L : webViewCastManager.videoQueueDelayMs();
+                    }
+
+                    @Override public long videoSendDelayMs() {
+                        return webViewCastManager == null
+                                ? -1L : webViewCastManager.videoSendDelayMs();
+                    }
+
                     @Override public void onRoundTrip(long delayMs) {
                         takeoverNetworkDelayMs = takeoverNetworkDelayMs < 0L ? delayMs
                                 : Math.round(takeoverNetworkDelayMs * 0.75d
@@ -3160,6 +3172,16 @@ public final class MainActivity extends Activity {
                         @Override public long encodeDelayMs() {
                             return webViewCastManager == null
                                     ? -1L : webViewCastManager.encodeDelayMs();
+                        }
+
+                        @Override public long videoQueueDelayMs() {
+                            return webViewCastManager == null
+                                    ? -1L : webViewCastManager.videoQueueDelayMs();
+                        }
+
+                        @Override public long videoSendDelayMs() {
+                            return webViewCastManager == null
+                                    ? -1L : webViewCastManager.videoSendDelayMs();
                         }
 
                         @Override public void onRoundTrip(long delayMs) {
@@ -3265,7 +3287,11 @@ public final class MainActivity extends Activity {
                 .put("catalogGeneration", catalogGeneration)
                 .put("networkDelayMs", takeoverNetworkDelayMs)
                 .put("encodeDelayMs", webViewCastManager == null
-                        ? -1L : webViewCastManager.encodeDelayMs());
+                        ? -1L : webViewCastManager.encodeDelayMs())
+                .put("videoQueueDelayMs", webViewCastManager == null
+                        ? -1L : webViewCastManager.videoQueueDelayMs())
+                .put("videoSendDelayMs", webViewCastManager == null
+                        ? -1L : webViewCastManager.videoSendDelayMs());
         ChannelCatalog.Group[] groups = ChannelCatalog.GROUPS;
         int groupIndex = currentGroupIndex;
         if (groupIndex < 0 || groupIndex >= groups.length) {
@@ -3657,6 +3683,12 @@ public final class MainActivity extends Activity {
         }
         if (request.has("encodeDelayMs")) {
             remoteEncodeDelayMs = request.optLong("encodeDelayMs", -1L);
+        }
+        if (request.has("videoQueueDelayMs")) {
+            remoteVideoQueueDelayMs = request.optLong("videoQueueDelayMs", -1L);
+        }
+        if (request.has("videoSendDelayMs")) {
+            remoteVideoSendDelayMs = request.optLong("videoSendDelayMs", -1L);
         }
         final int generation = request.optInt("catalogGeneration", -1);
         if (opened && request.optInt("group", -1) >= 0
@@ -4445,6 +4477,8 @@ public final class MainActivity extends Activity {
         remoteTakeoverSessionId = "";
         remoteNetworkDelayMs = -1L;
         remoteEncodeDelayMs = -1L;
+        remoteVideoQueueDelayMs = -1L;
+        remoteVideoSendDelayMs = -1L;
         lastRemoteTakeoverMessageAt = 0L;
         remoteCatalogGeneration = -1;
         appliedRemoteCatalogGeneration = -1;
@@ -4987,6 +5021,8 @@ public final class MainActivity extends Activity {
             remoteTakeoverSessionId = "";
             remoteNetworkDelayMs = -1L;
             remoteEncodeDelayMs = -1L;
+            remoteVideoQueueDelayMs = -1L;
+            remoteVideoSendDelayMs = -1L;
             remoteCatalogGeneration = -1;
             appliedRemoteCatalogGeneration = -1;
             pendingTakeoverChannelSelection = null;
@@ -9795,9 +9831,12 @@ public final class MainActivity extends Activity {
                     + ("loadavg".equals(systemCpuMetricSource) ? "CPU负载" : "CPU")
                     + formatCpuUsage(stats.cpuUsage) + gap + "IP" + localDebugIpAddress();
             if (remoteCatalogUrl.length() > 0) {
-                details += gap + "delay:" + formatDelay("net", stats.networkDelayMs)
-                        + gap + formatDelay("decode", stats.decodeDelayMs)
-                        + gap + formatDelay("encode", stats.encodeDelayMs);
+                details += gap + "delay(ms):net" + formatDelayValue(stats.networkDelayMs)
+                        + gap + "enc" + formatDelayValue(stats.encodeDelayMs)
+                        + gap + "q" + formatDelayValue(stats.videoQueueDelayMs)
+                        + gap + "tx" + formatDelayValue(stats.videoSendDelayMs)
+                        + gap + "decq" + formatDelayValue(stats.decodeDelayMs)
+                        + gap + "sum~" + formatDelayValue(estimatedCastDelayMs(stats));
             }
             FrameLayout.LayoutParams debugParams =
                     (FrameLayout.LayoutParams) debugInfoOverlay.getLayoutParams();
@@ -9903,6 +9942,8 @@ public final class MainActivity extends Activity {
             if (isNtVCastSource(activePlayerStreamUrl)) {
                 stats.networkDelayMs = remoteNetworkDelayMs;
                 stats.encodeDelayMs = remoteEncodeDelayMs;
+                stats.videoQueueDelayMs = remoteVideoQueueDelayMs;
+                stats.videoSendDelayMs = remoteVideoSendDelayMs;
                 try {
                     // For the low-buffer RTSP path this is the compressed video
                     // duration waiting for decode/render, which is the useful
@@ -9916,12 +9957,27 @@ public final class MainActivity extends Activity {
         if (webViewCastManager != null && webViewCastManager.isRunning()) {
             stats.networkDelayMs = takeoverNetworkDelayMs;
             stats.encodeDelayMs = webViewCastManager.encodeDelayMs();
+            stats.videoQueueDelayMs = webViewCastManager.videoQueueDelayMs();
+            stats.videoSendDelayMs = webViewCastManager.videoSendDelayMs();
         }
         return stats;
     }
 
-    private static String formatDelay(String name, long milliseconds) {
-        return name + (milliseconds < 0L ? "--" : milliseconds + "ms");
+    private static String formatDelayValue(long milliseconds) {
+        return milliseconds < 0L ? "--" : Long.toString(milliseconds);
+    }
+
+    private static long estimatedCastDelayMs(PlaybackDebugStats stats) {
+        if (stats.networkDelayMs < 0L || stats.encodeDelayMs < 0L
+                || stats.videoQueueDelayMs < 0L || stats.videoSendDelayMs < 0L
+                || stats.decodeDelayMs < 0L) {
+            return -1L;
+        }
+        // The control RTT is the closest clock-independent network sample. Half
+        // of it approximates one-way delivery; the tilde makes that limit clear.
+        return stats.encodeDelayMs + stats.videoQueueDelayMs
+                + stats.videoSendDelayMs + (stats.networkDelayMs + 1L) / 2L
+                + stats.decodeDelayMs;
     }
 
     private float sampleSystemCpuUsage() {
@@ -10416,6 +10472,8 @@ public final class MainActivity extends Activity {
         long networkDelayMs = -1L;
         long decodeDelayMs = -1L;
         long encodeDelayMs = -1L;
+        long videoQueueDelayMs = -1L;
+        long videoSendDelayMs = -1L;
     }
 
     private void moveChannelMenuSelection(int offset) {

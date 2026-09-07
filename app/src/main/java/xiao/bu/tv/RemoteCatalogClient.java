@@ -37,6 +37,8 @@ final class RemoteCatalogClient {
         int catalogGeneration();
         long networkDelayMs();
         long encodeDelayMs();
+        long videoQueueDelayMs();
+        long videoSendDelayMs();
         void onRoundTrip(long delayMs);
         void onMessage(JSONObject message) throws Exception;
     }
@@ -597,7 +599,9 @@ final class RemoteCatalogClient {
             message = new JSONObject()
                     .put("catalogGeneration", provider.catalogGeneration())
                     .put("networkDelayMs", provider.networkDelayMs())
-                    .put("encodeDelayMs", provider.encodeDelayMs());
+                    .put("encodeDelayMs", provider.encodeDelayMs())
+                    .put("videoQueueDelayMs", provider.videoQueueDelayMs())
+                    .put("videoSendDelayMs", provider.videoSendDelayMs());
         } else {
             message = provider.snapshot();
         }

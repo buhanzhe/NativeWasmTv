@@ -33,11 +33,8 @@ final class CastBitrateController {
         }
         if (now - windowAt < WINDOW_NS) return 0;
         boolean disconnectedSlowly = slowDisconnects > disconnects;
-        // Short Wi-Fi scheduling gaps are absorbed by the deliberately small
-        // socket buffer. Reduce quality only when pressure persists across two
-        // windows; reacting to one delayed packet creates visible bitrate cycles.
-        boolean pressure = dropped > drops || pendingWriteNs > 120_000_000L
-                || (sends >= 4 && sendNs / sends > frameNs * 6 / 5);
+        boolean pressure = dropped > drops || pendingWriteNs > 80_000_000L
+                || (sends >= 4 && sendNs / sends > frameNs * 4 / 5);
         long completedSends = sends;
         windowAt = now; drops = dropped; disconnects = slowDisconnects;
         sendNs = sends = 0;
@@ -48,9 +45,11 @@ final class CastBitrateController {
         if (pressure || disconnectedSlowly) {
             healthyAt = now;
             badWindows++;
-            if ((badWindows >= 2 || disconnectedSlowly)
+            if ((badWindows >= 2 || disconnectedSlowly || pendingWriteNs > 120_000_000L)
                     && now - changedAt >= 1_500_000_000L && bitrate > floor) {
-                bitrate = Math.max(floor, bitrate * 3 / 4);
+                // Converge quickly enough that an overloaded link cannot keep
+                // several seconds of key-frame recovery pressure alive.
+                bitrate = Math.max(floor, bitrate * 2 / 3);
                 changedAt = now; badWindows = 0;
                 return bitrate;
             }

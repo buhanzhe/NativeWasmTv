@@ -77,8 +77,8 @@ final class WebViewCastManager implements Closeable {
     private volatile CastVideoQueue videoQueue;
     private volatile long lastVideoSendUs;
     private volatile long peakVideoSendUs;
-    private volatile long networkBackpressureSkips;
-    private volatile boolean keyFrameSending;
+    private volatile double videoQueueDelayMs = -1d;
+    private volatile double videoSendDelayMs = -1d;
     private volatile CastBitrateController bitrateController;
     private volatile long encodedVideoBytes;
     private volatile double encodeDelayMs = -1d;
@@ -115,8 +115,8 @@ final class WebViewCastManager implements Closeable {
         lastVideoPresentationTimeUs = 0L;
         lastVideoSendUs = 0L;
         peakVideoSendUs = 0L;
-        networkBackpressureSkips = 0L;
-        keyFrameSending = false;
+        videoQueueDelayMs = -1d;
+        videoSendDelayMs = -1d;
         encodedVideoBytes = 0L;
         encodeDelayMs = -1d;
         rtspVideoBitrate.reset();
@@ -327,14 +327,6 @@ final class WebViewCastManager implements Closeable {
     @SuppressLint("NewApi")
     private void renderUiFrame(int width, int height) {
         long drawBeganNs = System.nanoTime();
-        RtspCastServer server = rtspServer;
-        // Do not keep encoding obsolete cursor positions behind a blocked IDR.
-        // Resume from the newest WebView state as soon as the short TCP burst
-        // drains, which trades frames under congestion instead of adding delay.
-        if (server != null && server.pendingVideoWriteNs() > 80_000_000L) {
-            networkBackpressureSkips++;
-            return;
-        }
         CastGlCompositor active = compositor;
         Surface surface = active == null ? null : active.uiSurface();
         if (surface == null || !surface.isValid() || !active.tryAcquireUiFrame()) {
@@ -414,21 +406,16 @@ final class WebViewCastManager implements Closeable {
                         CastVideoQueue.Frame frame = queue.take();
                         if (frame == null) continue;
                         long begin = System.nanoTime();
+                        long queueSampleNs = Math.max(0L, begin - frame.queuedNs);
+                        videoQueueDelayMs = smoothDelay(videoQueueDelayMs,
+                                queueSampleNs / 1_000_000d);
                         boolean connected = server.hasVideoClient();
-                        keyFrameSending = frame.key;
-                        try {
-                            server.sendVideo(frame.data, frame.ptsUs, frame.flags);
-                        } finally {
-                            keyFrameSending = false;
-                        }
+                        server.sendVideo(frame.data, frame.ptsUs, frame.flags);
                         lastVideoSendUs = (System.nanoTime() - begin) / 1000L;
+                        videoSendDelayMs = smoothDelay(videoSendDelayMs,
+                                lastVideoSendUs / 1000d);
                         peakVideoSendUs = Math.max(peakVideoSendUs, lastVideoSendUs);
-                        // An IDR can be dozens of average frames. It is required for
-                        // joining but is not evidence that the steady stream is too
-                        // fast for the link.
-                        if (connected && !frame.key) {
-                            bitrate.recordSend(lastVideoSendUs * 1000L);
-                        }
+                        if (connected) bitrate.recordSend(lastVideoSendUs * 1000L);
                         if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                             Log.i("NtvCastLatency", "SEND pts=" + frame.ptsUs
                                     + " begin=" + begin / 1000L + " end=" + System.nanoTime() / 1000L);
@@ -459,7 +446,7 @@ final class WebViewCastManager implements Closeable {
                 int previous = bitrate.bitrate();
                 int target = bitrate.update(now, queue.droppedFrames(),
                         server.slowWriteDisconnects(), server.hasVideoClient(),
-                        keyFrameSending ? 0L : server.pendingVideoWriteNs());
+                        server.pendingVideoWriteNs());
                 if (target != 0) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, target);
@@ -563,7 +550,8 @@ final class WebViewCastManager implements Closeable {
                     .put("peakVideoSendMs", peakVideoSendUs / 1000d)
                     .put("queuedVideoFrames", videoQueue == null ? 0 : videoQueue.size())
                     .put("droppedVideoFrames", videoQueue == null ? 0 : videoQueue.droppedFrames())
-                    .put("networkBackpressureSkips", networkBackpressureSkips)
+                    .put("videoQueueDelayMs", videoQueueDelayMs())
+                    .put("videoSendDelayMs", videoSendDelayMs())
                     .put("rtspUrl", rtspUrl());
             CastBitrateController bitrate = bitrateController;
             RtspCastServer server = rtspServer;
@@ -610,6 +598,22 @@ final class WebViewCastManager implements Closeable {
 
     long encodeDelayMs() {
         return encodeDelayMs < 0d ? -1L : Math.round(encodeDelayMs);
+    }
+
+    long videoQueueDelayMs() {
+        return videoQueueDelayMs < 0d ? -1L : Math.round(videoQueueDelayMs);
+    }
+
+    long videoSendDelayMs() {
+        return videoSendDelayMs < 0d ? -1L : Math.round(videoSendDelayMs);
+    }
+
+    private static double smoothDelay(double previous, double sample) {
+        double bounded = Math.max(0d, Math.min(9999d, sample));
+        if (previous < 0d || bounded >= previous) return bounded;
+        // Rise immediately so a short stall remains visible across the 4 s
+        // takeover heartbeat, then decay gradually during healthy frames.
+        return previous * 0.995d + bounded * 0.005d;
     }
 
     boolean isRunning() {

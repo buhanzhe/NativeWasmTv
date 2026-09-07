@@ -41,9 +41,9 @@ final class CastVideoQueue {
         while (!closed && frames.isEmpty()) wait();
         if (closed) return null;
         Frame frame=frames.remove(); bytes-=frame.data.length;
-        // Offer already bounds the span and size of a growing queue. A small
-        // queue can become old while the sender finishes one large IDR; rejecting
-        // it here would request another IDR and repeat the same stall forever.
+        if (System.nanoTime()-frame.queuedNs > MAX_AGE_NS) {
+            dropped++; invalidate(); return null;
+        }
         return frame;
     }
 
