@@ -244,9 +244,11 @@ final class YangshipinWebResolver {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         }
 
+        final WebView createdView = webView;
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+                if (createdView != webView) return true;
                 if (consoleMessage != null) {
                     String message = consoleMessage.message();
                     if (maybeResolveApiAuth(message) || maybeResolveApiResult(message)) {
@@ -257,7 +259,7 @@ final class YangshipinWebResolver {
                 return super.onConsoleMessage(consoleMessage);
             }
         });
-        webView.setWebViewClient(new WebViewClient() {
+        WebViewRecovery.attach(webView, new WebViewClient() {
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler,
                     SslError error) {
@@ -306,6 +308,26 @@ final class YangshipinWebResolver {
                 if (pending != null && failingUrl != null
                         && failingUrl.contains("yangshipin.cn")) {
                     fail(pending, description == null ? "央视频页面加载失败" : description);
+                }
+            }
+        }, this::onRendererGone);
+    }
+
+    private int lifecycleGeneration;
+
+    private void onRendererGone(WebView failed, boolean crashed) {
+        if (failed != webView) return;
+        final Pending request = pendingRequest;
+        failed.removeCallbacks(timeout);
+        failed.removeCallbacks(pollPage);
+        failed.removeCallbacks(traceKeepAlive);
+        webView = null;
+        clearPending(false);
+        final int generation = lifecycleGeneration;
+        if (request != null) root.post(new Runnable() {
+            @Override public void run() {
+                if (generation == lifecycleGeneration && !activity.isFinishing()) {
+                    request.callback.onFailed(request.requestId, "央视频解析进程已退出，请重新选择频道");
                 }
             }
         });
@@ -815,7 +837,9 @@ final class YangshipinWebResolver {
     }
 
     private void pollPageForVideoUrl() {
-        if (pendingRequest == null) {
+        final Pending expectedRequest = pendingRequest;
+        final WebView expectedView = webView;
+        if (expectedRequest == null || expectedView == null) {
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
@@ -843,12 +867,13 @@ final class YangshipinWebResolver {
                 new ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String value) {
+                        if (expectedView != webView || expectedRequest != pendingRequest) return;
                         String url = decodeJsString(value);
                         if (url != null && url.length() > 0) {
                             maybeResolve(url);
                         }
-                        if (pendingRequest != null) {
-                            webView.postDelayed(pollPage, 1000L);
+                        if (expectedView == webView && expectedRequest == pendingRequest) {
+                            expectedView.postDelayed(pollPage, 1000L);
                         }
                     }
                 });
@@ -901,6 +926,7 @@ final class YangshipinWebResolver {
     }
 
     private void clearPending(boolean stopPage) {
+        lifecycleGeneration++;
         WebView currentWebView = webView;
         if (currentWebView != null) {
             currentWebView.removeCallbacks(timeout);

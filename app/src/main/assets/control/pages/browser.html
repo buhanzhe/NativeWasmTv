@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>浏览器配置 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body data-parent="/index.html">
+    <main id="browserConfigPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">浏览器配置</div>
+        <div class="online"><span class="dot"></span><span id="browserStatus">电视在线</span></div>
+      </div>
+      <section class="config-hero">
+        <p>网页分辨率和缩放即时生效，投屏时同样适用。</p>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>显示与加载</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>网页分辨率</b><span>分辨率越高，可显示的网页内容越多</span>
+            </div>
+            <select id="webViewResolution" aria-label="网页分辨率" onchange="saveWebViewSettings()">
+              <option value="720p">720P（默认）</option>
+              <option value="1080p">1080P</option>
+              <option value="2k">2K</option>
+              <option value="4k">4K</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>屏幕缩放系数</b><span>按电脑浏览器缩放并重新排版；屏幕分辨率不变，200% 时可视网页宽高约减半</span>
+            </div>
+            <select
+              id="webViewPageScale"
+              aria-label="屏幕缩放系数"
+              onchange="saveWebViewSettings()"
+            >
+              <option value="0.5">50%</option>
+              <option value="0.75">75%</option>
+              <option value="1">100%（默认）</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+              <option value="2">200%</option>
+              <option value="3">300%</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>浏览器标识</b><span>桌面模式隐藏常见手机字段，不代表匿名浏览；旧 WebView 保护能力有限</span>
+            </div>
+            <select id="webViewUserAgent" aria-label="浏览器标识" onchange="saveWebViewSettings()">
+              <option value="windows">Windows（默认）</option>
+              <option value="macos">macOS</option>
+              <option value="ipad">iPad</option>
+              <option value="native">本机</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>加载网页图片</b><span>关闭后可减少流量并加快页面打开</span>
+            </div>
+            <input
+              id="webViewLoadImages"
+              class="source-toggle"
+              aria-label="加载网页图片"
+              type="checkbox"
+              onchange="saveWebViewSettings()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>嗅探资源自动播放</b><span>默认开启；关闭后只收集资源，可在手机飞鼠中手动播放</span>
+            </div>
+            <input
+              id="webViewAutoPlaySniffed"
+              class="source-toggle"
+              aria-label="嗅探资源自动播放"
+              type="checkbox"
+              onchange="saveWebViewSettings()"
+            />
+          </div>
+        </div>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>存储</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>网页缓存</b><span id="webCacheSize">正在统计占用空间…</span>
+            </div>
+            <button onclick="clearWebCache()">清除</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/pages/browser.js"></script>
+  </body>
+</html>

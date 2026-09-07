@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>媒体控制器 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body class="media-page-shell" data-parent="/index.html">
+    <main id="mediaControllerPage" class="secondary-page">
+      <div class="top media-page-top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">正在播放</div>
+        <div class="online">
+          <span class="dot"></span><span id="mediaConnectionStatus">连接中</span>
+        </div>
+      </div>
+      <div id="mediaControllerBody" class="media-controller-body">
+        <div class="media-empty">正在读取播放状态…</div>
+      </div>
+    </main>
+
+    <div
+      id="mediaSettingsBackdrop"
+      class="media-sheet-backdrop"
+      aria-hidden="true"
+      onclick="mediaCloseSettings(event)"
+    >
+      <section
+        class="media-settings-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mediaSettingsTitle"
+        onclick="event.stopPropagation()"
+      >
+        <div class="media-sheet-handle" aria-hidden="true"></div>
+        <div class="media-sheet-header">
+          <div>
+            <span>播放选项</span>
+            <b id="mediaSettingsTitle">媒体设置</b>
+          </div>
+          <button type="button" onclick="mediaCloseSettings()">完成</button>
+        </div>
+
+        <div class="media-settings-group">
+          <div class="media-option">
+            <label for="mediaVideo">视频轨道 / 清晰度</label>
+            <select id="mediaVideo" onchange="mediaVideoTrackChanged(this)"></select>
+          </div>
+          <div class="media-option">
+            <label for="mediaAudio">音轨</label>
+            <select id="mediaAudio" onchange="mediaTrackChanged(this,true)"></select>
+          </div>
+          <div class="media-option">
+            <label for="mediaSpeed">播放倍速</label>
+            <select id="mediaSpeed" onchange="mediaSpeedChanged(this)">
+              <option value="0.5">0.5 倍</option>
+              <option value="0.75">0.75 倍</option>
+              <option value="1">1.0 倍</option>
+              <option value="1.25">1.25 倍</option>
+              <option value="1.5">1.5 倍</option>
+              <option value="2">2.0 倍</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="media-settings-label">字幕</div>
+        <div class="media-settings-group">
+          <div class="media-option media-toggle-option">
+            <div><b>显示字幕</b><span>保留已选择的字幕语言</span></div>
+            <input
+              id="mediaSubtitlesEnabled"
+              class="source-toggle"
+              type="checkbox"
+              checked
+              aria-label="显示字幕"
+              onchange="mediaSubtitlesEnabledChanged(this)"
+            />
+          </div>
+          <div class="media-option">
+            <label for="mediaSubtitle">字幕轨道</label>
+            <select id="mediaSubtitle" onchange="mediaTrackChanged(this,false)"></select>
+          </div>
+          <div class="media-option">
+            <label for="subtitleSize">字体大小</label>
+            <select id="subtitleSize" onchange="mediaSubtitleStyleChanged()">
+              <option value="75">较小（75%）</option>
+              <option value="100">标准（100%）</option>
+              <option value="125">较大（125%）</option>
+              <option value="150">特大（150%）</option>
+              <option value="200">超大（200%）</option>
+            </select>
+          </div>
+          <div class="media-option">
+            <label for="subtitlePosition">字幕位置</label>
+            <select id="subtitlePosition" onchange="mediaSubtitleStyleChanged()">
+              <option value="bottom">画面底部</option>
+              <option value="center">画面中部</option>
+              <option value="top">画面顶部</option>
+              <option value="manual">手动位置</option>
+            </select>
+          </div>
+          <div class="media-option">
+            <label for="subtitleShadow">文字阴影</label>
+            <select id="subtitleShadow" onchange="mediaSubtitleStyleChanged()">
+              <option value="none">关闭</option>
+              <option value="standard">标准</option>
+              <option value="strong">增强</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="subtitleOffsetControls" class="subtitle-offset-controls">
+          <label for="subtitleOffset"
+            ><span>手动偏移</span><output id="subtitleOffsetValue">50%</output></label
+          >
+          <input
+            id="subtitleOffset"
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value="50"
+            aria-label="字幕手动偏移"
+            oninput="mediaSubtitleOffsetPreview(this)"
+            onchange="mediaSubtitleOffsetCommit(this)"
+          />
+          <div class="media-time"><span>顶部 0%</span><span>底部 100%</span></div>
+        </div>
+        <p class="media-sheet-footnote">
+          视频和音轨按节目源记忆；字幕选择及显示样式全局生效。
+        </p>
+      </section>
+    </div>
+
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/pages/media.js"></script>
+  </body>
+</html>

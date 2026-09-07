@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<xiao.bu.tv.CastRootLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/root"
     android:layout_width="match_parent"
@@ -19,6 +19,27 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/subtitle_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginLeft="44dp"
+        android:layout_marginRight="44dp"
+        android:layout_marginBottom="52dp"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:maxLines="4"
+        android:shadowColor="#FF000000"
+        android:shadowDx="2"
+        android:shadowDy="2"
+        android:shadowRadius="4"
+        android:textColor="#FFFFFFFF"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        tools:ignore="RtlHardcoded" />
 
     <View
         android:id="@+id/channel_switch_blackout"
@@ -80,20 +101,21 @@
 
     <TextView
         android:id="@+id/debug_info_overlay"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|right"
-        android:layout_marginTop="8dp"
+        android:layout_gravity="bottom|left"
+        android:layout_marginLeft="12dp"
+        android:layout_marginBottom="8dp"
         android:layout_marginRight="12dp"
         android:fontFamily="monospace"
-        android:gravity="right"
+        android:gravity="left"
         android:includeFontPadding="false"
         android:maxLines="2"
         android:shadowColor="#E6000000"
         android:shadowDx="1"
         android:shadowDy="1"
         android:shadowRadius="2"
-        android:text="视频 --  --fps  --  --　音频 --  --\nCPU（系统） --　源 --"
+        android:text="--\n--  -- Fps  --  --  --  --  CPU --"
         android:textColor="#FFFFFFFF"
         android:textSize="12sp"
         android:visibility="gone"
@@ -155,13 +177,11 @@
         android:paddingBottom="14dp"
         android:visibility="gone">
 
-        <ProgressBar
+        <xiao.bu.tv.LoadingSpinnerView
             android:id="@+id/channel_progress"
-            style="?android:attr/progressBarStyleSmall"
-            android:layout_width="24dp"
-            android:layout_height="24dp"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
             android:layout_marginRight="10dp"
-            android:indeterminate="true"
             android:visibility="gone" />
 
         <LinearLayout
@@ -434,4 +454,4 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone" />
-</FrameLayout>
+</xiao.bu.tv.CastRootLayout>

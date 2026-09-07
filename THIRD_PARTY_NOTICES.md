@@ -25,3 +25,27 @@ The profile adds RTSP over TCP/UDP and the MP2 audio decoder to the upstream
 lite configuration. The Java API continues to use the published 0.8.8 AAR.
 
 License: LGPL-2.1. See the upstream project for the complete notice.
+
+## Google Material Icons
+
+The media controller embeds rounded SVG paths for previous, play, pause, next,
+favorite, settings, and download icons from
+[google/material-design-icons](https://github.com/google/material-design-icons).
+
+License: Apache License 2.0. See `third_party/material-design-icons.LICENSE`.
+
+## CryptoJS
+
+The Ku9 script compatibility runtime embeds [CryptoJS](https://github.com/brix/crypto-js)
+`3.1.9-1` for the standard `require("crypto")` module. This ES5 release remains
+compatible with the JavaScript engine shipped on Android 5.0.
+
+License: MIT. See `third_party/crypto-js.LICENSE`.
+
+## JSEncrypt
+
+The Ku9 script compatibility runtime embeds [JSEncrypt](https://github.com/travist/jsencrypt)
+`2.3.1` for the standard `require("jsencrypt")` module. This release keeps
+compatibility with the JavaScript engine shipped on Android 5.0.
+
+License: MIT. See `third_party/jsencrypt.LICENSE`.

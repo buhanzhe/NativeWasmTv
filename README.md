@@ -97,6 +97,14 @@ Android 8.0 及以上系统如果阻止安装，请根据系统提示，允许�
 
 先尝试自动选择解码器；仍无法播放时切换到兼容软解。不同电视芯片和系统固件的解码兼容性可能不同。
 
+## 手动打正式包（Windows）
+
+双击项目根目录的 `build-release.bat`，即可调用 `scripts/build-release.ps1`，生成 ARM32、ARM64 正式包并更新版本文件。打包结束后窗口会保留，方便查看成功信息或错误原因。
+
+默认输出为 `output/nTv.apk` 和 `output/nTv64.apk`。需要先配置 Android SDK（`local.properties`）和正式签名（`.signing`），无需管理员权限。
+
+默认采用增量构建，避免 Windows 文件占用导致 `:app:clean` 失败；需要完整清理时可执行 `build-release.bat -Clean`。命令行也可继续传递 `-SkipClean` 等原脚本参数。
+
 ## 说明
 
 请仅播放您有权访问的直播内容。频道可用性、清晰度和线路数量可能随上游服务变化。

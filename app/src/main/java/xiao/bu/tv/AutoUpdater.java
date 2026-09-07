@@ -94,8 +94,8 @@ final class AutoUpdater {
     }
 
     private UpdateInfo loadUpdateInfo() throws IOException, JSONException {
-        // API 14/15 use the HTTP accelerator because their TLS stack cannot reach gh-proxy.com.
-        HttpURLConnection connection = openConnection(GithubProxy.apply(VERSION_URL)
+        // The selected accelerator also covers update metadata and APK downloads.
+        HttpURLConnection connection = openConnection(GithubProxy.apply(activity, VERSION_URL)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Cache-Control", "no-cache");
@@ -396,7 +396,7 @@ final class AutoUpdater {
         }
     }
 
-    private static String proxiedGithubUrl(String url) throws JSONException {
+    private String proxiedGithubUrl(String url) throws JSONException {
         try {
             URL parsed = new URL(url);
             String host = parsed.getHost().toLowerCase(Locale.US);
@@ -405,7 +405,7 @@ final class AutoUpdater {
                     || "raw.githubusercontent.com".equals(host))) {
                 throw new JSONException("APK URL must be an HTTPS GitHub URL");
             }
-            return GithubProxy.apply(url);
+            return GithubProxy.apply(activity, url);
         } catch (IOException error) {
             throw new JSONException("Invalid APK URL");
         }

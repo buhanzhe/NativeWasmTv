@@ -2,9 +2,29 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="xiao.bu.tv">
+    <!-- DesktopWebProfile guards all AndroidX WebKit calls on API 19+. Native
+         playback and the legacy WebView path keep supporting API 14-18. -->
+    <!-- Bugly requires API 15; CrashReporting never loads it on API 14. -->
+    <uses-sdk tools:overrideLibrary="androidx.webkit,com.tencent.bugly" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17 (API 37) gates direct LAN TCP/UDP access behind this runtime
+         permission. Older releases ignore the declaration. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- targetSdk 25 uses the legacy Wi-Fi Direct permission contract. Discovery
+         therefore needs fine location on Android 6+, even on Android 13+. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -18,9 +38,14 @@
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi.direct"
+        android:required="false" />
 
     <application
+        android:name=".NtvApplication"
         android:allowBackup="false"
+        android:allowAudioPlaybackCapture="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
@@ -30,7 +55,7 @@
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:launchMode="singleTask"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -45,6 +70,14 @@
             android:screenOrientation="fullSensor"
             android:theme="@style/ManagementTheme" />
 
+        <activity
+            android:name=".CastAudioPermissionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.castAudioConsent"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:theme="@style/ManagementTheme" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -54,6 +87,12 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".CastKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|mediaProjection"
+            android:stopWithTask="false" />
 
         <service
             android:name=".CrashRecoveryService"

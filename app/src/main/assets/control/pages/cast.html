@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>投屏与互联 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body data-parent="/index.html">
+    <main id="webViewCastPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div id="castPageTitle" class="page-title">投屏与互联</div>
+        <div class="online"><span class="dot"></span><span id="castStatus">电视在线</span></div>
+      </div>
+      <section id="takeoverSection" class="config-epg-section">
+        <div class="section-head"><h2>接管电视</h2></div>
+        <div class="field">
+          <label id="remoteCatalogHint" for="remoteCatalogUrl">电视 IP 地址或最后一段</label>
+          <input id="remoteCatalogUrl" type="text" inputmode="url" autocapitalize="off"
+            spellcheck="false" maxlength="256" placeholder="113 或 10.10.10.10" />
+        </div>
+        <div class="actions">
+          <button id="remoteCatalogButton" class="primary wide" onclick="saveRemoteCatalogUrl()">开始接管</button>
+        </div>
+      </section>
+      <section id="castVideoSection">
+        <div class="grid">
+          <div class="field">
+            <label for="castResolution">投屏分辨率</label
+            ><select id="castResolution" onchange="saveWebCastSettings()">
+              <option value="1280x720" selected="">720P</option>
+              <option value="1920x1080">1080P</option>
+              <option value="2560x1440">1440P（实验）</option>
+              <option value="3840x2160">2160P（实验）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="castFps">投送帧率</label
+            ><select id="castFps" onchange="saveWebCastSettings()">
+              <option value="25" selected="">25 fps</option>
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+              <option value="120">120 fps（高性能设备）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="castCodec">视频编码</label
+            ><select id="castCodec" onchange="saveWebCastSettings()">
+              <option value="h264" selected="">H.264 · 兼容优先</option>
+              <option value="h265">H.265 / HEVC · 节省带宽</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="castBitrate">视频码率上限</label
+            ><select id="castBitrate" onchange="saveWebCastSettings()">
+              <option value="2">2 Mbps</option>
+              <option value="3" selected="">3 Mbps</option>
+              <option value="4">4 Mbps</option>
+              <option value="8">8 Mbps</option>
+              <option value="12">12 Mbps</option>
+              <option value="20">20 Mbps</option>
+              <option value="30">30 Mbps</option>
+            </select>
+          </div>
+        </div>
+        <p id="castCapabilityHint" class="hint">
+          60/120 fps 与 H.265 需要发送端编码器和接收端支持；不支持时自动回退。
+        </p>
+      </section>
+      <section id="castAudioSection">
+        <div class="switch-row">
+          <div class="switch-copy">
+            <b>投送声音</b>
+            <div id="castAudioHint" class="hint">
+              Android 10+，需要系统授权
+            </div>
+          </div>
+          <input
+            id="castAudio"
+            class="source-toggle"
+            aria-label="投送声音"
+            type="checkbox"
+            onchange="saveWebCastSettings()"
+          />
+        </div>
+      </section>
+    </main>
+    <div id="takeoverProgressDialog" class="takeover-progress-dialog" aria-hidden="true">
+      <div class="takeover-progress-card" role="dialog" aria-modal="true"
+        aria-labelledby="takeoverProgressTitle">
+        <div class="takeover-progress-spinner" aria-hidden="true"></div>
+        <strong id="takeoverProgressTitle">正在连接电视</strong>
+        <div id="takeoverProgressDetail" class="takeover-progress-detail">检查网络和设备状态</div>
+        <div class="takeover-progress-track"><i id="takeoverProgressBar"></i></div>
+        <small id="takeoverProgressPercent">0%</small>
+      </div>
+    </div>
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/pages/cast.js"></script>
+  </body>
+</html>

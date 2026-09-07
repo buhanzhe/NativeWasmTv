@@ -5,6 +5,12 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.util.Log;
 import android.webkit.WebView;
@@ -22,6 +28,7 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -89,12 +96,113 @@ final class SystemInfoProvider {
             result.put("memory", formatMemory(readTotalMemoryKb()));
             result.put("lanIpv4", join(networkAddresses(false), "、"));
             result.put("publicIpv6", join(networkAddresses(true), "、"));
+            result.put("networkTransport", activeNetworkTransport(context));
             result.put("app", BuildConfig.VERSION_NAME + " · versionCode "
                     + BuildConfig.VERSION_CODE);
         } catch (JSONException error) {
             Log.w(TAG, "Unable to build system information", error);
         }
         return result;
+    }
+
+    static String activeNetworkTransport(Context context) {
+        ConnectivityManager manager = (ConnectivityManager) context
+                .getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) return "unknown";
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                NetworkCapabilities capabilities = manager.getNetworkCapabilities(
+                        manager.getActiveNetwork());
+                if (capabilities != null) {
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                        return "ethernet";
+                    }
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        return "wifi";
+                    }
+                    if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                        return "cellular";
+                    }
+                }
+            }
+            NetworkInfo active = manager.getActiveNetworkInfo();
+            if (active == null || !active.isConnected()) return "none";
+            if (active.getType() == ConnectivityManager.TYPE_ETHERNET) return "ethernet";
+            if (active.getType() == ConnectivityManager.TYPE_WIFI) return "wifi";
+            if (active.getType() == ConnectivityManager.TYPE_MOBILE) return "cellular";
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Unable to inspect active network", error);
+        }
+        return "other";
+    }
+
+    /** Best-effort SoftAP detection. It is only used to avoid an unnecessary P2P
+     * handover; an unknown result safely leaves the existing LAN fallback intact. */
+    static boolean isWifiHotspotActive(Context context) {
+        try {
+            WifiManager wifi = (WifiManager) context.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null) {
+                Method method = wifi.getClass().getMethod("isWifiApEnabled");
+                Object value = method.invoke(wifi);
+                if (value instanceof Boolean && (Boolean) value) return true;
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            if (interfaces == null) return false;
+            for (NetworkInterface network : Collections.list(interfaces)) {
+                if (!network.isUp() || network.isLoopback()) continue;
+                String name = safe(network.getName(), "").toLowerCase(Locale.US);
+                if ("ap0".equals(name) || "ap1".equals(name)
+                        || name.startsWith("softap") || name.startsWith("swlan")) {
+                    return true;
+                }
+            }
+        } catch (SocketException ignored) {
+        }
+        return false;
+    }
+
+    /** True only when the receiver IP belongs to the current router-facing Wi-Fi
+     * link. A concurrently active SoftAP is deliberately excluded. */
+    static boolean isPeerOnActiveWifi(Context context, String peerUrl) {
+        if (!"wifi".equals(activeNetworkTransport(context))) return false;
+        try {
+            InetAddress peer = InetAddress.getByName(new URL(peerUrl).getHost());
+            ConnectivityManager manager = (ConnectivityManager) context
+                    .getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (manager == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                return true;
+            }
+            LinkProperties properties = manager.getLinkProperties(manager.getActiveNetwork());
+            if (properties == null) return false;
+            for (LinkAddress link : properties.getLinkAddresses()) {
+                InetAddress local = link.getAddress();
+                if (local != null && local.getAddress().length == peer.getAddress().length
+                        && sameSubnet(local.getAddress(), peer.getAddress(),
+                                link.getPrefixLength())) {
+                    return true;
+                }
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "Unable to match receiver to active Wi-Fi", error);
+        }
+        return false;
+    }
+
+    private static boolean sameSubnet(byte[] left, byte[] right, int prefixLength) {
+        if (left.length != right.length || prefixLength < 0
+                || prefixLength > left.length * 8) return false;
+        int bytes = prefixLength / 8;
+        int bits = prefixLength % 8;
+        for (int index = 0; index < bytes; index++) {
+            if (left[index] != right[index]) return false;
+        }
+        if (bits == 0) return true;
+        int mask = 0xff << (8 - bits);
+        return (left[bytes] & mask) == (right[bytes] & mask);
     }
 
     private static String joinDeviceName() {

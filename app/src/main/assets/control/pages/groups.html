@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>频道分组管理 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body data-parent="/pages/channels.html">
+    <main id="groupManagerPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">频道分组管理</div>
+        <div class="online"><span class="dot"></span><span id="groupStatus">电视在线</span></div>
+      </div>
+      <section>
+        <h2>源频道分组</h2>
+        <p class="hint">同名分组已经合并。关闭后会立即从电视频道列表隐藏，重新开启即可恢复。</p>
+        <div id="playlistGroupSettings" class="group-list"></div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/pages/groups.js"></script>
+  </body>
+</html>

@@ -15,9 +15,8 @@ import java.util.regex.Pattern;
 /** Locates local scripts and maintains the short-lived online script cache. */
 final class Ku9ScriptLoader {
     private static final String TAG = "Ku9ScriptLoader";
-    private static final String LOCAL_HOST = "a";
     private static final String SCRIPT_MARKER = "/ku9/js/";
-    private static final String NETWORK_SCRIPT_MARKER = "/k-web/ku9/js/";
+    private static final String NETWORK_MARKER = "/k-web/";
     private static final String HNYX_SCRIPT = "hnyx.js";
     private static final String SCRIPT_DIRECTORY = "js";
     private static final int MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
@@ -135,13 +134,13 @@ final class Ku9ScriptLoader {
         }
 
         String script;
-        if (LOCAL_HOST.equalsIgnoreCase(uri.getHost())) {
+        // Ku9 treats every /ku9/js/ address without /k-web/ as a local script.
+        // The host is only a placeholder (usually "A") and time-shift sources may
+        // insert another path segment between /k-web/ and /ku9/js/.
+        if (!lowerPath.contains(NETWORK_MARKER)) {
             script = readLocal(fileName);
         } else {
-            if (!lowerPath.contains(NETWORK_SCRIPT_MARKER)) {
-                throw new IOException("网络酷9脚本地址必须包含 /k-web/ku9/js/");
-            }
-            String scriptUrl = withoutQuery(uri);
+            String scriptUrl = GithubProxy.apply(activity, withoutQuery(uri));
             script = HNYX_SCRIPT.equalsIgnoreCase(fileName)
                     ? loadOnlineCache(scriptUrl)
                     : Ku9HttpClient.getText(scriptUrl, null, MAX_SCRIPT_BYTES);

@@ -30,7 +30,8 @@ import java.util.TimeZone;
 import java.util.zip.GZIPInputStream;
 
 final class EpgManager {
-    static final String DEFAULT_URL = "https://liliu.serv00.net/epg/cn.xml";
+    static final String DEFAULT_URL = "https://epg.pw/xmltv/epg_CN.xml.gz";
+    private static final String FALLBACK_URL = "http://epg.51zmt.top:8000/e.xml.gz";
     private static final String TAG = "EpgManager";
     private static final String CACHE_FILE = "epg-guide-cache.xml";
     private static final String CACHE_PREFS = "epg_cache";
@@ -138,11 +139,24 @@ final class EpgManager {
                             Log.w(TAG, "Ignoring invalid EPG cache", cacheError);
                         }
                     }
-                    byte[] downloaded = download(normalizedUrl);
-                    Guide parsed = parse(downloaded);
+                    byte[] downloaded;
+                    Guide parsed;
+                    String loadedSource = normalizedUrl;
+                    try {
+                        downloaded = download(normalizedUrl);
+                        parsed = parse(downloaded);
+                    } catch (Exception primaryError) {
+                        if (!DEFAULT_URL.equals(normalizedUrl)) {
+                            throw primaryError;
+                        }
+                        Log.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
+                        downloaded = download(FALLBACK_URL);
+                        parsed = parse(downloaded);
+                        loadedSource = FALLBACK_URL;
+                    }
                     writeCache(downloaded, normalizedUrl);
                     if (requestId == refreshGeneration) {
-                        publish(parsed, normalizedUrl);
+                        publish(parsed, loadedSource);
                     }
                 } catch (Exception error) {
                     if (requestId == refreshGeneration) {
@@ -164,6 +178,9 @@ final class EpgManager {
         guide = next;
         loadedUrl = sourceUrl == null ? "" : sourceUrl;
         lastError = "";
+        Log.i(TAG, "EPG loaded source=" + loadedUrl
+                + " aliases=" + next.channelByAlias.size()
+                + " channels=" + next.programsByChannel.size());
     }
 
     private static void notifyListener(Listener listener) {
@@ -209,29 +226,52 @@ final class EpgManager {
         if (sourceUrl == null || sourceUrl.trim().length() == 0) {
             throw new IOException("未配置节目单地址");
         }
-        URL url = new URL(sourceUrl.trim());
+        URL current = checkedHttpUrl(new URL(sourceUrl.trim()));
+        for (int redirects = 0; redirects <= 5; redirects++) {
+            HttpURLConnection connection = (HttpURLConnection) current.openConnection();
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(25000);
+            // Android 7 does not reliably follow an HTTP -> HTTPS redirect. Handle
+            // redirects here so stable EPG entry points can rotate their CDN URL.
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 nTv/1.6");
+            connection.setRequestProperty("Accept",
+                    "application/xml,text/xml,application/gzip,*/*");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            try {
+                int status = connection.getResponseCode();
+                if (status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_SEE_OTHER
+                        || status == 307 || status == 308) {
+                    String location = connection.getHeaderField("Location");
+                    if (location == null || location.trim().length() == 0) {
+                        throw new IOException("节目单重定向地址为空");
+                    }
+                    current = checkedHttpUrl(new URL(current, location.trim()));
+                    continue;
+                }
+                if (status < 200 || status >= 300) {
+                    throw new IOException("节目单下载失败：HTTP " + status);
+                }
+                if (connection.getContentLength() > MAX_DOWNLOAD_BYTES) {
+                    throw new IOException("节目单文件超过 8 MB");
+                }
+                return readAll(connection.getInputStream());
+            } finally {
+                connection.disconnect();
+            }
+        }
+        throw new IOException("节目单重定向次数过多");
+    }
+
+    private static URL checkedHttpUrl(URL url) throws IOException {
         String protocol = url.getProtocol();
         if (!"http".equalsIgnoreCase(protocol) && !"https".equalsIgnoreCase(protocol)) {
             throw new IOException("节目单地址仅支持 HTTP 或 HTTPS");
         }
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setConnectTimeout(12000);
-        connection.setReadTimeout(25000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "nTv/1.5");
-        connection.setRequestProperty("Accept-Encoding", "identity");
-        try {
-            int status = connection.getResponseCode();
-            if (status < 200 || status >= 300) {
-                throw new IOException("节目单下载失败：HTTP " + status);
-            }
-            if (connection.getContentLength() > MAX_DOWNLOAD_BYTES) {
-                throw new IOException("节目单文件超过 8 MB");
-            }
-            return readAll(connection.getInputStream());
-        } finally {
-            connection.disconnect();
-        }
+        return url;
     }
 
     private static byte[] readAll(InputStream input) throws IOException {
@@ -359,6 +399,11 @@ final class EpgManager {
         String value = raw.toUpperCase(Locale.US)
                 .replace("中央电视台", "CCTV")
                 .replace("央视", "CCTV")
+                .replace("中国教育电视台", "CETV")
+                .replace("福建东南卫视", "东南卫视")
+                .replace("CGTN阿拉伯语", "CGTN阿语")
+                .replace("CGTN西班牙语", "CGTN西语")
+                .replace("CGTN外语纪录", "CGTN纪录")
                 .replace("高清", "")
                 .replace("频道", "")
                 .replace("HD", "")
@@ -374,6 +419,12 @@ final class EpgManager {
         }
         String result = normalized.toString();
         if (result.startsWith("CCTV")) {
+            if ("CCTV4K".equals(result) || "CCTV8K".equals(result)) {
+                return result;
+            }
+            if (result.startsWith("CCTV16") && result.endsWith("4K")) {
+                return "CCTV16";
+            }
             int index = 4;
             StringBuilder number = new StringBuilder("CCTV");
             while (index < result.length() && Character.isDigit(result.charAt(index))) {
@@ -385,6 +436,9 @@ final class EpgManager {
             if (number.length() > 4) {
                 return number.toString();
             }
+        }
+        if (result.endsWith("卫视4K")) {
+            return result.substring(0, result.length() - 2);
         }
         return result;
     }

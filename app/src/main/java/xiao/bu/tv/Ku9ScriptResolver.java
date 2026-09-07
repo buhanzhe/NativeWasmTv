@@ -6,6 +6,7 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Build;
 import android.text.TextUtils;
+import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.ViewGroup;
@@ -21,13 +22,18 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.Inet6Address;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -58,6 +64,11 @@ final class Ku9ScriptResolver {
     private static final String EXECUTOR_URL = "https://ntv.local/ku9/";
     private static final Pattern TARGET_DURATION =
             Pattern.compile("(?m)^#EXT-X-TARGETDURATION:(\\d+)");
+    private static final Pattern CRYPTO_REQUIRE = Pattern.compile(
+            "require\\s*\\(\\s*['\"](?:crypto|crypto-js)['\"]",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern JSENCRYPT_REQUIRE = Pattern.compile(
+            "require\\s*\\(\\s*['\"]jsencrypt['\"]", Pattern.CASE_INSENSITIVE);
     private static final String EXECUTOR_PAGE =
             "<!doctype html><html><head><meta charset=\"utf-8\"></head>"
                     + "<body></body></html>";
@@ -80,6 +91,8 @@ final class Ku9ScriptResolver {
     private volatile Pending pending;
     private Ku9PlaylistServer playlistServer;
     private volatile int generation;
+    private String cryptoModuleSource;
+    private String jsEncryptModuleSource;
     private final Runnable timeout = new Runnable() {
         @Override
         public void run() {
@@ -177,11 +190,11 @@ final class Ku9ScriptResolver {
         params.gravity = Gravity.LEFT | Gravity.TOP;
         root.addView(webView, params);
         webView.addJavascriptInterface(new Bridge(request), "NtvKu9Bridge");
-        webView.setWebViewClient(new WebViewClient() {
+        WebViewRecovery.attach(webView, new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
                 Pending request = pending;
-                if (request != null && EXECUTOR_URL.equals(url)) {
+                if (view == webView && request != null && EXECUTOR_URL.equals(url)) {
                     execute(request);
                 }
             }
@@ -189,6 +202,24 @@ final class Ku9ScriptResolver {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return !EXECUTOR_URL.equals(url);
+            }
+        }, this::onRendererGone);
+    }
+
+    private void onRendererGone(WebView failed, boolean crashed) {
+        if (failed != webView) return;
+        final Pending request = pending;
+        failed.removeCallbacks(timeout);
+        failed.removeCallbacks(refreshPlaylist);
+        webView = null;
+        pending = null;
+        final int expectedGeneration = ++generation;
+        closePlaylistServer();
+        if (request != null) root.post(new Runnable() {
+            @Override public void run() {
+                if (generation == expectedGeneration && !activity.isFinishing()) {
+                    request.callback.onFailed(request.requestId, "酷9解析进程已退出，请重新选择频道");
+                }
             }
         });
     }
@@ -221,28 +252,126 @@ final class Ku9ScriptResolver {
             item.put("name", request.channelName == null ? "" : request.channelName);
         } catch (JSONException ignored) {
         }
-        return "(function(){'use strict';"
+        // Ku9 scripts and the legacy RSA module intentionally create a few globals,
+        // so this compatibility scope must use the browser's normal sloppy mode.
+        return "(function(){"
                 + "function parseJson(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
                 + "function headerJson(v){return typeof v==='string'?v:JSON.stringify(v||{});}"
+                + "function parseStored(v){if(v===null||v===undefined||v==='')return null;return parseJson(v,v);}"
+                + "function uri(v){var a=document.createElement('a'),u=String(v||'');a.href=u;"
+                + "var q=a.search||'',p={},s=q.charAt(0)==='?'?q.substring(1):q,parts=s?s.split('&'):[];"
+                + "for(var i=0;i<parts.length;i++){var pair=parts[i].split('='),k=decodeURIComponent(pair.shift()||''),"
+                + "val=decodeURIComponent(pair.join('=').replace(/\\+/g,' '));if(k)p[k]=val;}"
+                + "var full=a.pathname||'/';return{Scheme:(a.protocol||'').replace(':',''),Host:a.hostname||'',"
+                + "Port:a.port?Number(a.port):-1,Path:full.substring(0,full.lastIndexOf('/')+1),"
+                + "Query:q,Fragment:a.hash||'',FullPath:full,Params:p};}"
                 + "window.ku9={"
                 + "get:function(u,h){return NtvKu9Bridge.get(String(u),headerJson(h));},"
-                + "post:function(u,b,h){return NtvKu9Bridge.post(String(u),String(b||''),headerJson(h));},"
-                + "request:function(u,m,h,b,f){return parseJson(NtvKu9Bridge.request(String(u),String(m||'GET'),headerJson(h),String(b||''),f!==false),{});},"
+                + "post:function(u,a,b){var h=a&&typeof a==='object'?a:b,body=a&&typeof a==='object'?b:a;"
+                + "return NtvKu9Bridge.post(String(u),String(body||''),headerJson(h));},"
+                + "request:function(u,m,h,b,f){var r=parseJson(NtvKu9Bridge.request(String(u),String(m||'GET'),headerJson(h),String(b||''),f!==false),{});"
+                + "if(r.furl===undefined)r.furl=r.url||'';return r;},"
+                + "getHeaders:function(u,h,f,m,b){return JSON.stringify(ku9.request(u,m||'GET',h,b||'',f!==false).headers||{});},"
                 + "getQuery:function(u,n){try{var q=String(u).split('?')[1]||'',a=q.split('&');for(var i=0;i<a.length;i++){var p=a[i].split('=');if(decodeURIComponent(p[0]||'')===String(n))return decodeURIComponent((p.slice(1).join('=')||'').replace(/\\+/g,' '));}}catch(e){}return '';},"
-                + "getCache:function(k){return NtvKu9Bridge.getCache(String(k));},"
-                + "setCache:function(k,v,t){NtvKu9Bridge.setCache(String(k),String(v),Number(t)||0);},"
+                + "getCache:function(k){return parseStored(NtvKu9Bridge.getCache(String(k)));},"
+                + "setCache:function(k,v,t){NtvKu9Bridge.setCache(String(k),JSON.stringify(v),Number(t)||0);},"
+                + "Uri:uri,"
                 + "md5:function(v){return NtvKu9Bridge.md5(String(v));},"
+                + "sha1:function(v){return NtvKu9Bridge.digest('SHA-1',String(v));},"
+                + "sha256:function(v){return NtvKu9Bridge.digest('SHA-256',String(v));},"
+                + "sha512:function(v){return NtvKu9Bridge.digest('SHA-512',String(v));},"
+                + "encodeBase64:function(v){return NtvKu9Bridge.encodeBase64(String(v));},"
+                + "decodeBase64:function(v){return NtvKu9Bridge.decodeBase64(String(v));},"
+                + "isBase64:function(v){var s=String(v||'').replace(/\\s/g,'');return s.length>0&&s.length%4===0&&/^[A-Za-z0-9+/]*={0,2}$/.test(s);},"
+                + "isJsonObject:function(v){var x=parseJson(String(v),null);return x!==null&&!Array.isArray(x)&&typeof x==='object';},"
+                + "isJsonArray:function(v){return Array.isArray(parseJson(String(v),null));},"
+                + "toTimestamp:function(v,f,z){return Number(NtvKu9Bridge.toTimestamp(String(v),String(f||'yyyy-MM-dd HH:mm:ss'),String(z||'')));},"
+                + "toDate:function(v,f,z){return NtvKu9Bridge.toDate(Number(v),String(f||'yyyy-MM-dd HH:mm:ss'),String(z||''));},"
+                + "formatDateTime:function(v,i,o,d,iz,oz){return NtvKu9Bridge.formatDateTime(String(v),String(i||'yyyy-MM-dd HH:mm:ss'),String(o||'yyyy-MM-dd HH:mm:ss'),Number(d)||0,String(iz||''),String(oz||''));},"
+                + "opensslEncrypt:function(d,t,k,o,iv){return ku9Crypto(false,d,t,k,o,iv);},"
+                + "opensslDecrypt:function(d,t,k,i,iv){return ku9Crypto(true,d,t,k,i,iv);},"
+                + "rc4Encrypt:function(d,k,i,o,c){return ku9Rc4(false,d,k,i,o);},"
+                + "rc4Decrypt:function(d,k,i,o,c){return ku9Rc4(true,d,k,i,o);},"
                 + "log:function(v){NtvKu9Bridge.log(String(v));}"
                 + "};"
                 + ES5_COMPAT
+                + "try{"
+                + moduleBootstrap(request.script)
+                + "function crypto(){return require('crypto');}"
+                + "function word(v,hex){return hex?crypto().enc.Hex.parse(String(v||'')):crypto().enc.Utf8.parse(String(v||''));}"
+                + "function ku9Crypto(dec,data,type,key,format,iv){var c=crypto(),p=String(type||'AES-256-CBC').toUpperCase().split('-'),"
+                + "mode=c.mode[p[p.length-1]]||c.mode.CBC,cfg={mode:mode,padding:c.pad.Pkcs7},keyWord=word(key,false);"
+                + "cfg.iv=iv!==undefined&&iv!==null&&String(iv)!==''?word(iv,false):c.lib.WordArray.create([0,0,0,0]);"
+                + "if(dec){var cipher=format===1?c.enc.Hex.parse(String(data)):c.enc.Base64.parse(String(data));"
+                + "return c.AES.decrypt({ciphertext:cipher},keyWord,cfg).toString(c.enc.Utf8);}"
+                + "var out=c.AES.encrypt(String(data),keyWord,cfg).ciphertext;return (format===1?c.enc.Hex:c.enc.Base64).stringify(out);}"
+                + "function ku9Rc4(dec,data,key,input,output){var c=crypto(),keyWord=word(key,false),value;"
+                + "if(dec){value=input===1?c.enc.Hex.parse(String(data)):c.enc.Utf8.parse(String(data));"
+                + "value=c.RC4.decrypt({ciphertext:value},keyWord).toString(output===1?c.enc.Hex:c.enc.Utf8);}"
+                + "else{value=input===1?c.enc.Hex.parse(String(data)):String(data);value=c.RC4.encrypt(value,keyWord).ciphertext;"
+                + "value=(output===1?c.enc.Hex:c.enc.Utf8).stringify(value);}return value;}"
                 + "function done(v){try{if(v===undefined||v===null)v={};"
                 + "NtvKu9Bridge.complete(JSON.stringify(v));}catch(e){fail(e);}}"
                 + "function fail(e){NtvKu9Bridge.fail(String(e&&e.stack?e.stack:e));}"
-                + "try{" + request.script + "\n"
-                + "if(typeof main!=='function')throw new Error('脚本没有 main(item) 入口');"
-                + "var r=main(" + item.toString() + ");"
+                + "var module={exports:{}},exports=module.exports;" + request.script + "\n"
+                + "var entry=typeof main==='function'?main:(typeof module.exports==='function'?module.exports:module.exports.main);"
+                + "if(typeof entry!=='function')throw new Error('脚本没有 main(item) 入口');"
+                + "var input=" + item.toString() + ",query=uri(input.url).Params;"
+                + "for(var key in query){if(Object.prototype.hasOwnProperty.call(query,key)&&input[key]===undefined)input[key]=query[key];}"
+                + "var r=entry(input);"
                 + "if(r&&typeof r.then==='function'){r.then(done,fail);}else{done(r);}}"
                 + "catch(e){fail(e);}})();";
+    }
+
+    private String moduleBootstrap(String script) {
+        StringBuilder javascript = new StringBuilder(
+                "var __ku9Modules={};function require(n){var k=String(n||'').toLowerCase();"
+                        + "if(k==='crypto-js')k='crypto';if(Object.prototype.hasOwnProperty.call(__ku9Modules,k))return __ku9Modules[k];"
+                        + "throw new Error('酷9脚本引用了不支持的模块: '+n);}");
+        if (CRYPTO_REQUIRE.matcher(script).find() || script.contains("opensslEncrypt")
+                || script.contains("opensslDecrypt") || script.contains("rc4Encrypt")
+                || script.contains("rc4Decrypt")) {
+            javascript.append(registerModule("crypto", loadModuleAsset(true)))
+                    .append("window.CryptoJS=__ku9Modules.crypto;");
+        }
+        if (JSENCRYPT_REQUIRE.matcher(script).find()) {
+            javascript.append(registerModule("jsencrypt", loadModuleAsset(false)))
+                    .append("var __rsa=__ku9Modules.jsencrypt,"
+                            + "__rsaCtor=__rsa&&(__rsa.JSEncrypt||__rsa.default||__rsa);"
+                            + "if(typeof __rsaCtor==='function'){__rsaCtor.JSEncrypt=__rsaCtor;"
+                            + "__rsaCtor.default=__rsaCtor;__ku9Modules.jsencrypt=__rsaCtor;}");
+        }
+        return javascript.toString();
+    }
+
+    private static String registerModule(String name, String source) {
+        return "(function(){var module={exports:{}},exports=module.exports;" + source
+                + "\n__ku9Modules['" + name + "']=module.exports;})();";
+    }
+
+    private String loadModuleAsset(boolean crypto) {
+        String source = crypto ? cryptoModuleSource : jsEncryptModuleSource;
+        if (source != null) {
+            return source;
+        }
+        String path = crypto ? "ku9/crypto-js.min.js" : "ku9/jsencrypt.min.js";
+        try {
+            InputStream input = activity.getAssets().open(path);
+            try {
+                source = Ku9HttpClient.readUtf8(input, 1024 * 1024);
+            } finally {
+                input.close();
+            }
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to load Ku9 module " + path, error);
+            source = "throw new Error('酷9内置模块加载失败: " + path + "');";
+        }
+        if (crypto) {
+            cryptoModuleSource = source;
+        } else {
+            jsEncryptModuleSource = source;
+        }
+        return source;
     }
 
     private void complete(Pending request, String json) {
@@ -461,14 +590,69 @@ final class Ku9ScriptResolver {
 
         @JavascriptInterface
         public String md5(String value) {
+            return digest("MD5", value);
+        }
+
+        @JavascriptInterface
+        public String digest(String algorithm, String value) {
             try {
-                MessageDigest digest = MessageDigest.getInstance("MD5");
+                MessageDigest digest = MessageDigest.getInstance(algorithm);
                 byte[] bytes = digest.digest(value.getBytes("UTF-8"));
                 StringBuilder result = new StringBuilder(bytes.length * 2);
                 for (byte item : bytes) {
                     result.append(String.format(Locale.US, "%02x", item & 0xff));
                 }
                 return result.toString();
+            } catch (Exception error) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String encodeBase64(String value) {
+            try {
+                return Base64.encodeToString(value.getBytes("UTF-8"), Base64.NO_WRAP);
+            } catch (Exception error) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String decodeBase64(String value) {
+            try {
+                return new String(Base64.decode(value, Base64.DEFAULT), "UTF-8");
+            } catch (Exception error) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public double toTimestamp(String value, String format, String timezone) {
+            try {
+                return dateFormat(format, timezone).parse(value).getTime();
+            } catch (Exception error) {
+                return 0;
+            }
+        }
+
+        @JavascriptInterface
+        public String toDate(double timestamp, String format, String timezone) {
+            try {
+                return dateFormat(format, timezone).format(new Date((long) timestamp));
+            } catch (Exception error) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String formatDateTime(String value, String inputFormat, String outputFormat,
+                double daysOffset, String inputTimezone, String outputTimezone) {
+            try {
+                Date date = dateFormat(inputFormat, inputTimezone).parse(value);
+                Calendar calendar = Calendar.getInstance(timeZone(inputTimezone));
+                calendar.setTime(date);
+                calendar.add(Calendar.DAY_OF_MONTH, (int) daysOffset);
+                return dateFormat(outputFormat, outputTimezone).format(calendar.getTime());
             } catch (Exception error) {
                 return "";
             }
@@ -518,6 +702,19 @@ final class Ku9ScriptResolver {
             }
         }
         return "";
+    }
+
+    private static SimpleDateFormat dateFormat(String pattern, String timezone) {
+        SimpleDateFormat format = new SimpleDateFormat(
+                TextUtils.isEmpty(pattern) ? "yyyy-MM-dd HH:mm:ss" : pattern, Locale.US);
+        format.setLenient(false);
+        format.setTimeZone(timeZone(timezone));
+        return format;
+    }
+
+    private static TimeZone timeZone(String timezone) {
+        return TextUtils.isEmpty(timezone) ? TimeZone.getDefault()
+                : TimeZone.getTimeZone(timezone);
     }
 
     private static boolean isDirectDataSource(String value) {

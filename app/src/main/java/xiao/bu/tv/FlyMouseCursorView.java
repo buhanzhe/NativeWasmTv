@@ -10,49 +10,24 @@ import android.util.AttributeSet;
 import android.view.View;
 
 public final class FlyMouseCursorView extends View {
+    interface CursorVisibilityListener {
+        void onCursorVisibilityChanged(boolean visible);
+    }
+
     private static final long CURSOR_IDLE_TIMEOUT_MS = 5000L;
-    private static final float MIN_VISIBLE_MOVEMENT_PX = 0.25f;
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path cursorPath = new Path();
     private float cursorX = -1f;
     private float cursorY = -1f;
-    private float targetX = -1f;
-    private float targetY = -1f;
-    private boolean moveAnimationRunning;
     private boolean cursorVisible = true;
+    private CursorVisibilityListener cursorVisibilityListener;
+    private float castVisualScale = 1f;
     private long clickPulseUntil;
     private final Runnable hideIdleCursor = new Runnable() {
         @Override
         public void run() {
-            cursorVisible = false;
-            invalidate();
-        }
-    };
-    private final Runnable moveAnimationFrame = new Runnable() {
-        @Override
-        public void run() {
-            if (!moveAnimationRunning) {
-                return;
-            }
-            float deltaX = targetX - cursorX;
-            float deltaY = targetY - cursorY;
-            if (Math.abs(deltaX) < 0.35f && Math.abs(deltaY) < 0.35f) {
-                cursorX = targetX;
-                cursorY = targetY;
-                moveAnimationRunning = false;
-                invalidate();
-                return;
-            }
-            // Follow the accumulated target instead of restarting an animator for
-            // every network packet. Large movements catch up a little faster while
-            // small movements remain precise and visually smooth.
-            float distance = Math.max(Math.abs(deltaX), Math.abs(deltaY));
-            float interpolation = 0.55f + Math.min(0.25f, distance / 600f);
-            cursorX += deltaX * interpolation;
-            cursorY += deltaY * interpolation;
-            invalidate();
-            postDelayed(this, 16L);
+            setCursorVisible(false);
         }
     };
 
@@ -73,31 +48,21 @@ public final class FlyMouseCursorView extends View {
     }
 
     void resetPosition() {
-        removeCallbacks(moveAnimationFrame);
-        moveAnimationRunning = false;
         if (getWidth() > 0 && getHeight() > 0) {
             cursorX = getWidth() / 2f;
             cursorY = getHeight() / 2f;
-            targetX = cursorX;
-            targetY = cursorY;
         }
         revealCursor();
     }
 
     void moveBy(float dx, float dy) {
         ensurePosition();
-        if (Math.abs(dx) + Math.abs(dy) < MIN_VISIBLE_MOVEMENT_PX) {
-            return;
-        }
         revealCursor();
-        float inset = dp(8f);
-        targetX = clamp(targetX + dx, inset, Math.max(inset, getWidth() - inset));
-        targetY = clamp(targetY + dy, inset, Math.max(inset, getHeight() - inset));
-        if (!moveAnimationRunning) {
-            moveAnimationRunning = true;
-            removeCallbacks(moveAnimationFrame);
-            post(moveAnimationFrame);
-        }
+        // MainActivity batches movement on VSYNC. Draw exactly the coordinates
+        // dispatched to the browser, not a second independently animated cursor.
+        // The tip must also reach controls at the very edge of the screen.
+        cursorX = clamp(cursorX + dx, 0f, Math.max(0, getWidth() - 1));
+        cursorY = clamp(cursorY + dy, 0f, Math.max(0, getHeight() - 1));
     }
 
     float cursorX() {
@@ -117,18 +82,29 @@ public final class FlyMouseCursorView extends View {
         postInvalidateDelayed(190L);
     }
 
+    void setCastVisualScale(float scale) {
+        float next = Math.max(0.25f, Math.min(1f, scale));
+        if (Math.abs(next - castVisualScale) < 0.001f) return;
+        castVisualScale = next;
+        invalidate();
+    }
+
+    void setCursorVisibilityListener(CursorVisibilityListener listener) {
+        cursorVisibilityListener = listener;
+        if (listener != null) {
+            listener.onCursorVisibilityChanged(
+                    getVisibility() == View.VISIBLE && cursorVisible);
+        }
+    }
+
     @Override
     protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
         if (cursorX < 0f || cursorY < 0f || oldWidth <= 0 || oldHeight <= 0) {
             cursorX = width / 2f;
             cursorY = height / 2f;
-            targetX = cursorX;
-            targetY = cursorY;
         } else {
             cursorX = width * cursorX / oldWidth;
             cursorY = height * cursorY / oldHeight;
-            targetX = width * targetX / oldWidth;
-            targetY = height * targetY / oldHeight;
         }
     }
 
@@ -139,7 +115,10 @@ public final class FlyMouseCursorView extends View {
         if (!cursorVisible) {
             return;
         }
-        float scale = getResources().getDisplayMetrics().density;
+        // A lower-resolution stream is enlarged by the receiver. Scale against
+        // the 4K canvas so the pointer keeps the same final on-screen size.
+        float scale = getResources().getDisplayMetrics().density * castVisualScale;
+        strokePaint.setStrokeWidth(1.5f * scale);
         float x = cursorX;
         float y = cursorY;
         cursorPath.reset();
@@ -156,17 +135,15 @@ public final class FlyMouseCursorView extends View {
         if (SystemClock.uptimeMillis() < clickPulseUntil) {
             Paint pulse = strokePaint;
             pulse.setColor(0xff34c759);
-            pulse.setStrokeWidth(dp(2f));
-            canvas.drawCircle(x, y, dp(15f), pulse);
+            pulse.setStrokeWidth(2f * scale);
+            canvas.drawCircle(x, y, 15f * scale, pulse);
             pulse.setColor(0xff111111);
-            pulse.setStrokeWidth(dp(1.5f));
+            pulse.setStrokeWidth(1.5f * scale);
         }
     }
 
     @Override
     protected void onDetachedFromWindow() {
-        moveAnimationRunning = false;
-        removeCallbacks(moveAnimationFrame);
         removeCallbacks(hideIdleCursor);
         super.onDetachedFromWindow();
     }
@@ -182,25 +159,32 @@ public final class FlyMouseCursorView extends View {
         if (visibility == View.VISIBLE) {
             revealCursor();
         } else {
-            cursorVisible = false;
+            setCursorVisible(false);
         }
     }
 
     private void revealCursor() {
-        cursorVisible = true;
+        setCursorVisible(true);
         removeCallbacks(hideIdleCursor);
         postDelayed(hideIdleCursor, CURSOR_IDLE_TIMEOUT_MS);
+    }
+
+    private void setCursorVisible(boolean visible) {
+        if (cursorVisible == visible) {
+            invalidate();
+            return;
+        }
+        cursorVisible = visible;
         invalidate();
+        if (cursorVisibilityListener != null) {
+            cursorVisibilityListener.onCursorVisibilityChanged(visible);
+        }
     }
 
     private void ensurePosition() {
         if (cursorX < 0f || cursorY < 0f) {
             cursorX = getWidth() / 2f;
             cursorY = getHeight() / 2f;
-        }
-        if (targetX < 0f || targetY < 0f) {
-            targetX = cursorX;
-            targetY = cursorY;
         }
     }
 

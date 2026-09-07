@@ -23,3 +23,6 @@ output/
 .codex-tmp/
 adb-*.png
 adb-*.xml
+scripts/node_modules/
+reports/
+scripts/

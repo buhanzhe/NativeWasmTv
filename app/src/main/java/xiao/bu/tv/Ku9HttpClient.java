@@ -66,7 +66,18 @@ final class Ku9HttpClient {
                     ? connection.getErrorStream() : connection.getInputStream();
             result.put("code", code);
             result.put("body", input == null ? "" : readUtf8(input, maxBytes));
-            result.put("url", connection.getURL().toString());
+            String finalUrl = connection.getURL().toString();
+            String location = connection.getHeaderField("Location");
+            if (!followRedirects && !TextUtils.isEmpty(location)) {
+                try {
+                    finalUrl = connection.getURL().toURI().resolve(location).toString();
+                } catch (Exception ignored) {
+                    finalUrl = location;
+                }
+            }
+            result.put("url", finalUrl);
+            // Ku9 names the effective/follow-up URL "furl".
+            result.put("furl", finalUrl);
             JSONObject headers = new JSONObject();
             for (Map.Entry<String, List<String>> entry
                     : connection.getHeaderFields().entrySet()) {

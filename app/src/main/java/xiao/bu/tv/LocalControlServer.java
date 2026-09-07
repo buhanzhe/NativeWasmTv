@@ -12,10 +12,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.URL;
 import java.net.URLDecoder;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -27,15 +29,29 @@ import java.util.concurrent.TimeUnit;
 
 final class LocalControlServer implements Closeable {
     interface Listener {
-        String stateJson();
+        String stateJson(String view);
+        String catalogJson();
+        String playbackJson();
+        String mediaJson(boolean detailed) throws Exception;
         String control(JSONObject request) throws Exception;
+        String mediaControl(JSONObject request) throws Exception;
         String pointer(JSONObject request) throws Exception;
+        String startCast(JSONObject request) throws Exception;
+        String stopCast() throws Exception;
+        String takeover(JSONObject request) throws Exception;
+        String wifiDirect(JSONObject request) throws Exception;
+        void takeoverSessionOpened(JSONObject request) throws Exception;
+        void takeoverSessionMessage(JSONObject request) throws Exception;
+        void takeoverSessionClosed(String sessionId);
         String settings(JSONObject request) throws Exception;
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
         String uploadKu9Script(String fileName, byte[] body) throws Exception;
+        String pushApk(String receiverUrl, String fileName, byte[] body) throws Exception;
+        String installApk(String sessionId, String fileName, byte[] body) throws Exception;
         Resource playlistSource(String location) throws Exception;
         String mergePlaylist(JSONObject request) throws Exception;
         Resource recording(String token) throws Exception;
+        Resource screenshot(boolean localOnly) throws Exception;
         Resource page(String path) throws Exception;
     }
 
@@ -56,18 +72,21 @@ final class LocalControlServer implements Closeable {
     private static final int MAX_KU9_SCRIPT_BYTES = 2 * 1024 * 1024;
     private static final int MIN_REQUEST_BYTES = 8 * 1024 * 1024;
     private static final int MAX_REQUEST_BYTES = 64 * 1024 * 1024;
-    private final byte[] indexHtml;
     private final Listener listener;
     private final ExecutorService clientWorkers = new ThreadPoolExecutor(
-            2, 4, 30L, TimeUnit.SECONDS,
+            3, 5, 30L, TimeUnit.SECONDS,
             new ArrayBlockingQueue<Runnable>(16),
             new ThreadPoolExecutor.AbortPolicy());
     private volatile boolean running;
+    private volatile String advertisedLanAddress;
     private ServerSocket serverSocket;
     private Thread acceptThread;
+    private volatile long advertisedLanAddressAt;
+    private final Object takeoverOutputLock = new Object();
+    private BufferedOutputStream takeoverOutput;
+    private String takeoverSessionId = "";
 
-    LocalControlServer(byte[] indexHtml, Listener listener) {
-        this.indexHtml = indexHtml;
+    LocalControlServer(Listener listener) {
         this.listener = listener;
     }
 
@@ -112,8 +131,54 @@ final class LocalControlServer implements Closeable {
     }
 
     String getLanUrl() {
-        String address = findLanAddress();
+        long now = android.os.SystemClock.elapsedRealtime();
+        String address = advertisedLanAddress;
+        if (advertisedLanAddressAt == 0L || now - advertisedLanAddressAt >= 30000L) {
+            address = findLanAddress();
+            advertisedLanAddress = address;
+            advertisedLanAddressAt = now;
+        }
         return address == null ? null : "http://" + address + ":" + getPort() + "/index.html";
+    }
+
+    /** Select the local interface that can actually reach a particular receiver.
+     * This matters on a hotspot phone where cellular and SoftAP are both private IPv4. */
+    String getLanUrlForPeer(String peerUrl) {
+        try {
+            InetAddress peer = InetAddress.getByName(new URL(peerUrl).getHost());
+            byte[] peerBytes = peer.getAddress();
+            if (peerBytes.length == 4) {
+                Enumeration<NetworkInterface> interfaces = NetworkInterface
+                        .getNetworkInterfaces();
+                if (interfaces != null) {
+                    for (NetworkInterface network : Collections.list(interfaces)) {
+                        if (!network.isUp() || network.isLoopback()) continue;
+                        for (InterfaceAddress candidate : network.getInterfaceAddresses()) {
+                            InetAddress local = candidate.getAddress();
+                            if (local == null || local.getAddress().length != 4
+                                    || local.isLoopbackAddress()) continue;
+                            if (sameSubnet(local.getAddress(), peerBytes,
+                                    candidate.getNetworkPrefixLength())) {
+                                return "http://" + local.getHostAddress() + ":"
+                                        + getPort() + "/index.html";
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "Unable to select peer-facing LAN address", error);
+        }
+        return getLanUrl();
+    }
+
+    String getAdvertisedLanAddress() {
+        String address = advertisedLanAddress;
+        return address == null ? "" : address;
+    }
+
+    boolean ownsOrigin(String url) {
+        return running && ControlSite.ownsOrigin(url, getPort(), advertisedLanAddress);
     }
 
     String getLoopbackUrl() {
@@ -151,6 +216,10 @@ final class LocalControlServer implements Closeable {
             BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
             String requestLine = readLine(input);
             if (requestLine == null) {
+                return;
+            }
+            if ("NTV-TAKEOVER/1".equals(requestLine)) {
+                handleTakeoverSession(socket, input);
                 return;
             }
             String[] requestParts = requestLine.split(" ");
@@ -196,7 +265,10 @@ final class LocalControlServer implements Closeable {
                 send(socket, 413, "application/json; charset=utf-8",
                         jsonError(path.startsWith("/api/ku9/script/upload")
                                 ? "JS 文件不能超过 2 MB"
-                                : "请求内容超过设备可安全处理的大小"));
+                                : path.startsWith("/api/apk/")
+                                        ? "APK 文件过大，当前设备最多接收 "
+                                                + (bodyLimit / 1024 / 1024) + " MB"
+                                        : "请求内容超过设备可安全处理的大小"));
                 return;
             }
             byte[] body = chunkedBody
@@ -218,14 +290,104 @@ final class LocalControlServer implements Closeable {
         }
     }
 
+    /**
+     * Small persistent, bidirectional control channel used only while one device
+     * controls another. HTTP remains available for the larger catalog/playback
+     * requests, while this socket proves that the controller is still alive.
+     */
+    private void handleTakeoverSession(Socket socket, BufferedInputStream input) {
+        String sessionId = "";
+        boolean opened = false;
+        try {
+            socket.setSoTimeout(18000);
+            BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
+            String helloLine = readLine(input);
+            if (helloLine == null) {
+                return;
+            }
+            JSONObject hello = new JSONObject(decodeProtocolLine(helloLine));
+            sessionId = hello.optString("sessionId", "").trim();
+            if (sessionId.length() == 0) {
+                throw new IOException("接管会话缺少标识");
+            }
+            listener.takeoverSessionOpened(hello);
+            opened = true;
+            synchronized (takeoverOutputLock) {
+                takeoverOutput = output;
+                takeoverSessionId = sessionId;
+            }
+            writeTakeoverLine(output, new JSONObject().put("ok", true)
+                    .put("protocol", 1));
+            while (running && !socket.isClosed()) {
+                String line = readLine(input);
+                if (line == null) {
+                    break;
+                }
+                JSONObject message = new JSONObject(decodeProtocolLine(line));
+                if (!sessionId.equals(message.optString("sessionId", ""))) {
+                    throw new IOException("接管会话标识不一致");
+                }
+                listener.takeoverSessionMessage(message);
+                writeTakeoverLine(output, new JSONObject().put("ok", true));
+            }
+        } catch (Exception error) {
+            if (running) {
+                Log.i(TAG, "Takeover session ended: " + error.getMessage());
+            }
+        } finally {
+            synchronized (takeoverOutputLock) {
+                if (sessionId.equals(takeoverSessionId)) {
+                    takeoverOutput = null;
+                    takeoverSessionId = "";
+                }
+            }
+            if (opened) {
+                listener.takeoverSessionClosed(sessionId);
+            }
+        }
+    }
+
+    private static String decodeProtocolLine(String line) throws IOException {
+        return new String(line.getBytes("ISO-8859-1"), "UTF-8");
+    }
+
+    private void writeTakeoverLine(BufferedOutputStream output, JSONObject message)
+            throws IOException {
+        synchronized (takeoverOutputLock) {
+            output.write(message.toString().getBytes("UTF-8"));
+            output.write('\n');
+            output.flush();
+        }
+    }
+
+    boolean sendTakeoverSessionMessage(JSONObject message) {
+        synchronized (takeoverOutputLock) {
+            if (takeoverOutput == null || takeoverSessionId.length() == 0) {
+                return false;
+            }
+            try {
+                message.put("sessionId", takeoverSessionId);
+                takeoverOutput.write(message.toString().getBytes("UTF-8"));
+                takeoverOutput.write('\n');
+                takeoverOutput.flush();
+                return true;
+            } catch (Exception error) {
+                Log.w(TAG, "Unable to send takeover session message", error);
+                return false;
+            }
+        }
+    }
+
     private void route(Socket socket, String method, String path, byte[] body) throws Exception {
         String requestTarget = path;
         int query = path.indexOf('?');
         if (query >= 0) {
             path = path.substring(0, query);
         }
-        if ("GET".equals(method) && ("/".equals(path) || "/index.html".equals(path))) {
-            send(socket, 200, "text/html; charset=utf-8", indexHtml);
+        if ("GET".equals(method) && ControlSite.contains(path)) {
+            Resource resource = listener.page("/".equals(path) ? "index.html" : path.substring(1));
+            send(socket, 200, resource.contentType, resource.body,
+                    "public, max-age=300");
         } else if ("GET".equals(method) && ("/flymouse.html".equals(path)
                 || "/video-recorder.html".equals(path)
                 || "/mp4-finalizer.js".equals(path))) {
@@ -233,13 +395,43 @@ final class LocalControlServer implements Closeable {
             send(socket, 200, resource.contentType, resource.body);
         } else if ("GET".equals(method) && "/api/state".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
-                    listener.stateJson().getBytes("UTF-8"));
+                    listener.stateJson(queryParameter(requestTarget, "view"))
+                            .getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/catalog".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.catalogJson().getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/playback".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.playbackJson().getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/media".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.mediaJson(!"0".equals(queryParameter(
+                            requestTarget, "detail"))).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/control".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.control(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/media/control".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.mediaControl(new JSONObject(new String(body, "UTF-8")))
+                            .getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/pointer".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.pointer(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/cast/start".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.startCast(new JSONObject(new String(body, "UTF-8")))
+                            .getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/cast/stop".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.stopCast().getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/takeover".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.takeover(new JSONObject(new String(body, "UTF-8")))
+                            .getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/wifi-direct".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.wifiDirect(new JSONObject(new String(body, "UTF-8")))
+                            .getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/settings".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.settings(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
@@ -252,6 +444,15 @@ final class LocalControlServer implements Closeable {
             String fileName = queryParameter(requestTarget, "name");
             send(socket, 200, "application/json; charset=utf-8",
                     listener.uploadKu9Script(fileName, body).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/apk/push".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.pushApk(queryParameter(requestTarget, "receiverUrl"),
+                            queryParameter(requestTarget, "name"), body)
+                            .getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/apk/upload".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.installApk(queryParameter(requestTarget, "sessionId"),
+                            queryParameter(requestTarget, "name"), body).getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/playlist/source".equals(path)) {
             Resource resource = listener.playlistSource(
                     queryParameter(requestTarget, "location"));
@@ -260,6 +461,10 @@ final class LocalControlServer implements Closeable {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.mergePlaylist(new JSONObject(new String(body, "UTF-8")))
                             .getBytes("UTF-8"));
+        } else if ("GET".equals(method) && VideoScreenshot.PATH.equals(path)) {
+            Resource resource = listener.screenshot("1".equals(
+                    queryParameter(requestTarget, "local")));
+            send(socket, 200, resource.contentType, resource.body);
         } else if ("GET".equals(method) && "/api/recording/playlist".equals(path)) {
             Resource resource = listener.recording(null);
             send(socket, 200, resource.contentType, resource.body);
@@ -386,13 +591,18 @@ final class LocalControlServer implements Closeable {
 
     private static void send(Socket socket, int status, String contentType, byte[] body)
             throws IOException {
+        send(socket, status, contentType, body, "no-store");
+    }
+
+    private static void send(Socket socket, int status, String contentType, byte[] body,
+            String cacheControl) throws IOException {
         String reason = status == 200 ? "OK" : status == 204 ? "No Content"
                 : status == 400 ? "Bad Request" : status == 404 ? "Not Found"
                 : status == 413 ? "Payload Too Large" : "Internal Server Error";
         String headers = "HTTP/1.1 " + status + " " + reason + "\r\n"
                 + "Content-Type: " + contentType + "\r\n"
                 + "Content-Length: " + body.length + "\r\n"
-                + "Cache-Control: no-store\r\n"
+                + "Cache-Control: " + cacheControl + "\r\n"
                 + "Permissions-Policy: accelerometer=(self), gyroscope=(self)\r\n"
                 + "Access-Control-Allow-Origin: *\r\n"
                 + "Access-Control-Allow-Headers: Content-Type\r\n"
@@ -419,11 +629,14 @@ final class LocalControlServer implements Closeable {
                 if (!network.isUp() || network.isLoopback()) {
                     continue;
                 }
+                String interfaceName = network.getName() == null ? ""
+                        : network.getName().toLowerCase(java.util.Locale.US);
                 for (InetAddress address : Collections.list(network.getInetAddresses())) {
                     String host = address.getHostAddress();
                     if (!address.isLoopbackAddress() && host.indexOf(':') < 0
                             && address.isSiteLocalAddress()) {
-                        int rank = ipv4Preference(host);
+                        int rank = ipv4Preference(host) * 10
+                                + interfacePreference(interfaceName);
                         if (rank < preferredRank) {
                             preferred = host;
                             preferredRank = rank;
@@ -440,10 +653,37 @@ final class LocalControlServer implements Closeable {
         return preferred;
     }
 
+    private static boolean sameSubnet(byte[] local, byte[] peer, short prefixLength) {
+        if (local.length != peer.length || prefixLength < 0
+                || prefixLength > local.length * 8) return false;
+        int fullBytes = prefixLength / 8;
+        int remainingBits = prefixLength % 8;
+        for (int index = 0; index < fullBytes; index++) {
+            if (local[index] != peer[index]) return false;
+        }
+        if (remainingBits == 0) return true;
+        int mask = 0xff << (8 - remainingBits);
+        return (local[fullBytes] & mask) == (peer[fullBytes] & mask);
+    }
+
+    private static int interfacePreference(String name) {
+        if (name.startsWith("wlan") || name.startsWith("wifi")
+                || name.startsWith("ap") || name.startsWith("swlan")
+                || name.startsWith("softap") || name.startsWith("eth")) return 0;
+        if (name.contains("p2p")) return 1;
+        if (name.startsWith("rmnet") || name.startsWith("ccmni")
+                || name.startsWith("pdp")) return 8;
+        return 4;
+    }
+
     private static int requestBodyLimit() {
         long heapBudget = Runtime.getRuntime().maxMemory() / 4L;
         return (int) Math.max(MIN_REQUEST_BYTES,
                 Math.min(MAX_REQUEST_BYTES, heapBudget));
+    }
+
+    static int maxRequestBytes() {
+        return Math.min(ApkTransferInstaller.MAX_APK_BYTES, requestBodyLimit());
     }
 
     private static int ipv4Preference(String address) {

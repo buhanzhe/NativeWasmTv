@@ -7,6 +7,7 @@ import android.os.SystemClock;
 import android.os.Process;
 import android.util.Base64;
 import android.util.Log;
+import android.content.Context;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -78,7 +79,8 @@ final class HlsProxyServer implements Closeable {
     private static final int CCTV_LOW_RAM_DECRYPT_THREADS = 1;
     private static final long CCTV_DECRYPT_SHUTDOWN_WAIT_MS = 750L;
     private static final int CCTV_PARALLEL_PREFETCH_WINDOW = 2;
-    private static final int CMG_PREFETCH_WINDOW = 1;
+    private static final int CMG_LOCAL_PREFETCH_WINDOW = 1;
+    private static final int CMG_REMOTE_PREFETCH_WINDOW = 2;
     private static final int CMG_MAX_GAP_PREWARM_SEGMENTS = 6;
     private static final int CMG_INITIAL_PREWARM_SEGMENTS = 0;
     private static final int CMG_MAX_VCL_PER_RUNTIME = 150;
@@ -101,6 +103,7 @@ final class HlsProxyServer implements Closeable {
     private static final int MAX_PREALLOCATED_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final int STREAM_COPY_BUFFER_BYTES = 64 * 1024;
     private static final String DEFAULT_USER_AGENT = "nTv/1.0";
+    private static final String CARRIER_IPTV_USER_AGENT = "okhttp/3.10.0";
     private static final String YANGSHIPIN_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
@@ -126,7 +129,21 @@ final class HlsProxyServer implements Closeable {
     private final int cctvStartupDownloadSegments;
     private final int cctvStartupDecryptSegments;
     private final boolean configuredVariantQualityEnabled;
+    private final CarrierNetworkRoute carrierNetworkRoute;
     private final String variantQualityMode;
+    private volatile HlsMediaTracks.Manifest mediaTrackManifest;
+    private volatile String mediaTrackPolicyUrl;
+    private volatile String requestedVideoVariant = "";
+
+    HlsMediaTracks.Manifest mediaTracks(String sourceUrl) {
+        HlsMediaTracks.Manifest manifest = mediaTrackManifest;
+        return manifest != null && (sourceUrl.equals(mediaTrackPolicyUrl)
+                || sourceUrl.equals(manifest.url)) ? manifest : null;
+    }
+
+    void selectVideoVariant(String url) {
+        requestedVideoVariant = url;
+    }
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
     private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
@@ -181,7 +198,7 @@ final class HlsProxyServer implements Closeable {
                 @Override
                 protected boolean removeEldestEntry(
                         Map.Entry<String, FutureTask<byte[]>> eldest) {
-                    return size() > CMG_PREFETCH_WINDOW + 1;
+                    return size() > CMG_REMOTE_PREFETCH_WINDOW + 1;
                 }
             };
     private final Map<String, String> cctvNextSegments =
@@ -224,11 +241,13 @@ final class HlsProxyServer implements Closeable {
     private volatile String webReferer;
     private volatile String webUserAgent;
     private volatile String webCookies;
+    private volatile boolean remoteConsumer;
+    private volatile boolean carrierIptvSession;
     private boolean cctvPlaylistMonitorStarted;
     private long cmgLastYangshipinSegment = -1L;
 
     HlsProxyServer() {
-        this(true, false, true, CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS,
+        this(null, true, false, true, CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS,
                 true, VARIANT_QUALITY_HIGH, 2, 2);
     }
 
@@ -236,6 +255,16 @@ final class HlsProxyServer implements Closeable {
             boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
             boolean configuredVariantQualityEnabled, String variantQualityMode,
             int startupDownloadSegments, int startupDecryptSegments) {
+        this(null, statefulCmgSource, lowResourceDevice, spsCompatibilityMode,
+                liveEdgeHoldBackSegments, configuredVariantQualityEnabled, variantQualityMode,
+                startupDownloadSegments, startupDecryptSegments);
+    }
+
+    HlsProxyServer(Context context, boolean statefulCmgSource, boolean lowResourceDevice,
+            boolean spsCompatibilityMode, int liveEdgeHoldBackSegments,
+            boolean configuredVariantQualityEnabled, String variantQualityMode,
+            int startupDownloadSegments, int startupDecryptSegments) {
+        carrierNetworkRoute = new CarrierNetworkRoute(context);
         cctvLiveEdgeHoldBackSegments = Math.max(1, Math.min(3, liveEdgeHoldBackSegments));
         cctvStartupDownloadSegments = Math.max(1, Math.min(2, startupDownloadSegments));
         cctvStartupDecryptSegments = Math.max(1,
@@ -288,12 +317,20 @@ final class HlsProxyServer implements Closeable {
     }
 
     String proxyUrl(String originUrl) {
+        if (CarrierNetworkRoute.isCarrierIptvUrl(originUrl)) {
+            carrierIptvSession = true;
+            carrierNetworkRoute.prepare();
+        }
         String token = Base64.encodeToString(originUrl.getBytes(UTF_8),
                 Base64.NO_WRAP | Base64.URL_SAFE);
         synchronized (recordingTokens) {
             recordingTokens.put(token, Boolean.TRUE);
         }
         return "http://127.0.0.1:" + serverSocket.getLocalPort() + "/proxy/" + token;
+    }
+
+    private HttpURLConnection openUpstreamConnection(String originUrl) throws IOException {
+        return carrierNetworkRoute.openConnection(originUrl, carrierIptvSession);
     }
 
     ProxyResponse fetchForRecording(String originUrl, String token, String publicPrefix)
@@ -538,7 +575,7 @@ final class HlsProxyServer implements Closeable {
             return new ProxyResponse("video/MP2T", getCmgSegment(originUrl));
         }
 
-        HttpURLConnection connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+        HttpURLConnection connection = openUpstreamConnection(originUrl);
         connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(needsH5eDecrypt(originUrl)
                 ? 10000 : UPSTREAM_READ_TIMEOUT_MS);
@@ -590,7 +627,11 @@ final class HlsProxyServer implements Closeable {
          * decrypt startup gates. */
         if (!needsSpecialDecrypt(policyUrl)) {
             if (body.contains("#EXT-X-STREAM-INF")) {
-                return rewriteGenericMasterPlaylist(base, lines);
+                HlsMediaTracks.Manifest manifest = HlsMediaTracks.parseMaster(responseUrl, body);
+                String rewritten = rewriteGenericMasterPlaylist(base, lines, manifest);
+                mediaTrackPolicyUrl = policyUrl;
+                mediaTrackManifest = manifest;
+                return rewritten;
             }
             return rewriteGenericMediaPlaylist(base, lines, body.length());
         }
@@ -610,6 +651,10 @@ final class HlsProxyServer implements Closeable {
             }
         }
         return rewriteDirectPlaylist(base, lines, body.length());
+    }
+
+    void setRemoteConsumer(boolean enabled) {
+        remoteConsumer = enabled;
     }
 
     /**
@@ -646,7 +691,7 @@ final class HlsProxyServer implements Closeable {
             boolean responseStarted = false;
             boolean responseCompleted = false;
             try {
-                connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+                connection = openUpstreamConnection(originUrl);
                 connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
                 connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
                 connection.setInstanceFollowRedirects(true);
@@ -788,7 +833,7 @@ final class HlsProxyServer implements Closeable {
 
     /** Old IJK probes every rendition of some large master playlists. Select one
      * advertised rendition in the proxy so startup remains deterministic and fast. */
-    private String rewriteGenericMasterPlaylist(URI base, String[] lines) {
+    private String rewriteGenericMasterPlaylist(URI base, String[] lines, HlsMediaTracks.Manifest manifest) {
         List<Variant> variants = parseVariants(lines);
         if (variants.isEmpty()) {
             return rewriteDirectPlaylist(base, lines, 256);
@@ -796,9 +841,40 @@ final class HlsProxyServer implements Closeable {
         sortVariants(variants);
         Variant selected = variants.get(preferredVariantIndex(
                 variants.size(), variantQualityMode));
+        for (Variant candidate : variants) {
+            if (base.resolve(candidate.uri).toString().equals(requestedVideoVariant)) {
+                selected = candidate;
+                break;
+            }
+        }
+        // Prefer Dolby on a compatible output, AAC on speakers. Dolby-only
+        // playlists still work through the FFmpeg AC-3/E-AC-3 decoder.
+        boolean ac3Direct = false, eac3Direct = false;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                ac3Direct = DolbyAudioOutput.supports(5, 48000, 6);
+                eac3Direct = DolbyAudioOutput.supports(6, 48000, 6);
+            }
+        } catch (RuntimeException ignored) {}
+        int audioRank = DolbyFormats.audioRank(HlsMediaTracks.attributes(selected.info).get("CODECS"),
+                ac3Direct, eac3Direct);
+        for (Variant candidate : variants) {
+            int rank = DolbyFormats.audioRank(HlsMediaTracks.attributes(candidate.info).get("CODECS"),
+                    ac3Direct, eac3Direct);
+            if (candidate.uri.equals(selected.uri)
+                    && rank > audioRank) {
+                selected = candidate;
+                audioRank = rank;
+            }
+        }
+        manifest.selectedVideoUrl = base.resolve(selected.uri).toString();
         StringBuilder result = new StringBuilder(512);
         result.append("#EXTM3U\n");
         for (String line : lines) {
+            if (line.startsWith("#EXT-X-MEDIA:")
+                    && !HlsMediaTracks.referencesRendition(selected.info, line)) {
+                continue;
+            }
             if (line.startsWith("#EXT-X-VERSION")
                     || line.startsWith("#EXT-X-INDEPENDENT-SEGMENTS")
                     || line.startsWith("#EXT-X-START")
@@ -977,7 +1053,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean consumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+            connection = openUpstreamConnection(originUrl);
             connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
             connection.setInstanceFollowRedirects(true);
@@ -1421,7 +1497,7 @@ final class HlsProxyServer implements Closeable {
         }
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) URI.create(playlistUrl).toURL().openConnection();
+            connection = openUpstreamConnection(playlistUrl);
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
             connection.setInstanceFollowRedirects(true);
@@ -1541,11 +1617,13 @@ final class HlsProxyServer implements Closeable {
     }
 
     private List<String> buildCmgPrefetchWindowFromUrlsLocked(List<String> segments) {
-        List<String> result = new ArrayList<String>(CMG_PREFETCH_WINDOW);
+        int window = remoteConsumer
+                ? CMG_REMOTE_PREFETCH_WINDOW : CMG_LOCAL_PREFETCH_WINDOW;
+        List<String> result = new ArrayList<String>(window);
         String next = lastCctvRequestedUrl == null
                 ? (segments.isEmpty() ? null : segments.get(0))
                 : cctvNextSegments.get(lastCctvRequestedUrl);
-        while (next != null && result.size() < CMG_PREFETCH_WINDOW) {
+        while (next != null && result.size() < window) {
             result.add(next);
             next = cctvNextSegments.get(next);
         }
@@ -1734,8 +1812,7 @@ final class HlsProxyServer implements Closeable {
     }
 
     private byte[] downloadCctvSegmentOnce(String originUrl, int attempt) throws IOException {
-        HttpURLConnection connection =
-                (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+        HttpURLConnection connection = openUpstreamConnection(originUrl);
         connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(needsH5eDecrypt(originUrl)
                 ? CCTV_SEGMENT_READ_TIMEOUT_MS : 10000);
@@ -1922,7 +1999,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = openUpstreamConnection(url);
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);
@@ -1962,7 +2039,7 @@ final class HlsProxyServer implements Closeable {
     private Resolution probeTransportStreamResolution(String url) throws IOException {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = openUpstreamConnection(url);
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);
@@ -2027,8 +2104,14 @@ final class HlsProxyServer implements Closeable {
             connection.setRequestProperty("User-Agent", customUserAgent);
         } else if (isYangshipinUrl(url)) {
             connection.setRequestProperty("User-Agent", YANGSHIPIN_USER_AGENT);
+        } else if (carrierIptvSession || CarrierNetworkRoute.isCarrierIptvUrl(url)) {
+            connection.setRequestProperty("User-Agent", CARRIER_IPTV_USER_AGENT);
         } else {
             connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT);
+        }
+        if (carrierIptvSession || CarrierNetworkRoute.isCarrierIptvUrl(url)) {
+            connection.setRequestProperty("Connection", "Keep-Alive");
+            connection.setRequestProperty("Accept", "*/*");
         }
         if (customReferer != null) {
             connection.setRequestProperty("Referer", customReferer);
@@ -2129,7 +2212,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(segmentUrl).toURL().openConnection();
+            connection = openUpstreamConnection(segmentUrl);
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);
@@ -2654,6 +2737,7 @@ final class HlsProxyServer implements Closeable {
                 + " streamedBytes=" + streamedResponseBytes.get()
                 + " upstreamBytes=" + upstreamDownloadedBytes.get());
         running = false;
+        carrierNetworkRoute.close();
         monitoredCctvPlaylistUrl = null;
         NativeH5eDecryptor.cancelPendingDecrypts();
         List<FutureTask<byte[]>> pendingCctvTasks;

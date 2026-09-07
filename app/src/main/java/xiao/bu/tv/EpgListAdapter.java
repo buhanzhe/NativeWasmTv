@@ -18,6 +18,7 @@ final class EpgListAdapter extends BaseAdapter {
     private final UiScaleHelper uiScaleHelper;
     private final float density;
     private final SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
+    private final EpgDisplayCache displayCache = new EpgDisplayCache();
     private List<EpgManager.Program> programs = Collections.emptyList();
     private float uiScale = 1f;
 
@@ -36,8 +37,8 @@ final class EpgListAdapter extends BaseAdapter {
     }
 
     void showPrograms(List<EpgManager.Program> programs) {
-        this.programs = programs == null
-                ? Collections.<EpgManager.Program>emptyList() : programs;
+        this.programs = displayCache.programsFor(programs);
+        // Keep time-based highlights fresh even when the cached list is reused.
         notifyDataSetChanged();
     }
 

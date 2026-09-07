@@ -3,7 +3,6 @@ package xiao.bu.tv;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Build;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -47,8 +46,6 @@ final class PlaylistManager {
     private static final String MOBILE_MERGED_FILE = "mobile-merged-playlist.m3u";
     private static final String IMPORT_DIRECTORY = "imported-playlists";
     private static final String BUILT_IN_PLAYLIST = "builtin_channels.txt";
-    private static final String RECOMMENDED_LIVE_TV_PROXY_URL =
-            "https://gh-proxy.com/raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt";
     private static final String RECOMMENDED_LIVE_TV_RAW_URL =
             "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt";
     private static final int MAX_SOURCES = 20;
@@ -76,11 +73,11 @@ final class PlaylistManager {
         catalogStore = new ChannelCatalogStore(this.context);
     }
 
-    static String getRecommendedUrl() {
+    String getRecommendedUrl() {
         return getRecommendedWebViewUrl();
     }
 
-    static JSONArray getRecommendedSourcesJson() throws JSONException {
+    JSONArray getRecommendedSourcesJson() throws JSONException {
         return new JSONArray()
                 .put(new JSONObject()
                         .put("name", "网址导航")
@@ -93,18 +90,16 @@ final class PlaylistManager {
                         .put("url", getRecommendedLiveTvUrl()));
     }
 
-    private static String getRecommendedJoyUrl() {
-        return GithubProxy.apply(BuildConfig.RECOMMENDED_JOY_SOURCE_URL);
+    private String getRecommendedJoyUrl() {
+        return GithubProxy.apply(context, BuildConfig.RECOMMENDED_JOY_SOURCE_URL);
     }
 
-    private static String getRecommendedWebViewUrl() {
-        return GithubProxy.apply(BuildConfig.RECOMMENDED_WEBVIEW_SOURCE_URL);
+    private String getRecommendedWebViewUrl() {
+        return GithubProxy.apply(context, BuildConfig.RECOMMENDED_WEBVIEW_SOURCE_URL);
     }
 
-    private static String getRecommendedLiveTvUrl() {
-        return Build.VERSION.SDK_INT <= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
-                ? GithubProxy.apply(RECOMMENDED_LIVE_TV_RAW_URL)
-                : RECOMMENDED_LIVE_TV_PROXY_URL;
+    private String getRecommendedLiveTvUrl() {
+        return GithubProxy.apply(context, RECOMMENDED_LIVE_TV_RAW_URL);
     }
 
     String getPlaylistUrl() {
@@ -714,7 +709,8 @@ final class PlaylistManager {
 
     private byte[] download(String sourceUrl, String cookie, String referer,
             int challengeCount) throws IOException {
-        URL url = new URL(sourceUrl);
+        String requestUrl = GithubProxy.apply(context, sourceUrl);
+        URL url = new URL(requestUrl);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(PLAYLIST_READ_TIMEOUT_MS);

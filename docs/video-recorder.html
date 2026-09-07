@@ -37,6 +37,8 @@
     .controls{display:flex;justify-content:center;gap:18px;margin-top:20px}
     .control{display:flex;align-items:center;justify-content:center;width:64px;height:64px;padding:0;border:1px solid #e1e3e7;border-radius:16px;background:#fff;color:#1d1d1f;box-shadow:0 3px 12px rgba(20,29,38,.07);cursor:pointer;transition:transform .12s ease,opacity .12s ease,background .12s ease}.control:active{transform:scale(.95)}.control:disabled{opacity:.32;cursor:default;transform:none}
     .control.download{border-color:#d6e8ff;background:#f1f7ff;color:#007aff}.control.settings-button{background:#f5f5f7;color:#3a3a3c}
+    .control.screenshot-button{border-color:#d6e8ff;background:#f1f7ff;color:#007aff;flex-direction:column;gap:2px}.screenshot-button .control-icon{width:26px;height:26px}.screenshot-button small{font-size:11px}
+    .screenshot-result{margin-top:18px;padding-top:16px;border-top:1px solid #e5e5ea}.screenshot-result img{display:block;width:100%;max-height:420px;object-fit:contain;background:#111;border-radius:10px}.screenshot-result a{display:block;margin-top:10px;padding:12px;border-radius:10px;background:#007aff;color:white;text-align:center;text-decoration:none}.screenshot-result p{font-size:12px;color:#77818b;line-height:1.6}.screenshot-result[hidden]{display:none}
     .control-icon{display:flex;align-items:center;justify-content:center;width:31px;height:31px}.control-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
     .record-shape{width:25px;height:25px;border-radius:50%;background:#e9384a;border:7px solid #e9384a}.recording .record-shape{width:22px;height:22px;border:0;border-radius:5px;background:#e9384a}
     .notice{display:none;margin-top:14px;padding:13px 14px;border-radius:12px;background:#fff2f1;color:#a52420;line-height:1.55}.notice.show{display:block}.notice b{display:block;margin-bottom:3px}
@@ -44,7 +46,7 @@
     .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field label{display:block;margin:0 0 5px;color:#77818b;font-size:11px;font-weight:700}.field select,.field input{width:100%;height:42px;padding:8px 10px;border:1px solid #d8dde2;border-radius:10px;background:#fff;outline:0}
     .help{margin:11px 1px 0;color:#7b858e;font-size:11px;line-height:1.55}
     .legal{margin-top:13px;text-align:center;color:#929aa2;font-size:10px;line-height:1.55}.legal a{color:#1677ff;text-decoration:none}
-    @media(max-width:520px){.shell{padding:58px 9px 30px}.top{width:calc(100% - 18px);height:50px;min-height:50px;padding:7px 2px}.card{padding:20px 12px 17px;border-radius:16px}.stats{font-size:14px}.stats span+span{margin-left:16px}.controls{gap:16px}.settings-grid{grid-template-columns:1fr}.connection{font-size:10px}.progress-wrap{margin-top:18px}}
+    @media(max-width:520px){.shell{padding:58px 9px 30px}.top{width:calc(100% - 18px);height:50px;min-height:50px;padding:7px 2px}.card{padding:20px 12px 17px;border-radius:16px}.stats{font-size:14px}.stats span+span{margin-left:16px}.controls{gap:12px}.control{width:56px;height:60px}.settings-grid{grid-template-columns:1fr}.connection{font-size:10px}.progress-wrap{margin-top:18px}}
   </style>
 </head>
 <body>
@@ -63,9 +65,12 @@
     <div class="controls">
       <button id="recordButton" class="control" type="button" aria-label="开始录制" onclick="toggleRecording()" disabled><span class="record-shape"></span></button>
       <button id="downloadButton" class="control download" type="button" aria-label="下载视频" title="下载视频" onclick="downloadRecording()" disabled><span class="control-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 4v15"></path><path d="m10.5 14.5 5.5 5.5 5.5-5.5"></path><path d="M6 21v5h20v-5"></path></svg></span></button>
+      <button id="screenshotButton" class="control screenshot-button" type="button" aria-label="截屏当前节目" title="截屏当前节目" onclick="captureVideoScreenshot()"><span class="control-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h4l2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"></path><circle cx="12" cy="13" r="4"></circle></svg></span><small>截屏</small></button>
       <button class="control settings-button" type="button" aria-label="录制设置" title="录制设置" onclick="toggleSettings()"><span class="control-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.36.7.66.96.3.25.68.4 1.07.4H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg></span></button>
     </div>
     <div id="notice" class="notice"></div>
+    <p class="help">截屏需播放设备为 Android 7.0 或以上，并保持视频界面在前台；可从另一台手机的网页保存。</p>
+    <div id="screenshotResult" class="screenshot-result" hidden><img id="screenshotPreview" alt="当前节目的视频截屏"><a id="screenshotSave" download="nTv-screenshot.png">保存截屏（PNG）</a><p>只截取视频画面，不含菜单和调试信息。若未自动下载，可点击保存；手机也可长按图片保存。</p></div>
     <div id="settings" class="settings">
       <div class="settings-grid">
         <div class="field"><label for="format">保存格式</label><select id="format" disabled><option value="mp4">MP4</option></select></div>
@@ -101,8 +106,29 @@ var params=new URLSearchParams(location.search),tvHost=(params.get('ip')||'').tr
 var baseUrl='',tvState=null,mediaUrl='',variants=[],recording=false,preparing=false,firstPlaylist=true,pollTimer=null,clockTimer=null,downloadChain=Promise.resolve();
 var seen={},segments=[],totalBytes=0,failedSegments=0,recordingStartedAt=0,lastSpeedBytes=0,lastSpeedAt=0,downloadUrl='';
 var recordButton=document.getElementById('recordButton'),downloadButton=document.getElementById('downloadButton'),quality=document.getElementById('quality');
+var screenshotUrl='',screenshotBusy=false;
 
-function backToManager(){if(baseUrl)location.href=baseUrl+'/index.html';else history.back()}
+async function captureVideoScreenshot(){
+  if(screenshotBusy)return;
+  if(!baseUrl){showNotice('无法截屏','请从设备管理页进入视频录制页面。');return}
+  var button=document.getElementById('screenshotButton');screenshotBusy=true;button.disabled=true;
+  try{
+    if(window.NtvDevice&&typeof NtvDevice.saveVideoScreenshot==='function'){
+      NtvDevice.saveVideoScreenshot();return;
+    }
+    var response=await localFetch(baseUrl+'/api/recording/screenshot?t='+Date.now());
+    if(!response.ok){var errorData={};try{errorData=await response.json()}catch(ignore){}throw new Error(errorData.message||'截屏失败：HTTP '+response.status)}
+    var blob=await response.blob();if(blob.type.indexOf('image/png')!==0||!blob.size)throw new Error('设备没有返回有效截屏，请更新设备端 APP');
+    if(screenshotUrl)URL.revokeObjectURL(screenshotUrl);
+    screenshotUrl=URL.createObjectURL(blob);
+    document.getElementById('screenshotPreview').src=screenshotUrl;
+    var save=document.getElementById('screenshotSave');save.href=screenshotUrl;save.download=defaultFilename('nTv-screenshot')+'.png';
+    document.getElementById('screenshotResult').hidden=false;save.click();
+  }catch(error){showNotice('无法截屏',error.message)}finally{screenshotBusy=false;button.disabled=false}
+}
+window.addEventListener('unload',function(){if(screenshotUrl)URL.revokeObjectURL(screenshotUrl)});
+
+function backToManager(){if(window.NtvDevice&&NtvDevice.navigateBack){NtvDevice.navigateBack();return}if(history.length>1){history.back();return}if(baseUrl)location.replace(baseUrl+'/pages/media.html')}
 function isLoopbackHost(host){host=String(host||'').toLowerCase().replace(/^\[|\]$/g,'');return host==='127.0.0.1'||host==='localhost'||host==='::1'||host==='0.0.0.0'||/^127\./.test(host)}
 function sanitizeHost(host){return String(host||'').replace(/^https?:\/\//i,'').replace(/[\/?#].*$/,'').replace(/:\d+$/,'').trim()}
 function localFetch(url,options){options=options||{};options.cache='no-store';options.mode='cors';try{options.targetAddressSpace=isLoopbackHost(tvHost)?'loopback':'local';return fetch(new Request(url,options))}catch(error){delete options.targetAddressSpace;return fetch(url,options)}}
@@ -140,12 +166,14 @@ async function connect(){
   tvHost=sanitizeHost(tvHost);
   if(!tvHost){setConnection('缺少电视地址','bad');showNotice('请从电视管理页进入','请先用手机打开电视显示的局域网管理地址，再点击“视频录制”。');return false}
   baseUrl='http://'+tvHost+':'+(Number(tvPort)||9966);
+  var connected=false;
   try{
     var response=await localFetch(baseUrl+'/api/state');if(!response.ok)throw new Error('HTTP '+response.status);tvState=await response.json();if(!tvState.ok)throw new Error(tvState.message||'电视状态不可用');
+    connected=true;
     setConnection('电视在线','online');clearNotice();var current=tvState.recording||{};document.getElementById('filename').textContent=defaultFilename(current.name||tvState.current&&tvState.current.name);
     if(!current.available){throw new Error('当前频道还没有可录制的视频流')}
     await loadRecordingManifest();recordButton.disabled=false;setStatus('准备录制',false);document.getElementById('substats').textContent=(current.group||'')+(current.name?' · '+current.name:'');return true;
-  }catch(error){setConnection('无法连接电视','bad');showNotice('录制服务不可用',error.message+'。若浏览器询问本地网络权限，请选择允许；旧版 Safari/Firefox 可能需要从 HTTP 本地页面打开。');setStatus('连接失败',false);recordButton.disabled=false;return false}
+  }catch(error){if(!connected)setConnection('无法连接电视','bad');showNotice('录制服务不可用',error.message+(connected?'。截屏按钮仍可独立使用。':'。若浏览器询问本地网络权限，请选择允许。'));setStatus(connected?'当前源不可录制':'连接失败',false);recordButton.disabled=false;return false}
 }
 async function loadRecordingManifest(){var recording=tvState.recording||{},proxyUrl=baseUrl+(recording.playlistPath||'/api/recording/playlist'),directUrl=recording.sourceMode==='direct'?String(recording.sourceUrl||''):'';var url=directUrl||proxyUrl,response;try{response=await mediaFetch(url);if(!response.ok)throw new Error('HTTP '+response.status)}catch(error){if(!directUrl)throw error;url=proxyUrl;response=await localFetch(url);if(!response.ok)throw new Error('读取播放清单失败：HTTP '+response.status);document.getElementById('substats').textContent='源站限制跨域，已改用电视转发'}var text=await response.text();variants=parseMasterPlaylist(text,url);if(variants.length){renderVariants()}else{mediaUrl=url;renderVariants()}}
 

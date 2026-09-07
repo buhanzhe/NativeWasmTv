@@ -1,8 +1,9 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$OutputDirectory,
     [string]$JavaHome,
     [string]$ReleaseNotes = '修复问题并提升播放体验。',
+    [switch]$Clean,
     [switch]$SkipClean
 )
 
@@ -11,7 +12,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $OutputDirectory) {
-    $OutputDirectory = Join-Path $repoRoot 'app\build\outputs\apk'
+    $OutputDirectory = Join-Path $repoRoot 'output'
 }
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 
@@ -138,7 +139,7 @@ $apksigner = Find-BuildTool $sdkDirectory 'apksigner.bat'
 $aapt = Find-BuildTool $sdkDirectory 'aapt.exe'
 
 $gradleTasks = @()
-if (-not $SkipClean) { $gradleTasks += 'clean' }
+if ($Clean -and -not $SkipClean) { $gradleTasks += 'clean' }
 $gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release', '--no-daemon')
 
 Push-Location $repoRoot
@@ -154,11 +155,13 @@ $artifacts = @(
     [pscustomobject]@{
         Name = 'nTv.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm32\release\app-arm32-release.apk'
+        Mapping = Join-Path $repoRoot 'app\build\outputs\mapping\arm32\release\mapping.txt'
         ExpectedAbi = 'armeabi-v7a'
     },
     [pscustomobject]@{
         Name = 'nTv64.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm64\release\app-arm64-release.apk'
+        Mapping = Join-Path $repoRoot 'app\build\outputs\mapping\arm64\release\mapping.txt'
         ExpectedAbi = 'arm64-v8a'
     }
 )
@@ -167,6 +170,18 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $results = foreach ($artifact in $artifacts) {
     if (-not (Test-Path -LiteralPath $artifact.Source)) {
         throw "Expected APK was not generated: $($artifact.Source)"
+    }
+    if (-not (Test-Path -LiteralPath $artifact.Mapping)) {
+        throw "Release obfuscation mapping was not generated: $($artifact.Mapping)"
+    }
+    $renamedApplicationClass = Get-Content -LiteralPath $artifact.Mapping |
+        Where-Object {
+            if ($_ -notmatch '^(xiao\.bu\.tv\.[^ ]+) -> ([^:]+):$') { return $false }
+            return $Matches[1] -ne $Matches[2]
+        } |
+        Select-Object -First 1
+    if (-not $renamedApplicationClass) {
+        throw "Release mapping contains no obfuscated application classes: $($artifact.Mapping)"
     }
     $destination = Join-Path $OutputDirectory $artifact.Name
     Copy-Item -LiteralPath $artifact.Source -Destination $destination -Force
@@ -192,6 +207,7 @@ $results = foreach ($artifact in $artifacts) {
         ABI = $architectures[0]
         SizeMB = [math]::Round($file.Length / 1MB, 2)
         SHA256 = $hash
+        Obfuscation = 'verified'
         Metadata = $badging
         Path = $file.FullName
     }
@@ -231,6 +247,6 @@ Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirecto
 
 Write-Host ''
 Write-Host 'Release artifacts:'
-$results | Format-List APK, ABI, SizeMB, SHA256, Metadata, Path
+$results | Format-List APK, ABI, SizeMB, SHA256, Obfuscation, Metadata, Path
 Write-Host "Update metadata: $versionPath"
 Write-Host "Legacy metadata: $legacyVersionPath"

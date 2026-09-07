@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>手机飞鼠 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body data-parent="/index.html">
+    <main id="flyMousePage" class="secondary-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">手机飞鼠</div>
+        <div class="online"><span class="dot"></span><span id="flyStatus">电视在线</span></div>
+      </div>
+      <section class="mouse-card">
+        <div id="mouseControls" class="mouse-controls">
+          <div class="control-modes">
+            <button id="modeTouch" class="active" onclick="switchControlMode('touch')">
+              触控板</button
+            ><button id="modeKeyboard" onclick="switchControlMode('keyboard')">全键盘</button
+            ><button id="modeGamepad" onclick="switchControlMode('gamepad')">游戏手柄</button>
+          </div>
+          <div id="panelTouch" class="control-panel active">
+            <div class="actions">
+              <button id="gyroButton" class="primary" onclick="enableGyroscope()">启用陀螺仪</button
+              ><button onclick="calibrateGyroscope()">重新校准</button>
+            </div>
+            <div id="touchpad" class="touchpad">单指移动 · 长按拖动 · 双指滚动与捏合缩放</div>
+            <div class="actions">
+              <button class="primary" onclick="openChannelPicker()">切换频道</button
+              ><button onclick="pointerAction('back')">电视返回</button
+              ><button onclick="pointerAction('reset')">光标居中</button>
+            </div>
+          </div>
+          <div id="panelKeyboard" class="control-panel">
+            <div class="keyboard-note">建议旋转手机横屏；文字框支持手机中文输入法</div>
+            <div class="keyboard-input">
+              <input
+                id="remoteText"
+                type="text"
+                autocomplete="off"
+                placeholder="输入文字后发送到电视网页焦点"
+              /><button class="primary" onclick="sendRemoteText()">发送</button>
+            </div>
+            <div class="keyboard">
+              <div class="keyboard-row">
+                <button class="key wide" onclick="remoteKey('escape')">Esc</button
+                ><button class="key" onclick="remoteKey('1')">1</button
+                ><button class="key" onclick="remoteKey('2')">2</button
+                ><button class="key" onclick="remoteKey('3')">3</button
+                ><button class="key" onclick="remoteKey('4')">4</button
+                ><button class="key" onclick="remoteKey('5')">5</button
+                ><button class="key" onclick="remoteKey('6')">6</button
+                ><button class="key" onclick="remoteKey('7')">7</button
+                ><button class="key" onclick="remoteKey('8')">8</button
+                ><button class="key" onclick="remoteKey('9')">9</button
+                ><button class="key" onclick="remoteKey('0')">0</button
+                ><button class="key" onclick="remoteKey('minus')">-</button
+                ><button class="key" onclick="remoteKey('equals')">=</button
+                ><button class="key wide" data-repeat-key="backspace">⌫</button>
+              </div>
+              <div class="keyboard-row">
+                <button class="key wide" onclick="remoteKey('tab')">Tab</button
+                ><button class="key" onclick="remoteKey('q')">Q</button
+                ><button class="key" onclick="remoteKey('w')">W</button
+                ><button class="key" onclick="remoteKey('e')">E</button
+                ><button class="key" onclick="remoteKey('r')">R</button
+                ><button class="key" onclick="remoteKey('t')">T</button
+                ><button class="key" onclick="remoteKey('y')">Y</button
+                ><button class="key" onclick="remoteKey('u')">U</button
+                ><button class="key" onclick="remoteKey('i')">I</button
+                ><button class="key" onclick="remoteKey('o')">O</button
+                ><button class="key" onclick="remoteKey('p')">P</button
+                ><button class="key" onclick="remoteKey('leftbracket')">[</button
+                ><button class="key" onclick="remoteKey('rightbracket')">]</button
+                ><button class="key" onclick="remoteKey('backslash')">\</button>
+              </div>
+              <div class="keyboard-row">
+                <button id="ctrlKey" class="key wide accent" onclick="toggleModifier('ctrl')">
+                  Ctrl</button
+                ><button class="key" onclick="remoteKey('a')">A</button
+                ><button class="key" onclick="remoteKey('s')">S</button
+                ><button class="key" onclick="remoteKey('d')">D</button
+                ><button class="key" onclick="remoteKey('f')">F</button
+                ><button class="key" onclick="remoteKey('g')">G</button
+                ><button class="key" onclick="remoteKey('h')">H</button
+                ><button class="key" onclick="remoteKey('j')">J</button
+                ><button class="key" onclick="remoteKey('k')">K</button
+                ><button class="key" onclick="remoteKey('l')">L</button
+                ><button class="key" onclick="remoteKey('semicolon')">;</button
+                ><button class="key" onclick="remoteKey('apostrophe')">'</button
+                ><button class="key wide dark" onclick="remoteKey('enter')">Enter</button>
+              </div>
+              <div class="keyboard-row">
+                <button id="shiftKey" class="key wide accent" onclick="toggleModifier('shift')">
+                  Shift</button
+                ><button class="key" onclick="remoteKey('z')">Z</button
+                ><button class="key" onclick="remoteKey('x')">X</button
+                ><button class="key" onclick="remoteKey('c')">C</button
+                ><button class="key" onclick="remoteKey('v')">V</button
+                ><button class="key" onclick="remoteKey('b')">B</button
+                ><button class="key" onclick="remoteKey('n')">N</button
+                ><button class="key" onclick="remoteKey('m')">M</button
+                ><button class="key" onclick="remoteKey('comma')">,</button
+                ><button class="key" onclick="remoteKey('period')">.</button
+                ><button class="key" onclick="remoteKey('slash')">/</button>
+              </div>
+              <div class="keyboard-row">
+                <button id="altKey" class="key wide accent" onclick="toggleModifier('alt')">
+                  Alt</button
+                ><button class="key" onclick="remoteKey('home')">Home</button
+                ><button class="key space" onclick="remoteKey('space')">空格</button
+                ><button class="key" onclick="remoteKey('end')">End</button
+                ><button class="key" data-repeat-key="left">←</button
+                ><button class="key" data-repeat-key="down">↓</button
+                ><button class="key" data-repeat-key="up">↑</button
+                ><button class="key" data-repeat-key="right">→</button>
+              </div>
+            </div>
+          </div>
+          <div id="panelGamepad" class="control-panel">
+            <div class="gamepad">
+              <div class="dpad">
+                <button class="up" data-repeat-key="up">▲</button
+                ><button class="left" data-repeat-key="left">◀</button
+                ><button class="ok" onclick="remoteKey('enter')">OK</button
+                ><button class="right" data-repeat-key="right">▶</button
+                ><button class="down" data-repeat-key="down">▼</button>
+              </div>
+              <div class="pad-center">
+                <div class="shoulders">
+                  <button data-repeat-key="pageup">L1 · 上页</button
+                  ><button data-repeat-key="pagedown">R1 · 下页</button>
+                </div>
+                <div class="actions">
+                  <button onclick="pointerAction('back')">返回</button
+                  ><button onclick="pointerAction('menu')">菜单</button>
+                </div>
+                <div class="actions">
+                  <button onclick="remoteKey('volumeup')">音量＋</button
+                  ><button onclick="remoteKey('volumedown')">音量－</button>
+                </div>
+              </div>
+              <div class="face-pad">
+                <button class="face-y" onclick="remoteKey('playpause')">Y</button
+                ><button class="face-x" onclick="pointerAction('click')">X</button
+                ><button class="face-a" onclick="remoteKey('enter')">A</button
+                ><button class="face-b" onclick="pointerAction('back')">B</button>
+              </div>
+            </div>
+            <div class="pad-caption">A 确认 · B 返回 · X 光标点击 · Y 播放/暂停 · L1/R1 翻页</div>
+          </div>
+          <div id="sensorStatus" class="sensor-status">
+            像遥控器一样握持；移动、指向或旋转手机控制光标。
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="channelPickerBackdrop" class="channel-picker-backdrop" hidden>
+      <div class="channel-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="channelPickerTitle">
+        <div class="channel-picker-header">
+          <button class="channel-picker-cancel" onclick="closeChannelPicker()">取消</button>
+          <b id="channelPickerTitle">选择频道</b>
+          <button class="channel-picker-confirm" onclick="confirmChannelPicker()">切换频道</button>
+        </div>
+        <div class="channel-picker-labels"><span>频道分组</span><span>频道</span></div>
+        <div class="channel-picker-wheels">
+          <div id="channelGroupWheel" class="channel-wheel" aria-label="频道分组"></div>
+          <div id="channelItemWheel" class="channel-wheel" aria-label="频道"></div>
+          <div class="channel-wheel-selection" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/channel-picker.js"></script>
+    <script src="/js/pointer-queue.js"></script>
+    <script src="/js/pages/flymouse.js"></script>
+  </body>
+</html>

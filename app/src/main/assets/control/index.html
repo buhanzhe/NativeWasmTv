@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>局域网遥控器 · nTv</title>
+    <link rel="stylesheet" href="/css/common.css" />
+  </head>
+  <body data-parent="/index.html">
+    <main id="mainPage">
+      <div class="top control-top">
+        <div class="brand">
+          <span class="brand-title">局域网遥控器</span
+          ><button
+            id="managementUrl"
+            class="management-url"
+            type="button"
+            onclick="copyManagementUrl()"
+            aria-label="复制局域网管理网址"
+          >
+            <span>（</span><span id="managementUrlText">正在获取管理网址…</span><span>）</span>
+          </button>
+        </div>
+        <div class="online"><span class="dot"></span><span id="status">连接中</span></div>
+      </div>
+      <section class="channel-quick-card">
+        <div class="channel-quick-copy">
+          <h2>切换频道</h2>
+          <span id="currentChannelSummary">正在读取当前频道…</span>
+        </div>
+        <button class="primary channel-picker-trigger" onclick="openChannelPicker()">
+          选择频道
+        </button>
+      </section>
+      <section class="settings-card">
+        <a class="settings-entry" href="/pages/media.html"
+          ><b>媒体控制器</b><span>进度、倍速、音轨、字幕与视频录制</span></a
+        >
+        <a class="settings-entry" href="/pages/playback.html"
+          ><b>播放与显示</b><span>画面、清晰度、直播稳定性、日期时间与调试信息</span></a
+        >
+        <a id="castSettingsEntry" class="settings-entry" href="/pages/cast.html"
+          ><b>投屏与互联</b><span>投送电视界面，或连接另一台 nTv 共享频道与播放能力</span></a
+        >
+        <a class="settings-entry" href="/pages/flymouse.html"
+          ><b>手机飞鼠</b><span>使用触控板、陀螺仪、键盘和游戏手柄</span></a
+        >
+        <a class="settings-entry" href="/pages/browser.html"
+          ><b>浏览器配置</b><span>网页分辨率、浏览器标识、图片与缓存</span></a
+        >
+        <a class="settings-entry" href="/pages/channels.html"
+          ><b>频道配置</b><span>在手机上整理并刷新电视频道列表</span></a
+        >
+        <a class="settings-entry" href="/pages/advanced.html"
+          ><b>高级设置</b><span>操作与启动、解码兼容</span></a
+        >
+        <a class="settings-entry" href="/pages/system.html"
+          ><b>系统信息</b><span>系统、WebView、CPU、内存与网络地址</span></a
+        >
+      </section>
+      <div class="footer">
+        开源地址: <a id="repo" class="repo" href="#" rel="noopener">buhanzhe/NativeWasmTv</a>
+      </div>
+    </main>
+    <div id="channelPickerBackdrop" class="channel-picker-backdrop" hidden>
+      <div class="channel-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="channelPickerTitle">
+        <div class="channel-picker-header">
+          <button class="channel-picker-cancel" onclick="closeChannelPicker()">取消</button>
+          <b id="channelPickerTitle">选择频道</b>
+          <button class="channel-picker-confirm" onclick="confirmChannelPicker()">切换频道</button>
+        </div>
+        <div class="channel-picker-labels"><span>频道分组</span><span>频道</span></div>
+        <div class="channel-picker-wheels">
+          <div id="channelGroupWheel" class="channel-wheel" aria-label="频道分组"></div>
+          <div id="channelItemWheel" class="channel-wheel" aria-label="频道"></div>
+          <div class="channel-wheel-selection" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+    <div id="message" class="message"></div>
+    <script src="/js/common.js"></script>
+    <script src="/js/channel-picker.js"></script>
+    <script src="/js/pages/home.js"></script>
+  </body>
+</html>
