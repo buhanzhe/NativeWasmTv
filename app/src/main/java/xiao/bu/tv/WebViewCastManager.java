@@ -47,10 +47,9 @@ final class WebViewCastManager implements Closeable {
     private static final int AUDIO_PCM_BYTES_PER_FRAME = AUDIO_CHANNELS * 2;
     private static final int AUDIO_INPUT_BYTES = AUDIO_FRAME_SAMPLES * AUDIO_PCM_BYTES_PER_FRAME;
     private static final int AUDIO_BITRATE = 160000;
-    // New viewers and packet-loss recovery request an IDR immediately below. A
-    // Frequent periodic IDRs create a large, visible encoder spike on animated
-    // webpages, so retain only a very sparse fallback for vendor codecs that reject
-    // PARAMETER_KEY_REQUEST_SYNC_FRAME.
+    // New viewers and queue recovery request an IDR immediately below. A frequent
+    // periodic IDR blocks weak TCP receivers for up to a second, so this is only a
+    // sparse vendor-codec fallback; normal recovery is event-driven.
     private static final int PERIODIC_SYNC_FRAME_SECONDS = 600;
     private static volatile Boolean hevcEncodingSupported;
 
@@ -79,6 +78,7 @@ final class WebViewCastManager implements Closeable {
     private volatile long peakVideoSendUs;
     private volatile double videoQueueDelayMs = -1d;
     private volatile double videoSendDelayMs = -1d;
+    private volatile boolean keyFrameSending;
     private volatile CastBitrateController bitrateController;
     private volatile long encodedVideoBytes;
     private volatile double encodeDelayMs = -1d;
@@ -117,6 +117,7 @@ final class WebViewCastManager implements Closeable {
         peakVideoSendUs = 0L;
         videoQueueDelayMs = -1d;
         videoSendDelayMs = -1d;
+        keyFrameSending = false;
         encodedVideoBytes = 0L;
         encodeDelayMs = -1d;
         rtspVideoBitrate.reset();
@@ -327,6 +328,11 @@ final class WebViewCastManager implements Closeable {
     @SuppressLint("NewApi")
     private void renderUiFrame(int width, int height) {
         long drawBeganNs = System.nanoTime();
+        // A large IDR can block an old receiver for hundreds of milliseconds.
+        // Do not keep feeding the encoder during that one access unit: otherwise
+        // its tiny realtime queue drops reference P frames and requests another
+        // IDR, creating a repeating key-frame stall.
+        if (keyFrameSending) return;
         CastGlCompositor active = compositor;
         Surface surface = active == null ? null : active.uiSurface();
         if (surface == null || !surface.isValid() || !active.tryAcquireUiFrame()) {
@@ -410,12 +416,20 @@ final class WebViewCastManager implements Closeable {
                         videoQueueDelayMs = smoothDelay(videoQueueDelayMs,
                                 queueSampleNs / 1_000_000d);
                         boolean connected = server.hasVideoClient();
-                        server.sendVideo(frame.data, frame.ptsUs, frame.flags);
+                        keyFrameSending = frame.key;
+                        try {
+                            server.sendVideo(frame.data, frame.ptsUs, frame.flags);
+                        } finally {
+                            keyFrameSending = false;
+                            queue.frameSent(frame);
+                        }
                         lastVideoSendUs = (System.nanoTime() - begin) / 1000L;
                         videoSendDelayMs = smoothDelay(videoSendDelayMs,
                                 lastVideoSendUs / 1000d);
                         peakVideoSendUs = Math.max(peakVideoSendUs, lastVideoSendUs);
-                        if (connected) bitrate.recordSend(lastVideoSendUs * 1000L);
+                        if (connected && !frame.key) {
+                            bitrate.recordSend(lastVideoSendUs * 1000L);
+                        }
                         if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                             Log.i("NtvCastLatency", "SEND pts=" + frame.ptsUs
                                     + " begin=" + begin / 1000L + " end=" + System.nanoTime() / 1000L);
@@ -446,7 +460,7 @@ final class WebViewCastManager implements Closeable {
                 int previous = bitrate.bitrate();
                 int target = bitrate.update(now, queue.droppedFrames(),
                         server.slowWriteDisconnects(), server.hasVideoClient(),
-                        server.pendingVideoWriteNs());
+                        keyFrameSending ? 0L : server.pendingVideoWriteNs());
                 if (target != 0) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, target);

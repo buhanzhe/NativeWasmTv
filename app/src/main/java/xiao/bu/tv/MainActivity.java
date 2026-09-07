@@ -6945,11 +6945,11 @@ public final class MainActivity extends Activity {
         requestPlaybackAudioFocus();
         float playbackVolume = isPlaybackMuted() ? 0f : 1f;
         nextPlayer.setVolume(playbackVolume, playbackVolume);
-        // Pace the decoded picture queue on its sender PTS clock. If a short
-        // decoder stall builds a backlog, discard only pictures that have already
-        // missed their deadline instead of submitting a 100+ fps catch-up burst.
+        // Keep every compressed reference frame for realtime casting. IJK's
+        // generic framedrop can skip a HEVC reference before MediaCodec sees it,
+        // leaving old receivers gray until the next IDR.
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "framedrop",
-                realtimeCastSource ? 1 : softwareDecode ? 5 : 1);
+                realtimeCastSource ? 0 : softwareDecode ? 5 : 1);
         if (realtimeCastSource) receiverNetworkLease.acquire(this);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "ntv-live-video",
                 realtimeCastSource ? 1 : 0);
