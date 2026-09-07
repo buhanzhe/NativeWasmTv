@@ -5,6 +5,9 @@
     pickerState = null,
     groupTimer = null,
     channelTimer = null,
+    groupHapticIndex = -1,
+    channelHapticIndex = -1,
+    lastHapticAt = 0,
     previousOverflow = "";
 
   function byId(id) {
@@ -34,8 +37,36 @@
     }
   }
 
+  function hapticTick() {
+    var now = Date.now();
+    if (now - lastHapticAt < 18) return;
+    lastHapticAt = now;
+    try {
+      if (window.NtvDevice && NtvDevice.hapticTick) {
+        NtvDevice.hapticTick();
+        return;
+      }
+    } catch (ignored) {}
+    if (navigator.vibrate) navigator.vibrate(7);
+  }
+
+  function rememberWheelIndex(wheel, index) {
+    if (!wheel) return;
+    if (wheel.id === "channelGroupWheel") groupHapticIndex = index;
+    else if (wheel.id === "channelItemWheel") channelHapticIndex = index;
+  }
+
+  function tickWheelIfChanged(wheel, index) {
+    var previous = wheel && wheel.id === "channelGroupWheel"
+      ? groupHapticIndex : channelHapticIndex;
+    if (index === previous) return;
+    rememberWheelIndex(wheel, index);
+    hapticTick();
+  }
+
   function settleWheel(wheel, index) {
     if (!wheel) return;
+    rememberWheelIndex(wheel, index);
     wheel.scrollTop = index * ROW_HEIGHT;
     markSelected(wheel, index);
   }
@@ -51,6 +82,7 @@
       row.textContent = label(items[i]);
       row.onclick = function () {
         var index = Number(this.getAttribute("data-index"));
+        tickWheelIfChanged(wheel, index);
         settleWheel(wheel, index);
         onSelect(index);
       };
@@ -90,6 +122,8 @@
   function bindWheelScrolling() {
     var groupWheel = byId("channelGroupWheel"), channelWheel = byId("channelItemWheel");
     groupWheel.onscroll = function () {
+      tickWheelIfChanged(groupWheel,
+        selectedFromScroll(groupWheel, groups().length));
       clearTimeout(groupTimer);
       groupTimer = setTimeout(function () {
         var index = selectedFromScroll(groupWheel, groups().length);
@@ -102,6 +136,8 @@
       }, 90);
     };
     channelWheel.onscroll = function () {
+      tickWheelIfChanged(channelWheel,
+        selectedFromScroll(channelWheel, channels().length));
       clearTimeout(channelTimer);
       channelTimer = setTimeout(function () {
         selectedChannel = selectedFromScroll(channelWheel, channels().length);

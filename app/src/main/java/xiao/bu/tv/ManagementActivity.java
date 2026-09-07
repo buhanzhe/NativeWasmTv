@@ -18,6 +18,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
@@ -380,6 +381,7 @@ public final class ManagementActivity extends Activity {
         private final Sensor gyroscope = sensorManager == null ? null
                 : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         private boolean listening;
+        private long lastHapticTickAt;
 
         @JavascriptInterface
         public String sendPointer(String body) {
@@ -522,6 +524,33 @@ public final class ManagementActivity extends Activity {
                                 VibrationEffect.DEFAULT_AMPLITUDE));
                     } else {
                         vibrator.vibrate(safeDuration);
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void hapticTick() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    if (now - lastHapticTickAt < 18L) return;
+                    lastHapticTickAt = now;
+                    Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                    if (vibrator == null || !vibrator.hasVibrator()) return;
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            // Let the device map a short detent to its linear motor.
+                            vibrator.vibrate(VibrationEffect.createPredefined(
+                                    VibrationEffect.EFFECT_TICK));
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            vibrator.vibrate(VibrationEffect.createOneShot(7L, 72));
+                        } else if (!webView.performHapticFeedback(
+                                HapticFeedbackConstants.CLOCK_TICK)) {
+                            vibrator.vibrate(7L);
+                        }
+                    } catch (RuntimeException error) {
+                        webView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
                     }
                 }
             });
