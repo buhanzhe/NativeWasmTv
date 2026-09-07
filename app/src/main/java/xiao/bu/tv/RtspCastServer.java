@@ -69,7 +69,6 @@ final class RtspCastServer implements Closeable {
     private volatile long slowWriteDisconnects;
     private volatile long sentVideoBytes;
     private volatile long sentAudioBytes;
-    private volatile long videoAccessUnitStartedNs;
 
     RtspCastServer(boolean audioEnabled) throws IOException {
         this(audioEnabled, 8_000_000, "h264", 30);
@@ -88,12 +87,10 @@ final class RtspCastServer implements Closeable {
         this.audioEnabled = audioEnabled;
         this.videoCodec = "h265".equals(videoCodec) ? "h265" : "h264";
         this.videoFps = Math.max(1, videoFps);
-        // Keep only a short TCP burst in the kernel. Android normally doubles this
-        // request, so about 62 ms at the configured bitrate becomes a 120-150 ms
-        // wire queue. A former 250 ms request became a roughly 500 ms pointer delay
-        // whenever the link was slightly slower than the encoder.
-        sendBufferBytes = Math.max(96 * 1024,
-                Math.min(384 * 1024, bitrate / 8 / 16));
+        // About one access unit, bounded even for large requested rates.
+        // A fixed 32 KiB window throttles 30 Mbps streams unnecessarily.
+        sendBufferBytes = Math.max(32 * 1024,
+                Math.min(192 * 1024, bitrate / 8 / this.videoFps));
         serverSocket = bindServer();
         serverSocket.setSoTimeout(100);
         videoSocket = new DatagramSocket();
@@ -160,10 +157,6 @@ final class RtspCastServer implements Closeable {
     long pendingVideoWriteNs() {
         Client target = playingClient();
         long started = target == null ? 0 : target.videoWriteStartedNs;
-        long accessUnitStarted = videoAccessUnitStartedNs;
-        if (accessUnitStarted != 0L && (started == 0L || accessUnitStarted < started)) {
-            started = accessUnitStarted;
-        }
         return started == 0 ? 0 : Math.max(0L, System.nanoTime() - started);
     }
 
@@ -218,24 +211,19 @@ final class RtspCastServer implements Closeable {
         if (snapshot == null) return;
         if (snapshot.awaitingKeyFrame && !keyFrame) return;
         if (keyFrame) { snapshot.awaitingKeyFrame = false; syncFrameRequested = false; }
-        videoAccessUnitStartedNs = System.nanoTime();
-        try {
-            if (keyFrame) {
-                if (vps != null) {
-                    sendVideoNal(snapshot, vps, 0, vps.length, timestamp, false);
-                }
-                if (sps != null) {
-                    sendVideoNal(snapshot, sps, 0, sps.length, timestamp, false);
-                }
-                if (pps != null) {
-                    sendVideoNal(snapshot, pps, 0, pps.length, timestamp, false);
-                }
+        if (keyFrame) {
+            if (vps != null) {
+                sendVideoNal(snapshot, vps, 0, vps.length, timestamp, false);
             }
-            sendAccessUnit(snapshot, data, timestamp);
-            flush(snapshot, true);
-        } finally {
-            videoAccessUnitStartedNs = 0L;
+            if (sps != null) {
+                sendVideoNal(snapshot, sps, 0, sps.length, timestamp, false);
+            }
+            if (pps != null) {
+                sendVideoNal(snapshot, pps, 0, pps.length, timestamp, false);
+            }
         }
+        sendAccessUnit(snapshot, data, timestamp);
+        flush(snapshot, true);
     }
 
     void sendAudio(ByteBuffer buffer, MediaCodec.BufferInfo info) {

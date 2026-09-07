@@ -77,7 +77,7 @@ const oldInteractiveVideo = `            /* Decoded pictures are safe to skip: n
             }
 
             /* compute nominal last_duration */`;
-const unpacedInteractiveVideo = `            /* Decoded pictures are safe to skip: never discard compressed P frames.
+const lowLatencyAvVideo = `            /* Decoded pictures are safe to skip: never discard compressed P frames.
              * Video-only cast presents the newest decoded picture immediately. With
              * audio, retain A/V sync but discard pictures that are still stale after
              * advancing once, so a startup/network burst cannot become permanent
@@ -95,31 +95,10 @@ const unpacedInteractiveVideo = `            /* Decoded pictures are safe to ski
             }
 
             /* compute nominal last_duration */`;
-const pacedInteractiveVideo = `            /* Keep video-only casting on the sender PTS clock. Submitting every
-             * decoded frame immediately lets a short decoder backlog burst at
-             * 100+ fps on a 60 Hz receiver, followed by an empty-queue pause. The
-             * normal video-master clock paces those frames; framedrop discards only
-             * pictures that have actually missed their deadline. Audio casting
-             * additionally removes pictures more than 80 ms behind its master. */
-            int ntv_interactive = ffp->ntv_live_video && is->realtime && !is->step;
-            if (ntv_interactive && is->audio_st
-                    && frame_queue_nb_remaining(&is->pictq) > 1) {
-                Frame *ntv_next = frame_queue_peek_next(&is->pictq);
-                double ntv_master = get_master_clock(is);
-                if (!isnan(ntv_master) && !isnan(ntv_next->pts)
-                        && ntv_next->pts < ntv_master - 0.080) {
-                    frame_queue_next(&is->pictq);
-                    goto retry;
-                }
-            }
-
-            /* compute nominal last_duration */`;
-migrate(player, oldInteractiveVideo, pacedInteractiveVideo);
-migrate(player, unpacedInteractiveVideo, pacedInteractiveVideo);
-edit(player, '            /* compute nominal last_duration */', pacedInteractiveVideo);
-migrate(player, `            delay = ntv_immediate ? 0 : compute_target_delay(ffp, last_duration, is);
-            if (ntv_immediate) is->frame_timer = av_gettime_relative() / 1000000.0;`,
-    '            delay = compute_target_delay(ffp, last_duration, is);');
+migrate(player, oldInteractiveVideo, lowLatencyAvVideo);
+edit(player, '            /* compute nominal last_duration */', lowLatencyAvVideo);
+edit(player, '            delay = compute_target_delay(ffp, last_duration, is);', `            delay = ntv_immediate ? 0 : compute_target_delay(ffp, last_duration, is);
+            if (ntv_immediate) is->frame_timer = av_gettime_relative() / 1000000.0;`);
 // Nine decoded AAC frames add about 192 ms at 48 kHz before AudioTrack. The
 // interactive RTSP sender already has a tiny loss-bounded queue, so retain only
 // three receiver frames (~64 ms) while leaving normal live/VOD playback unchanged.

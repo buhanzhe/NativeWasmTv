@@ -4,14 +4,8 @@ import java.util.ArrayDeque;
 
 /** Bounded encoded access units. After a drop, resume only at a fresh IDR. */
 final class CastVideoQueue {
-    // A large HEVC IDR can occupy the network sender for several display
-    // intervals. Keep enough room for that short, predictable burst. The age
-    // bound still prevents a slow link from turning this into pointer latency.
-    // Old receivers occasionally stop reading for 100-120 ms while submitting a
-    // frame to their decoder. A 150 ms ceiling absorbs that short scheduling
-    // pause without turning it into another IDR, while still bounding input lag.
-    static final long MAX_AGE_NS = 150_000_000L;
-    static final int MAX_FRAMES = 8;
+    static final long MAX_AGE_NS = 80_000_000L;
+    private static final int MAX_FRAMES = 3;
     private static final int MAX_BYTES = 3 * 1024 * 1024;
     static final class Frame {
         final byte[] data;
@@ -25,7 +19,6 @@ final class CastVideoQueue {
     }
     private final ArrayDeque<Frame> frames = new ArrayDeque<Frame>();
     private boolean closed, awaitingKey = true, syncRequested = true;
-    private boolean keyInFlight, drainingKeyChain;
     private int bytes;
     private long dropped;
 
@@ -45,22 +38,11 @@ final class CastVideoQueue {
         while (!closed && frames.isEmpty()) wait();
         if (closed) return null;
         Frame frame=frames.remove(); bytes-=frame.data.length;
-        if (frame.key) keyInFlight=true;
-        if (System.nanoTime()-frame.queuedNs > MAX_AGE_NS
-                && !keyInFlight && !drainingKeyChain) {
-            dropped++; invalidate(); return null;
-        }
+        // offer() already prevents an encoded backlog from growing. A frame can
+        // become old only while the sender is finishing one large IDR. Dropping
+        // it here invalidates the reference chain and immediately asks for a
+        // second IDR, which repeats the same network stall on older TVs.
         return frame;
-    }
-
-    /** Preserve the short, continuous P-frame chain produced while one IDR is sent. */
-    synchronized void frameSent(Frame frame) {
-        if (frame.key) {
-            keyInFlight=false;
-            drainingKeyChain=!frames.isEmpty();
-        } else if (drainingKeyChain && frames.isEmpty()) {
-            drainingKeyChain=false;
-        }
     }
 
     synchronized boolean needsSyncFrame() { return syncRequested; }
@@ -69,7 +51,7 @@ final class CastVideoQueue {
     synchronized boolean isClosed() { return closed; }
     private void invalidate() {
         dropped+=frames.size(); frames.clear(); bytes=0;
-        awaitingKey=true; syncRequested=true; drainingKeyChain=false;
+        awaitingKey=true; syncRequested=true;
     }
     synchronized void close() { closed=true; frames.clear(); bytes=0; notifyAll(); }
 }

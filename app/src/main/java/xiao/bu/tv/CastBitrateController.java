@@ -47,9 +47,7 @@ final class CastBitrateController {
             badWindows++;
             if ((badWindows >= 2 || disconnectedSlowly || pendingWriteNs > 120_000_000L)
                     && now - changedAt >= 1_500_000_000L && bitrate > floor) {
-                // Converge quickly enough that an overloaded link cannot keep
-                // several seconds of key-frame recovery pressure alive.
-                bitrate = Math.max(floor, bitrate * 2 / 3);
+                bitrate = Math.max(floor, bitrate * 3 / 4);
                 changedAt = now; badWindows = 0;
                 return bitrate;
             }

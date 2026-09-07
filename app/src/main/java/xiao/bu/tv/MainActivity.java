@@ -6999,8 +6999,17 @@ public final class MainActivity extends Activity {
         if (isRtspSource(streamUrl)) {
             // TCP is substantially more tolerant of congested Wi-Fi and is the default.
             // Keep UDP available for low-latency LAN cameras and multicast gateways.
+            // Old receivers can stop reading the interleaved TCP socket while their
+            // MediaCodec is busy. That back-pressures the phone for 1-2 seconds and
+            // makes the cursor lag even though encode/decode queues stay short.
+            // nTv casting is local and event-driven, so use UDP on legacy/low-resource
+            // receivers; leave ordinary RTSP sources and modern devices configurable.
+            String effectiveRtspTransport = realtimeCastSource
+                    && (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1
+                            || lowResourceDevice)
+                    ? "udp" : rtspTransport;
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
-                    "rtsp_transport", rtspTransport);
+                    "rtsp_transport", effectiveRtspTransport);
         }
         /* Every channel switch creates a localhost proxy on a new port. IJK 0.8.8
          * can retain an empty localhost DNS-cache entry from the closed proxy,
@@ -7014,6 +7023,12 @@ public final class MainActivity extends Activity {
                         : remoteCatalogPlayback ? 1024 * 1024
                         : genericThirdPartySource ? 4 * 1024 * 1024 : 256 * 1024);
         if (realtimeCastSource) {
+            // A cast IDR arrives as a short RTP burst. KitKat's default UDP receive
+            // buffer is only about 160 KiB and can lose the middle of that burst,
+            // producing green/gray macroblocks until the next key frame. This is a
+            // socket buffer only; packet-buffering remains disabled below.
+            nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
+                    "buffer_size", 512 * 1024);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
                     "analyzeduration", 100000);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,

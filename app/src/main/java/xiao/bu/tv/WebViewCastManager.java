@@ -47,10 +47,10 @@ final class WebViewCastManager implements Closeable {
     private static final int AUDIO_PCM_BYTES_PER_FRAME = AUDIO_CHANNELS * 2;
     private static final int AUDIO_INPUT_BYTES = AUDIO_FRAME_SAMPLES * AUDIO_PCM_BYTES_PER_FRAME;
     private static final int AUDIO_BITRATE = 160000;
-    // New viewers and queue recovery request an IDR immediately below. A frequent
-    // periodic IDR blocks weak TCP receivers for up to a second, so this is only a
-    // sparse vendor-codec fallback; normal recovery is event-driven.
-    private static final int PERIODIC_SYNC_FRAME_SECONDS = 600;
+    // Recovery is requested immediately when a viewer joins or a queue is
+    // invalidated. A 30-second fallback avoids the 5-second, one-second-long IDR
+    // stalls seen on old TV TCP stacks without making vendor-codec recovery slow.
+    private static final int PERIODIC_SYNC_FRAME_SECONDS = 30;
     private static volatile Boolean hevcEncodingSupported;
 
     private final Activity activity;
@@ -328,11 +328,11 @@ final class WebViewCastManager implements Closeable {
     @SuppressLint("NewApi")
     private void renderUiFrame(int width, int height) {
         long drawBeganNs = System.nanoTime();
-        // A large IDR can block an old receiver for hundreds of milliseconds.
-        // Do not keep feeding the encoder during that one access unit: otherwise
-        // its tiny realtime queue drops reference P frames and requests another
-        // IDR, creating a repeating key-frame stall.
-        if (keyFrameSending) return;
+        CastVideoQueue queue = videoQueue;
+        // Apply backpressure before drawing and encoding. Keep at most the frame
+        // currently being sent plus one pending frame, so a large IDR cannot fill
+        // the encoded queue with obsolete cursor positions and start an IDR loop.
+        if (queue != null && queue.size() >= 1) return;
         CastGlCompositor active = compositor;
         Surface surface = active == null ? null : active.uiSurface();
         if (surface == null || !surface.isValid() || !active.tryAcquireUiFrame()) {
@@ -421,12 +421,15 @@ final class WebViewCastManager implements Closeable {
                             server.sendVideo(frame.data, frame.ptsUs, frame.flags);
                         } finally {
                             keyFrameSending = false;
-                            queue.frameSent(frame);
                         }
                         lastVideoSendUs = (System.nanoTime() - begin) / 1000L;
                         videoSendDelayMs = smoothDelay(videoSendDelayMs,
                                 lastVideoSendUs / 1000d);
                         peakVideoSendUs = Math.max(peakVideoSendUs, lastVideoSendUs);
+                        // A key frame is much larger than a normal access unit and
+                        // does not describe sustained link capacity. Counting it
+                        // drives the controller to its bitrate floor after every
+                        // periodic IDR and causes visible quality oscillation.
                         if (connected && !frame.key) {
                             bitrate.recordSend(lastVideoSendUs * 1000L);
                         }
@@ -476,7 +479,7 @@ final class WebViewCastManager implements Closeable {
                     }
                 }
                 if ((queue.needsSyncFrame() || server.needsSyncFrame())
-                        && now - lastSyncRequestNs > 100_000_000L) {
+                        && now - lastSyncRequestNs > 250_000_000L) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
                     try { encoder.setParameters(parameters); }
