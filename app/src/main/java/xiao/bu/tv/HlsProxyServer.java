@@ -243,7 +243,9 @@ final class HlsProxyServer implements Closeable {
         this.configuredVariantQualityEnabled = configuredVariantQualityEnabled;
         this.variantQualityMode = sanitizeVariantQualityMode(variantQualityMode);
         h264SpsCompatibilityMode = spsCompatibilityMode;
-        NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
+        if (CjsPluginRuntime.isInstalled()) {
+            NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
+        }
         cmgSegmentCacheLimit = lowResourceDevice ? 2 : CMG_SEGMENT_CACHE_LIMIT;
         cctvSegmentCacheLimit = lowResourceDevice
                 ? CCTV_LOW_RAM_SEGMENT_CACHE_LIMIT : CCTV_SEGMENT_CACHE_LIMIT;
@@ -366,7 +368,9 @@ final class HlsProxyServer implements Closeable {
 
     static void resetCmgSessionForChannelSwitch() {
         synchronized (CMG_DECRYPT_LOCK) {
-            NativeCmgDecryptor.resetRuntimeForProbe();
+            if (CjsPluginRuntime.isInstalled()) {
+                NativeCmgDecryptor.resetRuntimeForProbe();
+            }
             cmgSessionWarmed = false;
             cmgLiveVideoDecodeEnabled = false;
             cmgInitialUpdateTag = 0;
@@ -1594,7 +1598,9 @@ final class HlsProxyServer implements Closeable {
                         try {
                             task.run();
                         } finally {
-                            NativeH5eDecryptor.releaseThreadContext();
+                            if (CjsPluginRuntime.isInstalled()) {
+                                NativeH5eDecryptor.releaseThreadContext();
+                            }
                         }
                     }
                 }, "cctv-decrypt-" + threadIds.incrementAndGet());
@@ -2655,7 +2661,9 @@ final class HlsProxyServer implements Closeable {
                 + " upstreamBytes=" + upstreamDownloadedBytes.get());
         running = false;
         monitoredCctvPlaylistUrl = null;
-        NativeH5eDecryptor.cancelPendingDecrypts();
+        if (CjsPluginRuntime.isInstalled()) {
+            NativeH5eDecryptor.cancelPendingDecrypts();
+        }
         List<FutureTask<byte[]>> pendingCctvTasks;
         synchronized (cctvSegmentTasks) {
             pendingCctvTasks =

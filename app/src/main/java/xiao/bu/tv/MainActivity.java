@@ -268,6 +268,8 @@ public final class MainActivity extends Activity {
     private EpgManager epgManager;
     private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
+    private boolean cjsPluginInstallInProgress;
+    private int pendingCjsChannelIndex = -1;
     private Ku9ScriptResolver ku9ScriptResolver;
     private DirectVideoView videoView;
     private View channelSwitchBlackout;
@@ -518,6 +520,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Context assignment only: no plugin file access, parsing, hashing, network or dlopen.
+        CjsPluginRuntime.initialize(this);
         CrashReporter.install(this);
         showCrashRecoveryNotice();
         TlsCompat.install();
@@ -1343,6 +1347,7 @@ public final class MainActivity extends Activity {
                             ? Math.round(detectedDisplayInches * 10f) / 10.0d : 0d));
             root.put("system", systemInfoProvider == null ? new JSONObject()
                     : systemInfoProvider.snapshot());
+            root.put("cjsPlugin", CjsPluginRuntime.statusJson());
             JSONObject current = new JSONObject();
             current.put("groupIndex", groupIndex);
             current.put("channelIndex", channelIndex);
@@ -1708,6 +1713,10 @@ public final class MainActivity extends Activity {
         boolean restartPlayback = false;
         boolean recreateSurface = false;
         boolean applyWebViewSettings = false;
+        if (request.has("cjsPluginManifestUrl")) {
+            CjsPluginRuntime.setManifestUrl(request.optString("cjsPluginManifestUrl", ""));
+        }
+        final boolean updateCjsPlugin = request.optBoolean("updateCjsPlugin", false);
         if (request.has("reverseKeys")) {
             reverseUpDown = request.optBoolean("reverseKeys", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
@@ -2025,6 +2034,10 @@ public final class MainActivity extends Activity {
             });
         }
         String message = clearWebCache ? "网页缓存已清除" : "设置已保存";
+        if (updateCjsPlugin) {
+            String version = CjsPluginRuntime.installOrUpdate();
+            message = "兼容插件 " + version + " 已安装";
+        }
         if (request.has("playlistGroupStates")) {
             final ChannelCatalog.Group[] customGroups = playlistManager.updateGroupStates(
                     request.optJSONArray("playlistGroupStates"));
@@ -2484,6 +2497,10 @@ public final class MainActivity extends Activity {
         currentChannelIndex = ChannelCatalog.wrapIndex(group.channels, index);
         final Channel channel = group.channels[currentChannelIndex];
         final int source = catalogSource(group, channel);
+        if (requiresCjsPlugin(channel, source) && !CjsPluginRuntime.isInstalled()) {
+            installCjsPluginAndStart(currentChannelIndex, channel.name);
+            return;
+        }
         syncPlaybackRecoveryTarget();
         saveLastChannelSnapshot(group, channel);
         configureEmbeddedResolverMode(group, channel);
@@ -2555,6 +2572,67 @@ public final class MainActivity extends Activity {
         String normalized = url.toLowerCase(Locale.US);
         return normalized.contains("cctvwbcd") && normalized.contains("/cdrmld")
                 && normalized.contains(".m3u8");
+    }
+
+    private static boolean requiresCjsPlugin(Channel channel, int source) {
+        if (source == ChannelCatalog.SOURCE_CCTV_WEB
+                || source == ChannelCatalog.SOURCE_YSP_CCTV
+                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) {
+            return true;
+        }
+        if (source != ChannelCatalog.SOURCE_CUSTOM || channel == null) {
+            return false;
+        }
+        for (int index = 0; index < channel.sourceCount(); index++) {
+            String url = channel.sourceUrl(index);
+            if (isCctvDirectStream(url) || extractYangshipinPid(url) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void installCjsPluginAndStart(int channelIndex, String channelName) {
+        pendingCjsChannelIndex = channelIndex;
+        showLoading(channelName, "正在下载播放兼容插件");
+        showChannelBar(channelName, "首次使用正在安装兼容插件");
+        if (cjsPluginInstallInProgress) {
+            return;
+        }
+        cjsPluginInstallInProgress = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String installedVersion = null;
+                Throwable failure = null;
+                try {
+                    installedVersion = CjsPluginRuntime.installOrUpdate();
+                } catch (Throwable error) {
+                    failure = error;
+                    Log.e(TAG, "Unable to install CJS plugin", error);
+                }
+                final String version = installedVersion;
+                final Throwable error = failure;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        cjsPluginInstallInProgress = false;
+                        int requestedIndex = pendingCjsChannelIndex;
+                        pendingCjsChannelIndex = -1;
+                        if (error != null) {
+                            abortChannelSwitchAnimation();
+                            hideLoading();
+                            String reason = error.getMessage();
+                            showChannelBar(currentChannel().name,
+                                    "兼容插件安装失败" + (reason == null ? "" : "：" + reason));
+                            return;
+                        }
+                        Log.i(TAG, "CJS plugin activated version=" + version);
+                        startChannel(requestedIndex < 0 ? currentChannelIndex : requestedIndex);
+                    }
+                });
+            }
+        }, "cjs-plugin-install").start();
     }
 
     private boolean isActiveCctvWebSource() {

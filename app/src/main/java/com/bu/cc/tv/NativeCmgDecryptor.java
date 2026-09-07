@@ -1,8 +1,10 @@
 package com.bu.cc.tv;
 
+import xiao.bu.tv.CjsPluginRuntime;
+
 public final class NativeCmgDecryptor {
     static {
-        System.loadLibrary("cmg_decrypt");
+        CjsPluginRuntime.loadNativeLibrary("libcmg_decrypt.so");
     }
 
     private NativeCmgDecryptor() {

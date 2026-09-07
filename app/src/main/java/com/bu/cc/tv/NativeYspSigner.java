@@ -1,8 +1,10 @@
 package com.bu.cc.tv;
 
+import xiao.bu.tv.CjsPluginRuntime;
+
 public final class NativeYspSigner {
     static {
-        System.loadLibrary("ysp_keygen");
+        CjsPluginRuntime.loadNativeLibrary("libysp_keygen.so");
     }
 
     private NativeYspSigner() {
