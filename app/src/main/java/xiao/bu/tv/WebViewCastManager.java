@@ -48,10 +48,10 @@ final class WebViewCastManager implements Closeable {
     private static final int AUDIO_INPUT_BYTES = AUDIO_FRAME_SAMPLES * AUDIO_PCM_BYTES_PER_FRAME;
     private static final int AUDIO_BITRATE = 160000;
     // New viewers and packet-loss recovery request an IDR immediately below. A
-    // one-second periodic IDR creates a large, visible encoder spike on animated
-    // webpages, so retain only a sparse fallback for vendor codecs that reject
+    // Frequent periodic IDRs create a large, visible encoder spike on animated
+    // webpages, so retain only a very sparse fallback for vendor codecs that reject
     // PARAMETER_KEY_REQUEST_SYNC_FRAME.
-    private static final int PERIODIC_SYNC_FRAME_SECONDS = 5;
+    private static final int PERIODIC_SYNC_FRAME_SECONDS = 600;
     private static volatile Boolean hevcEncodingSupported;
 
     private final Activity activity;
@@ -77,6 +77,8 @@ final class WebViewCastManager implements Closeable {
     private volatile CastVideoQueue videoQueue;
     private volatile long lastVideoSendUs;
     private volatile long peakVideoSendUs;
+    private volatile long networkBackpressureSkips;
+    private volatile boolean keyFrameSending;
     private volatile CastBitrateController bitrateController;
     private volatile long encodedVideoBytes;
     private volatile double encodeDelayMs = -1d;
@@ -113,6 +115,8 @@ final class WebViewCastManager implements Closeable {
         lastVideoPresentationTimeUs = 0L;
         lastVideoSendUs = 0L;
         peakVideoSendUs = 0L;
+        networkBackpressureSkips = 0L;
+        keyFrameSending = false;
         encodedVideoBytes = 0L;
         encodeDelayMs = -1d;
         rtspVideoBitrate.reset();
@@ -323,6 +327,14 @@ final class WebViewCastManager implements Closeable {
     @SuppressLint("NewApi")
     private void renderUiFrame(int width, int height) {
         long drawBeganNs = System.nanoTime();
+        RtspCastServer server = rtspServer;
+        // Do not keep encoding obsolete cursor positions behind a blocked IDR.
+        // Resume from the newest WebView state as soon as the short TCP burst
+        // drains, which trades frames under congestion instead of adding delay.
+        if (server != null && server.pendingVideoWriteNs() > 80_000_000L) {
+            networkBackpressureSkips++;
+            return;
+        }
         CastGlCompositor active = compositor;
         Surface surface = active == null ? null : active.uiSurface();
         if (surface == null || !surface.isValid() || !active.tryAcquireUiFrame()) {
@@ -403,10 +415,20 @@ final class WebViewCastManager implements Closeable {
                         if (frame == null) continue;
                         long begin = System.nanoTime();
                         boolean connected = server.hasVideoClient();
-                        server.sendVideo(frame.data, frame.ptsUs, frame.flags);
+                        keyFrameSending = frame.key;
+                        try {
+                            server.sendVideo(frame.data, frame.ptsUs, frame.flags);
+                        } finally {
+                            keyFrameSending = false;
+                        }
                         lastVideoSendUs = (System.nanoTime() - begin) / 1000L;
                         peakVideoSendUs = Math.max(peakVideoSendUs, lastVideoSendUs);
-                        if (connected) bitrate.recordSend(lastVideoSendUs * 1000L);
+                        // An IDR can be dozens of average frames. It is required for
+                        // joining but is not evidence that the steady stream is too
+                        // fast for the link.
+                        if (connected && !frame.key) {
+                            bitrate.recordSend(lastVideoSendUs * 1000L);
+                        }
                         if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                             Log.i("NtvCastLatency", "SEND pts=" + frame.ptsUs
                                     + " begin=" + begin / 1000L + " end=" + System.nanoTime() / 1000L);
@@ -437,7 +459,7 @@ final class WebViewCastManager implements Closeable {
                 int previous = bitrate.bitrate();
                 int target = bitrate.update(now, queue.droppedFrames(),
                         server.slowWriteDisconnects(), server.hasVideoClient(),
-                        server.pendingVideoWriteNs());
+                        keyFrameSending ? 0L : server.pendingVideoWriteNs());
                 if (target != 0) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, target);
@@ -541,6 +563,7 @@ final class WebViewCastManager implements Closeable {
                     .put("peakVideoSendMs", peakVideoSendUs / 1000d)
                     .put("queuedVideoFrames", videoQueue == null ? 0 : videoQueue.size())
                     .put("droppedVideoFrames", videoQueue == null ? 0 : videoQueue.droppedFrames())
+                    .put("networkBackpressureSkips", networkBackpressureSkips)
                     .put("rtspUrl", rtspUrl());
             CastBitrateController bitrate = bitrateController;
             RtspCastServer server = rtspServer;
@@ -555,6 +578,7 @@ final class WebViewCastManager implements Closeable {
             }
             value.put("encoderTargetBitrateMbps", bitrate == null ? 0 : bitrate.bitrate() / 1000000d)
                     .put("socketSendBufferBytes", server == null ? 0 : server.socketSendBufferBytes())
+                    .put("rtspTransport", server == null ? "" : server.activeTransport())
                     .put("slowWriteDisconnects", server == null ? 0 : server.slowWriteDisconnects())
                     .put("rtspVideoBitrate", Math.max(0L, measuredRtspVideoBitrate))
                     .put("rtspAudioBitrate", Math.max(0L, measuredRtspAudioBitrate));
