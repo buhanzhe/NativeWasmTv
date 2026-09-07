@@ -56,6 +56,7 @@ android {
             dimension 'architecture'
             minSdkVersion 14
             ndk { abiFilters 'armeabi-v7a' }
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"armeabi-v7a"'
             buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk32Url"'
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25632"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv.apk"'
@@ -65,6 +66,7 @@ android {
             // Android supports 64-bit native processes from API 21 onward.
             minSdkVersion 21
             ndk { abiFilters 'arm64-v8a' }
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"arm64-v8a"'
             buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk64Url"'
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25664"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv64.apk"'

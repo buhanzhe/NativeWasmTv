@@ -2,7 +2,6 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
 
@@ -42,7 +41,9 @@ public final class CjsPluginRuntime {
     private static final String PREF_URL = "manifest_url";
     private static final String PREF_VERSION = "active_version";
     private static final String PREF_PENDING_VERSION = "pending_version";
+    private static final String PREF_LAST_HOST_ABI = "last_host_abi";
     private static final String PLUGIN_DIR = "cjs-plugin";
+    private static final String ABI_MARKER = "abi.txt";
     private static final int MAX_MANIFEST_BYTES = 256 * 1024;
     private static final int MAX_SCRIPT_BYTES = 512 * 1024;
     private static final int MAX_NATIVE_BYTES = 8 * 1024 * 1024;
@@ -58,7 +59,9 @@ public final class CjsPluginRuntime {
     private static Context context;
     private static JSONObject scripts;
     private static String scriptsVersion;
+    private static String verifiedInstallationKey;
     private static boolean nativeLibrariesLoaded;
+    private static boolean abiChangedAtStartup;
 
     private CjsPluginRuntime() {
     }
@@ -66,6 +69,15 @@ public final class CjsPluginRuntime {
     public static void initialize(Context value) {
         if (context == null && value != null) {
             context = value.getApplicationContext();
+            String abi = currentAbi();
+            SharedPreferences prefs = preferences();
+            String previousAbi = prefs.getString(PREF_LAST_HOST_ABI, "");
+            abiChangedAtStartup = previousAbi.length() > 0 && !abi.equals(previousAbi);
+            if (!abi.equals(previousAbi)) {
+                prefs.edit().putString(PREF_LAST_HOST_ABI, abi).apply();
+                Log.i(TAG, "Host ABI " + (previousAbi.length() == 0 ? "initialized" : "switched")
+                        + " previous=" + previousAbi + " current=" + abi);
+            }
         }
     }
 
@@ -94,34 +106,52 @@ public final class CjsPluginRuntime {
 
     public static boolean isInstalled() {
         SharedPreferences prefs = preferences();
-        String pending = prefs.getString(PREF_PENDING_VERSION, "");
+        String abi = currentAbi();
+        String pending = prefs.getString(abiPreference(PREF_PENDING_VERSION, abi), "");
         if (!nativeLibrariesLoaded && pending.length() > 0
-                && completeDirectory(versionDirectory(pending))) {
-            prefs.edit().putString(PREF_VERSION, pending).remove(PREF_PENDING_VERSION).commit();
+                && completeDirectory(versionDirectory(pending, abi), abi)) {
+            prefs.edit().putString(abiPreference(PREF_VERSION, abi), pending)
+                    .remove(abiPreference(PREF_PENDING_VERSION, abi)).commit();
         }
-        String version = prefs.getString(PREF_VERSION, "");
+        String version = prefs.getString(abiPreference(PREF_VERSION, abi), "");
         if (version.length() == 0) {
             return false;
         }
-        return completeDirectory(versionDirectory(version));
+        String installationKey = abi + ":" + version;
+        if (installationKey.equals(verifiedInstallationKey)) {
+            return true;
+        }
+        boolean complete = completeDirectory(versionDirectory(version, abi), abi);
+        if (complete) verifiedInstallationKey = installationKey;
+        return complete;
     }
 
-    private static boolean completeDirectory(File directory) {
-        return new File(directory, "runtime.json").isFile()
-                && new File(directory, "libcctv_h5e.so").isFile()
-                && new File(directory, "libcmg_decrypt.so").isFile()
-                && new File(directory, "libysp_keygen.so").isFile();
+    private static boolean completeDirectory(File directory, String abi) {
+        File marker = new File(directory, ABI_MARKER);
+        if (!new File(directory, "runtime.json").isFile()
+                || !new File(directory, "libcctv_h5e.so").isFile()
+                || !new File(directory, "libcmg_decrypt.so").isFile()
+                || !new File(directory, "libysp_keygen.so").isFile()) {
+            return false;
+        }
+        try {
+            return abi.equals(new String(readFile(marker, 64), "UTF-8").trim());
+        } catch (IOException error) {
+            return false;
+        }
     }
 
     public static JSONObject statusJson() throws JSONException {
         boolean installed = isInstalled();
-        String version = preferences().getString(PREF_VERSION, "");
-        String pending = preferences().getString(PREF_PENDING_VERSION, "");
+        String abi = currentAbi();
+        String version = preferences().getString(abiPreference(PREF_VERSION, abi), "");
+        String pending = preferences().getString(abiPreference(PREF_PENDING_VERSION, abi), "");
         return new JSONObject()
                 .put("installed", installed)
                 .put("version", version)
                 .put("pendingVersion", pending)
-                .put("abi", currentAbi())
+                .put("abi", abi)
+                .put("abiChangedAtStartup", abiChangedAtStartup)
                 .put("manifestUrl", getManifestUrl());
     }
 
@@ -147,7 +177,9 @@ public final class CjsPluginRuntime {
             throw new IOException("插件版本为空");
         }
         String abi = currentAbi();
-        String currentVersion = preferences().getString(PREF_VERSION, "");
+        String versionPreference = abiPreference(PREF_VERSION, abi);
+        String pendingPreference = abiPreference(PREF_PENDING_VERSION, abi);
+        String currentVersion = preferences().getString(versionPreference, "");
         if (version.equals(currentVersion) && isInstalled()) {
             return version;
         }
@@ -155,7 +187,10 @@ public final class CjsPluginRuntime {
         if (files == null) {
             throw new IOException("插件清单缺少文件列表");
         }
-        File root = new File(requireContext().getFilesDir(), PLUGIN_DIR);
+        File root = abiRoot(abi);
+        if (!root.isDirectory() && !root.mkdirs()) {
+            throw new IOException("无法创建插件架构目录");
+        }
         File staging = new File(root, ".staging-" + System.currentTimeMillis());
         deleteRecursively(staging);
         if (!staging.mkdirs()) {
@@ -178,6 +213,7 @@ public final class CjsPluginRuntime {
                 int limit = nativeFile ? MAX_NATIVE_BYTES : MAX_SCRIPT_BYTES;
                 byte[] body = download(item.getString("url"), limit);
                 verifySha256(body, item.getString("sha256"), name);
+                if (nativeFile) verifyNativeAbi(body, abi, name);
                 writeAndSync(new File(staging, name), body);
                 if ("runtime.json".equals(name)) hasScripts = true;
                 if (nativeFile) nativeCount++;
@@ -186,18 +222,20 @@ public final class CjsPluginRuntime {
                 throw new IOException("插件内容不完整");
             }
             writeAndSync(new File(staging, "manifest.payload"), payload);
-            File target = versionDirectory(version);
+            writeAndSync(new File(staging, ABI_MARKER), abi.getBytes("UTF-8"));
+            File target = versionDirectory(version, abi);
             deleteRecursively(target);
             if (!staging.renameTo(target)) {
                 throw new IOException("无法启用新插件");
             }
             if (nativeLibrariesLoaded) {
-                preferences().edit().putString(PREF_PENDING_VERSION, version).commit();
+                preferences().edit().putString(pendingPreference, version).commit();
             } else {
-                preferences().edit().putString(PREF_VERSION, version)
-                        .remove(PREF_PENDING_VERSION).commit();
+                preferences().edit().putString(versionPreference, version)
+                        .remove(pendingPreference).commit();
                 scripts = null;
                 scriptsVersion = null;
+                verifiedInstallationKey = abi + ":" + version;
                 pruneOldVersions(root, version);
             }
             return version;
@@ -231,8 +269,10 @@ public final class CjsPluginRuntime {
     }
 
     private static JSONObject scriptBundle() throws IOException, JSONException {
-        String version = preferences().getString(PREF_VERSION, "");
-        if (scripts != null && version.equals(scriptsVersion)) {
+        String abi = currentAbi();
+        String version = preferences().getString(abiPreference(PREF_VERSION, abi), "");
+        String cacheKey = abi + ":" + version;
+        if (scripts != null && cacheKey.equals(scriptsVersion)) {
             return scripts;
         }
         byte[] data = readFile(new File(activeDirectory(), "runtime.json"), MAX_SCRIPT_BYTES);
@@ -241,21 +281,45 @@ public final class CjsPluginRuntime {
             throw new IOException("JS 插件协议不兼容");
         }
         scripts = root.getJSONObject("scripts");
-        scriptsVersion = version;
+        scriptsVersion = cacheKey;
         return scripts;
     }
 
     private static File activeDirectory() {
-        return versionDirectory(preferences().getString(PREF_VERSION, ""));
+        String abi = currentAbi();
+        return versionDirectory(preferences().getString(
+                abiPreference(PREF_VERSION, abi), ""), abi);
     }
 
-    private static File versionDirectory(String version) {
-        return new File(new File(requireContext().getFilesDir(), PLUGIN_DIR), safeName(version));
+    private static File versionDirectory(String version, String abi) {
+        return new File(abiRoot(abi), safeName(version));
     }
 
     private static String currentAbi() {
-        String abi = Build.CPU_ABI == null ? "" : Build.CPU_ABI.toLowerCase(Locale.US);
-        return abi.contains("arm64") ? "arm64-v8a" : "armeabi-v7a";
+        return BuildConfig.CJS_PLUGIN_ABI;
+    }
+
+    private static File abiRoot(String abi) {
+        return new File(new File(requireContext().getFilesDir(), PLUGIN_DIR), safeName(abi));
+    }
+
+    private static String abiPreference(String prefix, String abi) {
+        return prefix + "_" + abi.replace('-', '_');
+    }
+
+    private static void verifyNativeAbi(byte[] data, String abi, String name)
+            throws IOException {
+        if (data.length < 20 || data[0] != 0x7f || data[1] != 'E'
+                || data[2] != 'L' || data[3] != 'F' || data[5] != 1) {
+            throw new IOException("插件 native 文件无效：" + name);
+        }
+        int expectedClass = "arm64-v8a".equals(abi) ? 2 : 1;
+        int expectedMachine = "arm64-v8a".equals(abi) ? 183 : 40;
+        int elfClass = data[4] & 0xff;
+        int machine = (data[18] & 0xff) | ((data[19] & 0xff) << 8);
+        if (elfClass != expectedClass || machine != expectedMachine) {
+            throw new IOException("插件架构不匹配：" + name + " 需要 " + abi);
+        }
     }
 
     private static byte[] download(String originalUrl, int maxBytes) throws IOException {

@@ -9,10 +9,15 @@ SHA-256 file digest, selects the current ABI, stages all required files in appli
 storage, and switches versions only after the whole set is durable. Failed installs keep the
 previous version.
 
-The plugin is lazy. `CjsPluginRuntime.initialize()` only stores the application context. Cold
-start performs no plugin directory scan, parsing, network access, hashing, or native loading.
+The plugin is lazy. `CjsPluginRuntime.initialize()` stores the application context and compares
+one preference containing the previous APK ABI. Cold start performs no plugin directory scan,
+parsing, network access, hashing, or native loading.
 The active JS bundle and C modules open on first use of a related source. Normal custom streams
 never require the plugin.
+
+Plugin state and files are isolated by the compile-time APK ABI. Switching between the 32-bit
+and 64-bit APKs selects a separate cache and downloads the matching native modules when needed.
+Every downloaded ELF is checked for its class and ARM machine type before activation.
 
 The wire format and compatibility rules are maintained in the cjs repository at
 [`docs/plugin-protocol.md`](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol.md).
