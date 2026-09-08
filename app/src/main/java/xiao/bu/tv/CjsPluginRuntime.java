@@ -9,11 +9,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.*;
 import java.net.*;
-import java.security.*;
-import java.security.spec.X509EncodedKeySpec;
+import java.security.MessageDigest;
 import java.util.*;
 
-/** Online per-site plugins. Network I/O never holds the runtime/cache monitor. */
+/** Online per-site plugins with file integrity checks. Network I/O never holds the runtime monitor. */
 public final class CjsPluginRuntime {
     public static final int HOST_PROTOCOL = 4;
     public static final String DEFAULT_MANIFEST_URL =
@@ -23,15 +22,6 @@ public final class CjsPluginRuntime {
     private static final int MAX_SCRIPT_BYTES = 512 * 1024;
     private static final int MAX_NATIVE_BYTES = 8 * 1024 * 1024;
     private static final int MAX_COMPONENT_CONFIG_BYTES = 2048;
-    private static final String PUBLIC_KEY_DER_BASE64 =
-            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoobFrR8hHh907HkYVIFV"
-            + "TnkCmWuHGSm3Y7staBkIxTcXwV+25GPyfjeFtJMjl7Lxl4TeQIaopn0nzUJzj0t"
-            + "xyojNHfkKK/6a4TzxXu6Av9tNGxjemUXC759w1ew9CPlcQuAjrHxHFIRDzhduq5"
-            + "GV2EJ8daE34W4uMC+ABoki+VVMF/sDb1PFexJb4crcBRoSYNHHQuC9QjvJTrgn"
-            + "UuCUpJrigF6+z8VrykGyqpIywubnWJl2fJlTuacraJJwyIejEdWVKNuaDoxBbtU"
-            + "hY5OVlT2TpR8VMi3bn/aMATETriEiE4mZgWP4pwEF1/YrNoWvRhX5fC71atijrg"
-            + "BgdTEiVQIDAQAB";
-
     private static Context context;
     private static JSONObject catalog;
     private static boolean abiChangedAtStartup;
@@ -90,12 +80,17 @@ public final class CjsPluginRuntime {
     private static File siteRoot(State s) { return new File(new File(root(), s.id), currentAbi()); }
     private static File directory(State s, int version) { return new File(siteRoot(s), String.valueOf(version)); }
 
-    private static JSONObject signed(byte[] bytes) throws Exception {
-        JSONObject envelope = new JSONObject(new String(bytes, "UTF-8"));
-        if (envelope.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容");
-        byte[] payload = Base64.decode(envelope.getString("payload"), Base64.DEFAULT);
-        verifySignature(payload, Base64.decode(envelope.getString("signature"), Base64.DEFAULT));
-        return new JSONObject(new String(payload, "UTF-8"));
+    private static JSONObject readManifest(byte[] bytes) throws Exception {
+        return readManifest(new JSONObject(new String(bytes, "UTF-8")));
+    }
+    private static JSONObject readManifest(JSONObject value) throws Exception {
+        if (value.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容");
+        // Read old cached envelopes during upgrade; newly published manifests are plain JSON.
+        if (value.has("payload")) {
+            value = new JSONObject(new String(Base64.decode(value.getString("payload"), Base64.DEFAULT), "UTF-8"));
+            value.put("protocol", HOST_PROTOCOL);
+        }
+        return value;
     }
     private static synchronized void useCatalog(JSONObject value) throws Exception {
         JSONArray entries = value.getJSONArray("sites");
@@ -129,8 +124,21 @@ public final class CjsPluginRuntime {
     }
     public static synchronized boolean hasCatalog() {
         if (catalog != null) return true;
-        try { useCatalog(signed(readFile(new File(root(), "catalog.json"), MAX_MANIFEST_BYTES))); return true; }
-        catch (Exception ignored) { return false; }
+        try {
+            File cache = new File(root(), "catalog.json");
+            JSONObject stored = new JSONObject(new String(readFile(cache, MAX_MANIFEST_BYTES), "UTF-8"));
+            JSONObject value = readManifest(stored);
+            useCatalog(value);
+            if (stored.has("payload")) {
+                // Convert once without a network request or re-downloading any site artifacts.
+                try {
+                    File temp = new File(root(), "catalog-migration.tmp");
+                    writeAndSync(temp, value.toString().getBytes("UTF-8"));
+                    if (!temp.renameTo(cache)) Log.w(TAG, "Unable to migrate cached catalog");
+                } catch (Exception error) { Log.w(TAG, "Cached catalog migration deferred", error); }
+            }
+            return true;
+        } catch (Exception ignored) { return false; }
     }
     public static void ensureCatalog() throws Exception {
         synchronized (INSTALL_LOCK) {
@@ -181,7 +189,7 @@ public final class CjsPluginRuntime {
     }
     private static void refreshCatalog() throws Exception {
         byte[] bytes = download(cacheBustedUrl(getManifestUrl()), MAX_MANIFEST_BYTES);
-        JSONObject value = signed(bytes);
+        JSONObject value = readManifest(bytes);
         if (!root().isDirectory() && !root().mkdirs()) throw new IOException("无法创建插件目录");
         // Validate before publishing; preserve the previous catalog if validation fails.
         useCatalog(value);
@@ -263,7 +271,7 @@ public final class CjsPluginRuntime {
             int pending = preferences().getInt(pref(s, "pending"), 0);
             if (isInstalled(id) && (version <= active || (version == pending
                     && readRuntime(s, directory(s, pending)) != null))) return String.valueOf(Math.max(active, pending));
-            JSONObject manifest = signed(download(cacheBustedUrl(online(probe.getString("manifest"))), MAX_MANIFEST_BYTES));
+            JSONObject manifest = readManifest(download(cacheBustedUrl(online(probe.getString("manifest"))), MAX_MANIFEST_BYTES));
             if (!id.equals(manifest.optString("id")) || version != manifest.optInt("version"))
                 throw new IOException("站点清单版本或 ID 不匹配");
             JSONArray files = manifest.getJSONArray("files");
@@ -473,15 +481,6 @@ public final class CjsPluginRuntime {
     private static String cacheBustedUrl(String url) {
         String separator = url != null && url.indexOf('?') >= 0 ? "&" : "?";
         return url + separator + "ntv=" + System.currentTimeMillis();
-    }
-
-    private static void verifySignature(byte[] payload, byte[] signed) throws Exception {
-        byte[] der = Base64.decode(PUBLIC_KEY_DER_BASE64, Base64.DEFAULT);
-        PublicKey key = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(der));
-        Signature verifier = Signature.getInstance("SHA256withRSA");
-        verifier.initVerify(key);
-        verifier.update(payload);
-        if (!verifier.verify(signed)) throw new SecurityException("插件签名校验失败");
     }
 
     private static void verifySha256(byte[] data, String expected, String name) throws Exception {

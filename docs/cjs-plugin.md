@@ -1,13 +1,19 @@
 # Website plugins (protocol 4)
 
-The shell uses a signed `catalog.json` to discover independent site releases. It only
+The shell uses a plain JSON `catalog.json` to discover independent site releases. It only
 installs the current channel's site, containing its own `runtime.json` and one native
 library for the APK architecture. Caches, version checks, pending updates and loaded
 libraries are keyed by site + ABI.
 
+Catalogs/manifests no longer use Base64 wrapping or digital signatures. SHA-256 is checked
+once when downloading runtime/SO files; cold startup checks only lightweight metadata and
+ELF architecture. Old cached envelopes are converted locally to plain JSON without any
+network request. Existing scripts, native libraries and ABI/version caches remain usable.
+Older APKs need updating before they can download the new plain manifests.
+
 Channel M3Us also accept online `.cjs` addresses such as
 `https://raw.githubusercontent.com/TvWasm/cjs/main/gxtv.cjs?id=f3335975f9fe11e88bcfe41f13b60c62`.
-Signed catalog `sources` and `playback` metadata select the site and validate its parameters.
+Catalog `sources` and `playback` metadata select the site and validate its parameters.
 `cctv.cjs?id=cctv1` and `cmg.cjs?id=600001859` use the same path. Optional
 `quality=high|medium|low` applies only to that playback. Scripts receive decoded query
 parameters in `item.params`; stored channel URLs remain the original `.cjs` URLs.
@@ -42,7 +48,7 @@ See [full protocol](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol
 
 ## Validation (2026-09-08)
 
-- Signed manifests, artifact hashes and both ELF ABIs passed the CJS verifier.
+- Plain manifests, artifact hashes and both ELF ABIs passed the CJS verifier.
 - ARM32/ARM64 release builds and control-page JavaScript syntax checks passed.
 - Android 4.4.4: first video frames confirmed for Yangshipin, CCTV and Gxtv; sequential
   channel visits downloaded/loaded only the relevant missing website.
