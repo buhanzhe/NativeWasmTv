@@ -2,13 +2,13 @@ package com.bu.cc.tv;
 
 import xiao.bu.tv.CjsPluginRuntime;
 
-/** Generic JNI bridge for a transformer declared by the signed online CJS bundle. */
-public final class NativeCjsTransformer {
+/** JNI bridge owned by the tv.gxtv.cn site plugin. */
+public final class NativeGxtvTransformer {
     static {
-        CjsPluginRuntime.loadNativeLibrary("libcjs_site.so");
+        CjsPluginRuntime.loadNativeLibrary("tv.gxtv.cn");
     }
 
-    private NativeCjsTransformer() {
+    private NativeGxtvTransformer() {
     }
 
     public static byte[] transformTransportStream(byte[] transportStream,

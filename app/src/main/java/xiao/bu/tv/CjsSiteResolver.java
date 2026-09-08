@@ -74,7 +74,7 @@ final class CjsSiteResolver {
         this.root = root;
     }
 
-    void resolve(final int requestId, final String channelName, final String pageUrl,
+    void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
             final Callback callback) {
         cancel();
         final int requestGeneration = generation;
@@ -92,7 +92,7 @@ final class CjsSiteResolver {
                         public void run() {
                             if (requestGeneration == generation && !activity.isFinishing()) {
                                 start(new Pending(requestId, requestGeneration,
-                                        channelName, pageUrl, site, callback));
+                                        channelName, pageUrl, quality, site, callback));
                             }
                         }
                     });
@@ -155,6 +155,19 @@ final class CjsSiteResolver {
     }
 
     private void start(Pending request) {
+        android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
+        String key = cacheKey(request);
+        long now = System.currentTimeMillis();
+        long expires = cache.getLong(key + ":until", 0L);
+        if (expires > now && expires - now <= 600000L) {
+            String saved = cache.getString(key, "");
+            if (saved.length() > 0) {
+                pending = request;
+                Log.i(TAG, "Using site URL cache id=" + request.site.id + " quality=" + request.quality);
+                complete(request, saved);
+                return;
+            }
+        }
         try {
             ensureWebView();
         } catch (IOException error) {
@@ -182,6 +195,7 @@ final class CjsSiteResolver {
         JSONObject item = new JSONObject();
         try {
             item.put("url", request.pageUrl);
+            item.put("quality", CjsPluginRuntime.quality(request.site.id, request.quality, null));
             item.put("name", request.channelName == null ? "" : request.channelName);
         } catch (JSONException ignored) {
         }
@@ -208,6 +222,21 @@ final class CjsSiteResolver {
         try {
             JSONObject value = new JSONObject(json == null ? "{}" : json);
             String url = value.optString("url", "").trim();
+            JSONArray streams = value.optJSONArray("streams");
+            if (streams != null) {
+                if (streams.length() < 1 || streams.length() > 3) throw new IOException("站点最多返回三档清晰度");
+                java.util.HashSet<String> tiers = new java.util.HashSet<String>();
+                String selected = null;
+                for (int i = 0; i < streams.length(); i++) {
+                    JSONObject stream = streams.getJSONObject(i);
+                    String tier = stream.getString("quality"), candidate = stream.getString("url");
+                    if ((!"high".equals(tier) && !"medium".equals(tier) && !"low".equals(tier))
+                            || !tiers.add(tier) || !isOnline(candidate)) throw new IOException("站点清晰度列表无效");
+                    if (i == 0) url = candidate;
+                    if (tier.equals(request.quality)) selected = candidate;
+                }
+                if (selected != null) url = selected;
+            }
             String referer = value.optString("referer", request.pageUrl).trim();
             String transformer = value.optString("transformer", "").trim();
             String[] transformerArgs = stringArray(value.optJSONArray("transformerArgs"));
@@ -221,6 +250,20 @@ final class CjsSiteResolver {
             if (transformer.length() > 0 && (!transformer.equals(request.site.transformer)
                     || transformerArgs.length == 0 || mediaHosts.length == 0)) {
                 throw new IOException("站点插件解密参数不匹配");
+            }
+            if (transformer.length() > 0 && !"gxtv.so".equals(request.site.nativeModule)) {
+                throw new IOException("当前宿主不支持该站点原生接口");
+            }
+            long ttl = Math.min(600L, Math.max(0L, value.optLong("ttlSec", 0)));
+            if (ttl > 0) {
+                android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
+                android.content.SharedPreferences.Editor edit = cache.edit();
+                if (cache.getAll().size() >= 128) edit.clear();
+                // Cache hits don't refresh their own expiry.
+                String key = cacheKey(request);
+                if (cache.getLong(key + ":until", 0) <= System.currentTimeMillis()) {
+                    edit.putString(key, json).putLong(key + ":until", System.currentTimeMillis() + ttl * 1000).apply();
+                }
             }
             final Result result = new Result(url, referer, transformer,
                     transformerArgs, mediaHosts);
@@ -280,6 +323,16 @@ final class CjsSiteResolver {
         }
         webView.destroy();
         webView = null;
+    }
+
+    private static String cacheKey(Pending request) {
+        // Site script digest prevents a new plugin version reusing old resolver output.
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((request.site.id + "\n" + request.site.script
+                    + "\n" + request.pageUrl + "\n" + request.quality).getBytes("UTF-8"));
+            return android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP);
+        } catch (Exception error) { throw new IllegalStateException(error); }
     }
 
     private static boolean isOnline(String url) {
@@ -391,15 +444,17 @@ final class CjsSiteResolver {
         final int generation;
         final String channelName;
         final String pageUrl;
+        final String quality;
         final CjsPluginRuntime.SitePlugin site;
         final Callback callback;
 
-        Pending(int requestId, int generation, String channelName, String pageUrl,
+        Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
                 CjsPluginRuntime.SitePlugin site, Callback callback) {
             this.requestId = requestId;
             this.generation = generation;
             this.channelName = channelName;
             this.pageUrl = pageUrl;
+            this.quality = quality;
             this.site = site;
             this.callback = callback;
         }

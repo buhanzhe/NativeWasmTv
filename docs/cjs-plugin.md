@@ -1,38 +1,45 @@
-# CJS compatibility plugin
+# Website plugins (protocol 4)
 
-NativeWasmTv no longer packages the provider wasm2c sources, provider JavaScript, or their
-native libraries. They are released by [TvWasm/cjs](https://github.com/TvWasm/cjs) and loaded
-through the online-only protocol v3.
+The shell uses a signed `catalog.json` to discover independent site releases. It only
+installs the current channel's site, containing its own `runtime.json` and one native
+library for the APK architecture. Caches, version checks, pending updates and loaded
+libraries are keyed by site + ABI.
 
-The shell accepts a configurable manifest URL. It verifies the RSA-SHA256 envelope and every
-SHA-256 file digest, selects the current ABI, stages all required files in application-private
-storage, and switches versions only after the whole set is durable. Failed installs keep the
-previous version.
+- `sites/tv.cctv.com`: `cctv.so` and CCTV API JS.
+- `sites/yangshipin.cn`: `yangshipin.so` combines signing and CMG; all YSP templates live here.
+- `sites/tv.gxtv.cn`: `gxtv.so` and its API JS; no shared site-transformer SO.
 
-The plugin is lazy. `CjsPluginRuntime.initialize()` stores the application context and compares
-one preference containing the previous APK ABI. Cold start performs no plugin directory scan,
-parsing, network access, hashing, or native loading.
-The active JS bundle and C modules open on first use of a related source. Normal custom streams
-never require the plugin.
+Quality keys are `high`, `medium`, `low`, with one to three advertised choices. The host
+reads provider mappings, caps Yangshipin by channel availability, and picks CCTV master
+playlist renditions. Site JS receives mapped `item.quality` and may return a single URL
+or up to three `streams`. The management UI displays advertised choices only.
 
-Protocol v3 adds signed per-site declarations and the compact `cmg.cjs`, `cctv.cjs`, and
-`gxtv.cjs` version descriptors. After cached playback has rendered its first frame, the host
-checks the matching descriptor once per process. A higher component version downloads the
-complete signed plugin transactionally and activates it on the next safe process start.
+Cached startup doesn't wait for version checks; first video frame schedules a worker.
+Network work never holds the monitor needed by playback/UI. Active script/native versions
+remain pinned until the next process, independently for each website. Failed pending
+validation preserves the active version. Version 3 storage is never loaded by v4.
+On first use in a process, a 20-byte ELF header check rejects a wrong-ABI library.
+An incomplete, unused site cache can be replaced by a fully verified staged download
+of the same version. Files already pinned by this process are never replaced.
 
-`webview://` pages from a declared online host
-are resolved by that site's JS entry, while media decryption stays in its native module. The
-first site is `tv.gxtv.cn`: its JS requests the current channel metadata and the common native
-site module dispatches its xhls transformer to restore both H.264 and AAC PES payloads before
-IJK receives the TS segment. The app host handles signed site declarations generically and
-does not contain the Guangxi algorithm or domain-specific playback code.
+Upgrading from protocol 3 downloads each site once into the new namespace; subsequent
+cached starts use the local site immediately. The protocol 4 catalog requires a v4 host.
 
-The CJS protocol accepts HTTP(S) manifests and files only. It does not load local manifests,
-user-uploaded scripts, external-storage plugins, `file://`, or `content://` sources.
+The old CCTV HTTP implementation has moved to the site's JS. Optional `ttlSec` (max 600)
+keeps resolved URLs in a bounded cache keyed by site, script digest, URL and quality, so
+returning to the channel can skip WebView/API work. No cross-site request prefetch runs.
 
-Plugin state and files are isolated by the compile-time APK ABI. Switching between the 32-bit
-and 64-bit APKs selects a separate cache and downloads the matching native modules when needed.
-Every downloaded ELF is checked for its class and ARM machine type before activation.
+See [full protocol](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol.md).
 
-The wire format and compatibility rules are maintained in the cjs repository at
-[`docs/plugin-protocol.md`](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol.md).
+## Validation (2026-09-08)
+
+- Signed manifests, artifact hashes and both ELF ABIs passed the CJS verifier.
+- ARM32/ARM64 release builds and control-page JavaScript syntax checks passed.
+- Android 4.4.4: first video frames confirmed for Yangshipin, CCTV and Gxtv; sequential
+  channel visits downloaded/loaded only the relevant missing website.
+- CCTV high/medium/low selected 1280x720, 854x480 and 640x360 on the tested live source.
+- Android 7.1.1 ARM64: Yangshipin and CCTV first frames confirmed. Gxtv download and API
+  resolution completed; no first frame was confirmed before a system WebView update
+  terminated the process. This case remains unverified.
+- Additional APK architecture-switch and cache-repair device tests were not completed:
+  automatic approval rejected the covering installation command without a detailed reason.

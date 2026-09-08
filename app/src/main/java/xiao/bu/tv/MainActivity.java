@@ -266,7 +266,6 @@ public final class MainActivity extends Activity {
     private EpgListAdapter epgAdapter;
     private boolean channelPanelInitialized;
     private EpgManager epgManager;
-    private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
     private boolean cjsPluginInstallInProgress;
     private int pendingCjsChannelIndex = -1;
@@ -677,7 +676,6 @@ public final class MainActivity extends Activity {
         refreshFavoriteCatalog();
         requestLocalPlaylistPermissionIfNeeded();
         epgManager = new EpgManager(this);
-        liveUrlResolver = new LiveUrlResolver(getSharedPreferences("live_url_resolver", MODE_PRIVATE));
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
@@ -1405,6 +1403,8 @@ public final class MainActivity extends Activity {
                     .put("uiScaleMode", uiScaleMode)
                     .put("uiScaleFactor", Math.round(effectiveUiScale * 100f) / 100.0d)
                     .put("resolutionMode", resolutionMode)
+                    .put("siteQualities", CjsPluginRuntime.qualityOptions(
+                            cjsComponentForChannel(channel, catalogSource(group, channel))))
                     .put("webViewResolution", webViewResolution)
                     .put("webViewLoadImages", webViewLoadImages)
                     .put("webViewAutoPlaySniffed", webViewAutoPlaySniffed)
@@ -2050,8 +2050,10 @@ public final class MainActivity extends Activity {
         }
         String message = clearWebCache ? "网页缓存已清除" : "设置已保存";
         if (updateCjsPlugin) {
-            String version = CjsPluginRuntime.installOrUpdate();
-            message = "兼容插件 " + version + " 已安装";
+            String siteId = request.optString("cjsSiteId", "");
+            String version = siteId.length() == 0 ? CjsPluginRuntime.installOrUpdate()
+                    : CjsPluginRuntime.installOrUpdate(siteId);
+            message = siteId.length() == 0 ? version : siteId + " v" + version + " 已下载";
         }
         if (request.has("playlistGroupStates")) {
             final ChannelCatalog.Group[] customGroups = playlistManager.updateGroupStates(
@@ -2503,6 +2505,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startChannel(int index) {
+        pendingCjsChannelIndex = -1;
         armCrashRecovery();
         final boolean committedGestureSwitch = channelSwitchAnimating
                 && (channelSwitchDirectionY != 0f || channelSwitchDirectionX != 0f);
@@ -2512,11 +2515,15 @@ public final class MainActivity extends Activity {
         currentChannelIndex = ChannelCatalog.wrapIndex(group.channels, index);
         final Channel channel = group.channels[currentChannelIndex];
         final int source = catalogSource(group, channel);
-        if (requiresCjsPlugin(channel, source) && !CjsPluginRuntime.isInstalled()) {
-            installCjsPluginAndStart(currentChannelIndex, channel.name);
+        if (requiresCjsPlugin(channel, source) && !CjsPluginRuntime.hasCatalog()) {
+            installCjsPluginAndStart(currentChannelIndex, channel.name, "");
             return;
         }
         String cjsComponent = cjsComponentForChannel(channel, source);
+        if (cjsComponent.length() > 0 && !CjsPluginRuntime.isInstalled(cjsComponent)) {
+            installCjsPluginAndStart(currentChannelIndex, channel.name, cjsComponent);
+            return;
+        }
         pendingCjsComponentCheck = CjsPluginRuntime.needsComponentCheck(cjsComponent)
                 ? cjsComponent : "";
         syncPlaybackRecoveryTarget();
@@ -2581,7 +2588,8 @@ public final class MainActivity extends Activity {
         }
         activeEmbeddedYangshipinResolver = extractYangshipinPid(configuredUrl) != null;
         String page = webViewPage(configuredUrl);
-        activeEmbeddedCjsResolver = !activeEmbeddedYangshipinResolver
+        activeEmbeddedCctvResolver = extractCctvWebChannel(configuredUrl) != null;
+        activeEmbeddedCjsResolver = !activeEmbeddedYangshipinResolver && !activeEmbeddedCctvResolver
                 && page != null && CjsPluginRuntime.supportsSite(page);
         activeEmbeddedCctvResolver = !activeEmbeddedYangshipinResolver
                 && !activeEmbeddedCjsResolver
@@ -2617,13 +2625,13 @@ public final class MainActivity extends Activity {
     }
 
     private String cjsComponentForChannel(Channel channel, int source) {
-        if (source == ChannelCatalog.SOURCE_CCTV_WEB) return "cctv";
+        if (source == ChannelCatalog.SOURCE_CCTV_WEB) return "tv.cctv.com";
         if (source == ChannelCatalog.SOURCE_YSP_CCTV
-                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) return "cmg";
+                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) return "yangshipin.cn";
         if (source != ChannelCatalog.SOURCE_CUSTOM || channel == null) return "";
         String url = channel.sourceUrl(currentSourceIndex);
-        if (extractYangshipinPid(url) != null) return "cmg";
-        if (isCctvDirectStream(url) || extractCctvWebChannel(url) != null) return "cctv";
+        if (extractYangshipinPid(url) != null) return "yangshipin.cn";
+        if (isCctvDirectStream(url) || extractCctvWebChannel(url) != null) return "tv.cctv.com";
         if (isWebViewSource(url)) {
             String page = webViewPage(url);
             return page == null ? "" : CjsPluginRuntime.componentForUrl(page);
@@ -2656,6 +2664,10 @@ public final class MainActivity extends Activity {
                             @Override
                             public void run() {
                                 cjsPluginInstallInProgress = false;
+                                if (pendingCjsChannelIndex >= 0) {
+                                    startChannel(currentChannelIndex);
+                                    return;
+                                }
                                 if (updateAvailable) {
                                     showChannelBar(currentChannel().name,
                                             "播放插件已更新，重启后启用");
@@ -2668,7 +2680,7 @@ public final class MainActivity extends Activity {
         }, 250L);
     }
 
-    private void installCjsPluginAndStart(int channelIndex, String channelName) {
+    private void installCjsPluginAndStart(int channelIndex, String channelName, final String siteId) {
         pendingCjsChannelIndex = channelIndex;
         showLoading(channelName, "正在下载播放兼容插件");
         showChannelBar(channelName, "首次使用正在安装兼容插件");
@@ -2682,7 +2694,12 @@ public final class MainActivity extends Activity {
                 String installedVersion = null;
                 Throwable failure = null;
                 try {
-                    installedVersion = CjsPluginRuntime.installOrUpdate();
+                    if (siteId.length() == 0) {
+                        CjsPluginRuntime.ensureCatalog();
+                        installedVersion = "站点目录";
+                    } else {
+                        installedVersion = CjsPluginRuntime.installOrUpdate(siteId);
+                    }
                 } catch (Throwable error) {
                     failure = error;
                     Log.e(TAG, "Unable to install CJS plugin", error);
@@ -2695,6 +2712,7 @@ public final class MainActivity extends Activity {
                         cjsPluginInstallInProgress = false;
                         int requestedIndex = pendingCjsChannelIndex;
                         pendingCjsChannelIndex = -1;
+                        if (requestedIndex < 0) return;
                         if (error != null) {
                             abortChannelSwitchAnimation();
                             hideLoading();
@@ -2704,7 +2722,7 @@ public final class MainActivity extends Activity {
                             return;
                         }
                         Log.i(TAG, "CJS plugin activated version=" + version);
-                        startChannel(requestedIndex < 0 ? currentChannelIndex : requestedIndex);
+                        startChannel(currentChannelIndex);
                     }
                 });
             }
@@ -3193,6 +3211,10 @@ public final class MainActivity extends Activity {
             resolveKu9Source(channel, configuredUrl, requestId);
             return;
         }
+        if (!directCustomSource) {
+            resolveCjsSite(channel, "https://tv.cctv.com/live/" + channel.streamId + "/", requestId);
+            return;
+        }
         updateLoadingStatus(directCustomSource
                 ? customSourceStatus("正在连接") : "正在获取高清线路");
         showChannelBar(channel.name, directCustomSource
@@ -3203,13 +3225,7 @@ public final class MainActivity extends Activity {
                 String streamUrl = configuredUrl;
                 boolean directHttpMedia = directCustomSource
                         && isDirectHttpMediaSource(streamUrl);
-                if (!directCustomSource) {
-                    try {
-                        streamUrl = liveUrlResolver.resolve(channel);
-                    } catch (IOException error) {
-                        Log.w(TAG, "Falling back to static HLS for " + channel.name, error);
-                    }
-                } else if (HttpStreamResolver.shouldResolve(streamUrl)) {
+                if (HttpStreamResolver.shouldResolve(streamUrl)) {
                     try {
                         HttpStreamResolver.Result result = HttpStreamResolver.resolve(streamUrl);
                         streamUrl = result.url;
@@ -3249,34 +3265,8 @@ public final class MainActivity extends Activity {
 
     private void resolveEmbeddedCctvUrl(final Channel playbackChannel,
             final Channel resolverChannel, final int requestId) {
-        updateLoadingStatus("正在获取央视网直播线路");
-        showChannelBar(playbackChannel.name, "正在解析央视网源");
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                String streamUrl = resolverChannel.url;
-                try {
-                    streamUrl = liveUrlResolver.resolve(resolverChannel);
-                } catch (IOException error) {
-                    Log.w(TAG, "Using built-in CCTV fallback for "
-                            + resolverChannel.streamId, error);
-                }
-                final String resolvedUrl = streamUrl;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (requestId != playRequestId) {
-                            return;
-                        }
-                        if (resolvedUrl == null || resolvedUrl.length() == 0) {
-                            switchCustomSource(1, true, "央视网解析失败");
-                            return;
-                        }
-                        startResolvedPlayer(playbackChannel, resolvedUrl);
-                    }
-                });
-            }
-        }, "embedded-cctv-resolve").start();
+        resolveCjsSite(playbackChannel,
+                "https://tv.cctv.com/live/" + resolverChannel.streamId + "/", requestId);
     }
 
     private void startResolvedPlayer(Channel channel, String streamUrl) {
@@ -3314,7 +3304,7 @@ public final class MainActivity extends Activity {
             final int requestId) {
         updateLoadingStatus("正在执行在线站点插件");
         showChannelBar(channel.name, customSourceStatus("正在解析站点视频源"));
-        cjsSiteResolver.resolve(requestId, channel.name, pageUrl,
+        cjsSiteResolver.resolve(requestId, channel.name, pageUrl, resolutionMode,
                 new CjsSiteResolver.Callback() {
                     @Override
                     public void onResolved(int resolvedRequestId, CjsSiteResolver.Result result) {
@@ -3580,7 +3570,6 @@ public final class MainActivity extends Activity {
                 scheduleVideoInfoRefresh();
                 scheduleVideoRenderWatchdog(channel, streamUrl, nextPlayer,
                         sourceRequestId, softwareDecode);
-                prefetchNearbyChannels(channel);
                 if (!isWaitingForIncomingFrame(sourceRequestId)) {
                     hideLoading();
                 }
@@ -4424,39 +4413,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void prefetchNearbyChannels(final Channel playingChannel) {
-        final ChannelCatalog.Group group = currentGroup();
-        if (group.source != ChannelCatalog.SOURCE_CCTV_WEB
-                || group.channels[currentChannelIndex] != playingChannel) {
-            return;
-        }
-        final Channel previous = group.channels[ChannelCatalog.wrapIndex(
-                group.channels, currentChannelIndex - 1)];
-        final Channel next = group.channels[ChannelCatalog.wrapIndex(
-                group.channels, currentChannelIndex + 1)];
-        final int requestId = playRequestId;
-        channelBar.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (requestId != playRequestId) {
-                    return;
-                }
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        prefetchChannel(next);
-                    }
-                }, "channel-url-prefetch-next").start();
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        prefetchChannel(previous);
-                    }
-                }, "channel-url-prefetch-previous").start();
-            }
-        }, CHANNEL_PREFETCH_DELAY_MS);
-    }
-
     private void persistPlayingChannel(Channel channel, int requestId) {
         if (requestId != playRequestId || currentGroupIndex < 0
                 || currentGroupIndex >= ChannelCatalog.GROUPS.length) {
@@ -4546,14 +4502,6 @@ public final class MainActivity extends Activity {
             }
         }
         crashRecoveryBound = false;
-    }
-
-    private void prefetchChannel(Channel channel) {
-        try {
-            liveUrlResolver.resolve(channel);
-        } catch (IOException error) {
-            Log.d(TAG, "Unable to prefetch " + channel.streamId, error);
-        }
     }
 
     private void switchRelative(int offset) {
@@ -5433,14 +5381,8 @@ public final class MainActivity extends Activity {
     }
 
     private String yangshipinDefinition(Channel channel) {
-        if (RESOLUTION_MODE_LOW.equals(resolutionMode)) {
-            return "hd";
-        }
-        if (RESOLUTION_MODE_MEDIUM.equals(resolutionMode)
-                || "shd".equals(channel.yangshipinMaxDefinition)) {
-            return "shd";
-        }
-        return "fhd";
+        return CjsPluginRuntime.quality("yangshipin.cn", resolutionMode,
+                channel.yangshipinMaxDefinition);
     }
 
     private void showLoading(final String channel, final String status) {

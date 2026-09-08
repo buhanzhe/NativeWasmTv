@@ -4,7 +4,7 @@ import xiao.bu.tv.CjsPluginRuntime;
 
 public final class NativeH5eDecryptor {
     static {
-        CjsPluginRuntime.loadNativeLibrary("libcctv_h5e.so");
+        CjsPluginRuntime.loadNativeLibrary("tv.cctv.com");
     }
 
     private NativeH5eDecryptor() {

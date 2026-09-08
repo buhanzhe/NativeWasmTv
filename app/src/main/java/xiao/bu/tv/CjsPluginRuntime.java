@@ -4,49 +4,21 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Base64;
 import android.util.Log;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
-import java.security.KeyFactory;
-import java.security.MessageDigest;
-import java.security.PublicKey;
-import java.security.Signature;
+import java.io.*;
+import java.net.*;
+import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.Locale;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
-/**
- * Generic loader for the separately published C/JS compatibility plugin.
- *
- * Initialization deliberately performs no I/O. The active manifest, JavaScript bundle and
- * native libraries are touched only when a provider needs them or the user requests an update.
- */
+/** Online per-site plugins. Network I/O never holds the runtime/cache monitor. */
 public final class CjsPluginRuntime {
-    public static final int HOST_PROTOCOL = 3;
+    public static final int HOST_PROTOCOL = 4;
     public static final String DEFAULT_MANIFEST_URL =
-            "https://raw.githubusercontent.com/TvWasm/cjs/main/plugin.json";
-
+            "https://raw.githubusercontent.com/TvWasm/cjs/main/catalog.json";
     private static final String TAG = "CjsPlugin";
-    private static final String PREFS = "cjs_plugin";
-    private static final String PREF_URL = "manifest_url";
-    private static final String PREF_VERSION = "active_version";
-    private static final String PREF_PENDING_VERSION = "pending_version";
-    private static final String PREF_LAST_HOST_ABI = "last_host_abi";
-    private static final String PLUGIN_DIR = "cjs-plugin";
-    private static final String ABI_MARKER = "abi.txt";
     private static final int MAX_MANIFEST_BYTES = 256 * 1024;
     private static final int MAX_SCRIPT_BYTES = 512 * 1024;
     private static final int MAX_NATIVE_BYTES = 8 * 1024 * 1024;
@@ -61,419 +33,349 @@ public final class CjsPluginRuntime {
             + "BgdTEiVQIDAQAB";
 
     private static Context context;
-    private static JSONObject scripts;
-    private static JSONObject runtimeBundle;
-    private static String scriptsVersion;
-    private static String verifiedInstallationKey;
-    private static boolean nativeLibrariesLoaded;
+    private static JSONObject catalog;
     private static boolean abiChangedAtStartup;
-    private static final Set<String> checkedComponents = new HashSet<String>();
+    private static final Map<String, State> states = new HashMap<String, State>();
+    private static final Set<String> checked = new HashSet<String>();
+    private static final Object INSTALL_LOCK = new Object();
 
-    private CjsPluginRuntime() {
+    private static final class State {
+        final String id;
+        JSONObject entry;
+        JSONObject runtime;
+        File directory;
+        boolean used;
+        boolean loaded;
+        State(String id, JSONObject entry) { this.id = id; this.entry = entry; }
     }
 
+    private CjsPluginRuntime() { }
     public static void initialize(Context value) {
-        if (context == null && value != null) {
-            context = value.getApplicationContext();
-            String abi = currentAbi();
-            SharedPreferences prefs = preferences();
-            String previousAbi = prefs.getString(PREF_LAST_HOST_ABI, "");
-            abiChangedAtStartup = previousAbi.length() > 0 && !abi.equals(previousAbi);
-            if (!abi.equals(previousAbi)) {
-                prefs.edit().putString(PREF_LAST_HOST_ABI, abi).apply();
-                Log.i(TAG, "Host ABI " + (previousAbi.length() == 0 ? "initialized" : "switched")
-                        + " previous=" + previousAbi + " current=" + abi);
-            }
-        }
+        if (context != null || value == null) return;
+        context = value.getApplicationContext();
+        String abi = currentAbi(), previous = preferences().getString("last_host_abi", "");
+        abiChangedAtStartup = previous.length() > 0 && !abi.equals(previous);
+        if (!abi.equals(previous)) preferences().edit().putString("last_host_abi", abi).apply();
     }
-
     private static Context requireContext() {
-        if (context == null) {
-            throw new IllegalStateException("CJS plugin runtime is not initialized");
-        }
+        if (context == null) throw new IllegalStateException("CJS runtime not initialized");
         return context;
     }
-
     private static SharedPreferences preferences() {
-        return requireContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        return requireContext().getSharedPreferences("cjs_sites_v4", Context.MODE_PRIVATE);
     }
-
     public static String getManifestUrl() {
-        return preferences().getString(PREF_URL, DEFAULT_MANIFEST_URL);
+        return preferences().getString("catalog_url", DEFAULT_MANIFEST_URL);
     }
-
     public static void setManifestUrl(String url) {
-        String value = url == null ? "" : url.trim();
-        if (!value.startsWith("http://") && !value.startsWith("https://")) {
-            throw new IllegalArgumentException("插件地址仅支持 HTTP 或 HTTPS");
-        }
-        preferences().edit().putString(PREF_URL, value).apply();
+        online(url);
+        preferences().edit().putString("catalog_url", url.trim()).apply();
     }
-
-    public static boolean isInstalled() {
-        SharedPreferences prefs = preferences();
-        String abi = currentAbi();
-        String pending = prefs.getString(abiPreference(PREF_PENDING_VERSION, abi), "");
-        if (!nativeLibrariesLoaded && pending.length() > 0
-                && completeDirectory(versionDirectory(pending, abi), abi)) {
-            prefs.edit().putString(abiPreference(PREF_VERSION, abi), pending)
-                    .remove(abiPreference(PREF_PENDING_VERSION, abi)).commit();
-        }
-        String version = prefs.getString(abiPreference(PREF_VERSION, abi), "");
-        if (version.length() == 0) {
-            return false;
-        }
-        String installationKey = abi + ":" + version;
-        if (installationKey.equals(verifiedInstallationKey)) {
-            return true;
-        }
-        boolean complete = completeDirectory(versionDirectory(version, abi), abi);
-        if (complete) verifiedInstallationKey = installationKey;
-        return complete;
-    }
-
-    private static boolean completeDirectory(File directory, String abi) {
-        File marker = new File(directory, ABI_MARKER);
-        if (!new File(directory, "runtime.json").isFile()
-                || !new File(directory, "libcctv_h5e.so").isFile()
-                || !new File(directory, "libcmg_decrypt.so").isFile()
-                || !new File(directory, "libysp_keygen.so").isFile()
-                || !new File(directory, "libcjs_site.so").isFile()) {
-            return false;
-        }
+    private static String online(String url) {
         try {
-            if (!abi.equals(new String(readFile(marker, 64), "UTF-8").trim())) {
-                return false;
+            URI uri = URI.create(url);
+            if (("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
+                    && uri.getHost() != null && uri.getUserInfo() == null) return url;
+        } catch (Exception ignored) { }
+        throw new IllegalArgumentException("插件地址仅支持在线 HTTP/HTTPS");
+    }
+    private static String name(String value) throws IOException {
+        if (value == null || !value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))
+            throw new IOException("插件名称无效");
+        return value;
+    }
+    private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v4"); }
+    private static String currentAbi() { return BuildConfig.CJS_PLUGIN_ABI; }
+    private static String pref(State s, String key) { return s.id + ":" + currentAbi() + ":" + key; }
+    private static File siteRoot(State s) { return new File(new File(root(), s.id), currentAbi()); }
+    private static File directory(State s, int version) { return new File(siteRoot(s), String.valueOf(version)); }
+
+    private static JSONObject signed(byte[] bytes) throws Exception {
+        JSONObject envelope = new JSONObject(new String(bytes, "UTF-8"));
+        if (envelope.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容");
+        byte[] payload = Base64.decode(envelope.getString("payload"), Base64.DEFAULT);
+        verifySignature(payload, Base64.decode(envelope.getString("signature"), Base64.DEFAULT));
+        return new JSONObject(new String(payload, "UTF-8"));
+    }
+    private static synchronized void useCatalog(JSONObject value) throws Exception {
+        JSONArray entries = value.getJSONArray("sites");
+        Set<String> ids = new HashSet<String>();
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject e = entries.getJSONObject(i);
+            String id = name(e.getString("id"));
+            if (!ids.add(id)) throw new IOException("站点 ID 重复");
+            name(e.getString("module"));
+            State existing = states.get(id);
+            if (existing != null && !existing.entry.getString("module").equals(e.getString("module")))
+                throw new IOException("同一站点的原生模块名不可改变");
+            online(e.getString("config"));
+            JSONObject q = e.getJSONObject("qualities");
+            if (q.length() < 1 || q.length() > 3 || !q.has("high")) throw new IOException("清晰度档位无效");
+            Iterator<String> keys = q.keys();
+            while (keys.hasNext()) {
+                String k = keys.next();
+                if (!"high".equals(k) && !"medium".equals(k) && !"low".equals(k))
+                    throw new IOException("清晰度档位无效");
             }
-            JSONObject runtime = new JSONObject(new String(readFile(
-                    new File(directory, "runtime.json"), MAX_SCRIPT_BYTES), "UTF-8"));
-            return runtime.optInt("protocol", 0) == HOST_PROTOCOL;
-        } catch (Exception error) {
-            return false;
+        }
+        catalog = value;
+        // Refresh discovery/config URLs while preserving pinned runtime/native versions.
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject e = entries.getJSONObject(i);
+            String id = e.getString("id");
+            if (!states.containsKey(id)) states.put(id, new State(id, e));
+            else states.get(id).entry = e;
         }
     }
-
-    public static JSONObject statusJson() throws JSONException {
-        boolean installed = isInstalled();
-        String abi = currentAbi();
-        String version = preferences().getString(abiPreference(PREF_VERSION, abi), "");
-        String pending = preferences().getString(abiPreference(PREF_PENDING_VERSION, abi), "");
-        return new JSONObject()
-                .put("installed", installed)
-                .put("version", version)
-                .put("pendingVersion", pending)
-                .put("abi", abi)
-                .put("abiChangedAtStartup", abiChangedAtStartup)
-                .put("manifestUrl", getManifestUrl());
+    public static synchronized boolean hasCatalog() {
+        if (catalog != null) return true;
+        try { useCatalog(signed(readFile(new File(root(), "catalog.json"), MAX_MANIFEST_BYTES))); return true; }
+        catch (Exception ignored) { return false; }
     }
-
-    /** Downloads and activates a complete plugin transactionally. Call from a worker thread. */
-    public static synchronized String installOrUpdate() throws Exception {
-        return installOrUpdateFrom(getManifestUrl());
+    public static void ensureCatalog() throws Exception {
+        synchronized (INSTALL_LOCK) {
+            if (hasCatalog()) return;
+            refreshCatalog();
+        }
     }
-
-    private static synchronized String installOrUpdateFrom(String manifestUrl) throws Exception {
-        JSONObject envelope = new JSONObject(new String(
-                download(cacheBustedUrl(manifestUrl), MAX_MANIFEST_BYTES), "UTF-8"));
-        if (envelope.optInt("protocol", 0) != HOST_PROTOCOL) {
-            throw new IOException("插件清单协议不受支持");
-        }
-        String payloadBase64 = envelope.optString("payload", "");
-        String signatureBase64 = envelope.optString("signature", "");
-        byte[] payload = Base64.decode(payloadBase64, Base64.DEFAULT);
-        verifySignature(payload, Base64.decode(signatureBase64, Base64.DEFAULT));
-        JSONObject manifest = new JSONObject(new String(payload, "UTF-8"));
-        int min = manifest.optInt("minHostProtocol", HOST_PROTOCOL);
-        int max = manifest.optInt("maxHostProtocol", HOST_PROTOCOL);
-        if (HOST_PROTOCOL < min || HOST_PROTOCOL > max) {
-            throw new IOException("插件与当前应用协议不兼容");
-        }
-        String version = safeName(manifest.optString("version", ""));
-        if (version.length() == 0) {
-            throw new IOException("插件版本为空");
-        }
-        String abi = currentAbi();
-        String versionPreference = abiPreference(PREF_VERSION, abi);
-        String pendingPreference = abiPreference(PREF_PENDING_VERSION, abi);
-        String currentVersion = preferences().getString(versionPreference, "");
-        if (version.equals(currentVersion) && isInstalled()) {
-            return version;
-        }
-        JSONArray files = manifest.optJSONArray("files");
-        if (files == null) {
-            throw new IOException("插件清单缺少文件列表");
-        }
-        File root = abiRoot(abi);
-        if (!root.isDirectory() && !root.mkdirs()) {
-            throw new IOException("无法创建插件架构目录");
-        }
-        File staging = new File(root, ".staging-" + System.currentTimeMillis());
-        deleteRecursively(staging);
-        if (!staging.mkdirs()) {
-            throw new IOException("无法创建插件临时目录");
-        }
-        boolean hasScripts = false;
-        int nativeCount = 0;
+    private static void refreshCatalog() throws Exception {
+        byte[] bytes = download(cacheBustedUrl(getManifestUrl()), MAX_MANIFEST_BYTES);
+        JSONObject value = signed(bytes);
+        if (!root().isDirectory() && !root().mkdirs()) throw new IOException("无法创建插件目录");
+        // Validate before publishing; preserve the previous catalog if validation fails.
+        useCatalog(value);
+        File temp = new File(root(), "catalog.tmp");
+        writeAndSync(temp, bytes);
+        if (!temp.renameTo(new File(root(), "catalog.json"))) throw new IOException("无法保存站点目录");
+    }
+    private static synchronized State state(String id) throws IOException {
+        if (!hasCatalog() || !states.containsKey(id)) throw new IOException("站点插件未配置：" + id);
+        return states.get(id);
+    }
+    private static JSONObject readRuntime(State s, File dir) throws Exception {
+        File library = new File(dir, s.entry.getString("module") + ".so");
+        if (!library.isFile()) return null;
+        byte[] header = new byte[20];
+        DataInputStream input = new DataInputStream(new FileInputStream(library));
+        try { input.readFully(header); } finally { input.close(); }
+        verifyNativeAbi(header, currentAbi(), library.getName());
+        if (!currentAbi().equals(new String(readFile(new File(dir, "abi.txt"), 64), "UTF-8"))) return null;
+        JSONObject result = new JSONObject(new String(readFile(new File(dir, "runtime.json"), MAX_SCRIPT_BYTES), "UTF-8"));
+        return result.optInt("protocol") == HOST_PROTOCOL && s.id.equals(result.optString("id")) ? result : null;
+    }
+    public static synchronized boolean isInstalled(String id) {
         try {
-            for (int index = 0; index < files.length(); index++) {
-                JSONObject item = files.getJSONObject(index);
-                String itemAbi = item.optString("abi", "all");
-                if (!"all".equals(itemAbi) && !abi.equals(itemAbi)) {
-                    continue;
+            State s = state(id);
+            if (s.runtime != null) return true;
+            int pending = preferences().getInt(pref(s, "pending"), 0);
+            int active = preferences().getInt(pref(s, "active"), 0);
+            if (!s.used && pending > active) {
+                JSONObject next = null;
+                try { next = readRuntime(s, directory(s, pending)); }
+                catch (Exception error) { Log.w(TAG, "Pending site incomplete; retaining active " + id, error); }
+                if (next != null) {
+                    active = pending;
+                    preferences().edit().putInt(pref(s, "active"), active).remove(pref(s, "pending")).commit();
                 }
-                String name = safeName(item.getString("name"));
-                if (name.length() == 0 || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
-                    throw new IOException("插件文件名无效");
-                }
-                boolean nativeFile = name.endsWith(".so");
-                int limit = nativeFile ? MAX_NATIVE_BYTES : MAX_SCRIPT_BYTES;
-                byte[] body = download(item.getString("url"), limit);
-                verifySha256(body, item.getString("sha256"), name);
-                if (nativeFile) verifyNativeAbi(body, abi, name);
-                writeAndSync(new File(staging, name), body);
-                if ("runtime.json".equals(name)) hasScripts = true;
-                if (nativeFile) nativeCount++;
             }
-            if (!hasScripts || nativeCount != 4) {
-                throw new IOException("插件内容不完整");
-            }
-            writeAndSync(new File(staging, "manifest.payload"), payload);
-            writeAndSync(new File(staging, ABI_MARKER), abi.getBytes("UTF-8"));
-            File target = versionDirectory(version, abi);
-            deleteRecursively(target);
-            if (!staging.renameTo(target)) {
-                throw new IOException("无法启用新插件");
-            }
-            if (nativeLibrariesLoaded) {
-                preferences().edit().putString(pendingPreference, version).commit();
-            } else {
-                preferences().edit().putString(versionPreference, version)
-                        .remove(pendingPreference).commit();
-                scripts = null;
-                runtimeBundle = null;
-                scriptsVersion = null;
-                verifiedInstallationKey = abi + ":" + version;
-                pruneOldVersions(root, version);
-            }
-            checkedComponents.clear();
-            return version;
-        } finally {
-            deleteRecursively(staging);
+            if (active <= 0) return false;
+            s.directory = directory(s, active);
+            s.runtime = readRuntime(s, s.directory);
+            return s.runtime != null;
+        } catch (Exception ignored) { return false; }
+    }
+    public static synchronized boolean isNativeLoaded(String id) {
+        State s = states.get(id); return s != null && s.loaded;
+    }
+    public static synchronized JSONObject statusJson() throws JSONException {
+        JSONArray items = new JSONArray();
+        if (hasCatalog()) for (State s : states.values()) {
+            items.put(new JSONObject().put("id", s.id).put("installed", isInstalled(s.id))
+                    .put("version", preferences().getInt(pref(s, "active"), 0))
+                    .put("pendingVersion", preferences().getInt(pref(s, "pending"), 0))
+                    .put("qualities", s.entry.optJSONObject("qualities")));
+        }
+        return new JSONObject().put("installed", hasCatalog()).put("version", "按站点管理")
+                .put("pendingVersion", "").put("sites", items).put("abi", currentAbi())
+                .put("abiChangedAtStartup", abiChangedAtStartup).put("manifestUrl", getManifestUrl());
+    }
+    /** Manual update affects only sites already installed on this ABI. */
+    public static String installOrUpdate() throws Exception {
+        synchronized (INSTALL_LOCK) {
+            refreshCatalog();
+            List<String> ids;
+            synchronized (CjsPluginRuntime.class) { ids = new ArrayList<String>(states.keySet()); }
+            int count = 0;
+            for (String id : ids) if (isInstalled(id)) { installOrUpdate(id); count++; }
+            return "已检查 " + count + " 个站点";
         }
     }
-
-    public static synchronized void loadNativeLibrary(String fileName) {
-        if (!isInstalled()) {
-            throw new UnsatisfiedLinkError("CJS plugin is not installed");
+    public static String installOrUpdate(String id) throws Exception {
+        synchronized (INSTALL_LOCK) {
+            ensureCatalog();
+            State s = state(id);
+            JSONObject probe = new JSONObject(new String(download(cacheBustedUrl(
+                    online(s.entry.getString("config"))), MAX_COMPONENT_CONFIG_BYTES), "UTF-8"));
+            if (!id.equals(probe.optString("id")) || probe.optInt("v") < 1) throw new IOException("站点配置无效");
+            int version = probe.getInt("v");
+            int active = preferences().getInt(pref(s, "active"), 0);
+            int pending = preferences().getInt(pref(s, "pending"), 0);
+            if (isInstalled(id) && (version <= active || (version == pending
+                    && readRuntime(s, directory(s, pending)) != null))) return String.valueOf(Math.max(active, pending));
+            JSONObject manifest = signed(download(cacheBustedUrl(online(probe.getString("manifest"))), MAX_MANIFEST_BYTES));
+            if (!id.equals(manifest.optString("id")) || version != manifest.optInt("version"))
+                throw new IOException("站点清单版本或 ID 不匹配");
+            JSONArray files = manifest.getJSONArray("files");
+            File siteRoot = siteRoot(s);
+            if (!siteRoot.isDirectory() && !siteRoot.mkdirs()) throw new IOException("无法创建站点目录");
+            File staging = new File(siteRoot, ".staging-" + System.nanoTime());
+            if (!staging.mkdirs()) throw new IOException("无法创建暂存目录");
+            try {
+                Set<String> downloaded = new HashSet<String>();
+                String module = s.entry.getString("module") + ".so";
+                for (int i = 0; i < files.length(); i++) {
+                    JSONObject f = files.getJSONObject(i);
+                    String abi = f.getString("abi");
+                    if (!"all".equals(abi) && !currentAbi().equals(abi)) continue;
+                    String filename = name(f.getString("name"));
+                    if ((!"runtime.json".equals(filename) && !module.equals(filename)) || !downloaded.add(filename))
+                        throw new IOException("站点文件声明无效");
+                    byte[] data = download(online(f.getString("url")), filename.endsWith(".so") ? MAX_NATIVE_BYTES : MAX_SCRIPT_BYTES);
+                    verifySha256(data, f.getString("sha256"), filename);
+                    if (filename.endsWith(".so")) verifyNativeAbi(data, currentAbi(), filename);
+                    writeAndSync(new File(staging, filename), data);
+                }
+                if (downloaded.size() != 2) throw new IOException("站点插件不完整");
+                writeAndSync(new File(staging, "abi.txt"), currentAbi().getBytes("UTF-8"));
+                JSONObject next = readRuntime(s, staging);
+                if (next == null || next.optInt("version") != version) throw new IOException("站点脚本版本无效");
+                File target = directory(s, version);
+                File replaced = null;
+                synchronized (CjsPluginRuntime.class) {
+                    // Repair an incomplete disk cache, but never replace files pinned by this process.
+                    if (target.exists()) {
+                        if (s.used && target.equals(s.directory))
+                            throw new IOException("站点版本正在使用，请重启后修复");
+                        replaced = new File(siteRoot, ".replaced-" + System.nanoTime());
+                        if (!target.renameTo(replaced)) throw new IOException("无法隔离旧站点缓存");
+                    }
+                    if (!staging.renameTo(target)) {
+                        if (replaced != null && !replaced.renameTo(target))
+                            Log.w(TAG, "Unable to restore incomplete cache " + target);
+                        throw new IOException("无法启用站点插件");
+                    }
+                    if (s.used) preferences().edit().putInt(pref(s, "pending"), version).commit();
+                    else {
+                        preferences().edit().putInt(pref(s, "active"), version).remove(pref(s, "pending")).commit();
+                        s.runtime = next; s.directory = target;
+                    }
+                }
+                deleteRecursively(replaced);
+                Log.i(TAG, "Site installed id=" + id + " version=" + version + " abi=" + currentAbi() + " pending=" + s.used);
+                return String.valueOf(version);
+            } finally { deleteRecursively(staging); }
         }
-        File file = new File(activeDirectory(), safeName(fileName));
-        if (!file.isFile()) {
-            throw new UnsatisfiedLinkError("CJS native module is missing: " + fileName);
-        }
-        System.load(file.getAbsolutePath());
-        nativeLibrariesLoaded = true;
     }
-
-    public static synchronized String script(String name, Map<String, String> values)
-            throws IOException, JSONException {
-        JSONObject bundle = scriptBundle();
-        String result = bundle.getString(name);
-        if (values != null) {
-            for (Map.Entry<String, String> entry : values.entrySet()) {
-                result = result.replace("{{" + entry.getKey() + "}}", entry.getValue());
+    public static synchronized void loadNativeLibrary(String id) {
+        if (!isInstalled(id)) throw new UnsatisfiedLinkError("站点插件未安装：" + id);
+        try {
+            State s = state(id);
+            if (!s.loaded) {
+                System.load(new File(s.directory, s.entry.getString("module") + ".so").getAbsolutePath());
+                s.used = true; s.loaded = true;
+                Log.i(TAG, "Site native loaded id=" + id);
             }
+        } catch (Exception e) { throw new UnsatisfiedLinkError(e.toString()); }
+    }
+    public static synchronized String script(String id, String name, Map<String,String> values) throws IOException, JSONException {
+        if (!isInstalled(id)) throw new IOException("站点脚本未安装：" + id);
+        State s = state(id); s.used = true;
+        String result = s.runtime.getJSONObject("scripts").getString(name);
+        if (values != null) for (Map.Entry<String,String> e : values.entrySet()) result = result.replace("{{" + e.getKey() + "}}", e.getValue());
+        return result;
+    }
+    static synchronized String componentForUrl(String pageUrl) {
+        if (!hasCatalog() || pageUrl == null) return "";
+        try {
+            String host = URI.create(pageUrl).getHost();
+            if (host == null) return "";
+            for (State s : states.values()) if (matchesHost(host, s.entry.optJSONArray("hosts"))) return s.id;
+        } catch (Exception ignored) { }
+        return "";
+    }
+    static synchronized SitePlugin siteForUrl(String pageUrl) throws IOException, JSONException {
+        String id = componentForUrl(pageUrl);
+        if (id.length() == 0 || !isInstalled(id)) return null;
+        State s = state(id);
+        String entry = s.runtime.optString("entry");
+        if (entry.length() == 0) return null;
+        return new SitePlugin(id, script(id, entry, null), s.entry.getString("module") + ".so",
+                s.runtime.optString("transformer"), s.runtime.optString("engine"));
+    }
+    static boolean supportsSite(String pageUrl) {
+        try { return siteForUrl(pageUrl) != null; } catch (Exception ignored) { return false; }
+    }
+    static synchronized JSONArray qualityOptions(String id) {
+        JSONArray result = new JSONArray();
+        try {
+            State s = state(id);
+            JSONObject q = (isInstalled(id) ? s.runtime : s.entry).getJSONObject("qualities");
+            for (String k : new String[] {"high", "medium", "low"}) if (q.has(k)) result.put(k);
+        } catch (Exception ignored) {
+            result.put("high").put("medium").put("low");
         }
         return result;
     }
-
-    /** Finds a signed site entry for an online HTTP(S) page. */
-    static synchronized SitePlugin siteForUrl(String pageUrl) throws IOException, JSONException {
-        if (pageUrl == null || (!pageUrl.startsWith("http://")
-                && !pageUrl.startsWith("https://"))) {
-            return null;
-        }
-        String host;
+    static synchronized String quality(String id, String requested, String ceiling) {
+        String selected = "low".equals(requested) ? "low" : "medium".equals(requested) ? "medium" : "high";
         try {
-            host = URI.create(pageUrl).getHost();
-        } catch (RuntimeException error) {
-            return null;
-        }
-        if (host == null || host.length() == 0) {
-            return null;
-        }
-        JSONArray sites = runtime().optJSONArray("sites");
-        if (sites == null) {
-            return null;
-        }
-        for (int index = 0; index < sites.length(); index++) {
-            JSONObject site = sites.optJSONObject(index);
-            if (site == null || !matchesHost(host, site.optJSONArray("hosts"))) {
-                continue;
+            State s = state(id);
+            JSONObject q = (isInstalled(id) ? s.runtime : s.entry).getJSONObject("qualities");
+            String[] order = {"low", "medium", "high"};
+            String value = q.optString(selected, q.getString("high"));
+            // Channel metadata may impose a lower maximum, expressed in provider values.
+            if (ceiling != null) {
+                int cap = -1, chosen = -1;
+                for (int i = 0; i < order.length; i++) {
+                    if (ceiling.equals(q.optString(order[i]))) cap = i;
+                    if (value.equals(q.optString(order[i]))) chosen = i;
+                }
+                if (cap >= 0 && chosen > cap) value = ceiling;
             }
-            String entry = site.optString("entry", "");
-            String nativeModule = safeName(site.optString("nativeModule", ""));
-            String transformer = site.optString("transformer", "");
-            if (entry.length() == 0 || nativeModule.length() == 0
-                    || transformer.length() == 0) {
-                throw new IOException("站点插件声明不完整");
-            }
-            if (!"libcjs_site.so".equals(nativeModule)) {
-                throw new IOException("站点插件使用了宿主不支持的原生模块");
-            }
-            String source = scriptBundle().optString(entry, "");
-            if (source.length() == 0) {
-                throw new IOException("站点插件缺少 JS 入口");
-            }
-            return new SitePlugin(site.optString("id", host),
-                    safeName(site.optString("component", "")), source,
-                    nativeModule, transformer);
-        }
-        return null;
+            return value;
+        } catch (Exception e) { return selected; }
     }
-
-    static synchronized boolean supportsSite(String pageUrl) {
-        if (!isInstalled()) {
-            return false;
-        }
-        try {
-            return siteForUrl(pageUrl) != null;
-        } catch (Exception error) {
-            Log.w(TAG, "Unable to inspect installed site plugin", error);
-            return false;
-        }
+    static synchronized boolean needsComponentCheck(String id) {
+        return id != null && id.length() > 0 && isInstalled(id) && !checked.contains(id);
     }
-
-    static synchronized String componentForUrl(String pageUrl) {
-        if (!isInstalled()) return "";
-        try {
-            SitePlugin site = siteForUrl(pageUrl);
-            return site == null ? "" : site.component;
-        } catch (Exception error) {
-            Log.w(TAG, "Unable to find site component", error);
-            return "";
+    static synchronized void componentCheckFailed(String id) { checked.remove(id); }
+    static boolean ensureComponentCurrent(String id) throws Exception {
+        synchronized (CjsPluginRuntime.class) {
+            if (!needsComponentCheck(id)) return false;
+            checked.add(id);
         }
+        State s = state(id);
+        int previous = preferences().getInt(pref(s, "active"), 0);
+        int pending = preferences().getInt(pref(s, "pending"), 0);
+        int version = Integer.parseInt(installOrUpdate(id));
+        Log.i(TAG, "Site checked id=" + id + " local=" + previous + " remote=" + version);
+        return version > Math.max(previous, pending);
     }
-
-    static synchronized boolean needsComponentCheck(String component) {
-        String id = safeName(component);
-        return isInstalled() && id.length() > 0 && !checkedComponents.contains(id);
-    }
-
-    static synchronized void componentCheckFailed(String component) {
-        checkedComponents.remove(safeName(component));
-    }
-
-    /** Checks a tiny online descriptor once per component and process. */
-    static synchronized boolean ensureComponentCurrent(String component) throws Exception {
-        String id = safeName(component);
-        if (id.length() == 0 || !isInstalled() || checkedComponents.contains(id)) {
-            return false;
-        }
-        checkedComponents.add(id);
-        JSONObject components = runtime().optJSONObject("components");
-        JSONObject local = components == null ? null : components.optJSONObject(id);
-        if (local == null) {
-            Log.w(TAG, "No component descriptor for " + id);
-            return false;
-        }
-        int localVersion = local.optInt("version", 0);
-        String configUrl = local.optString("config", "");
-        if (!configUrl.startsWith("https://") && !configUrl.startsWith("http://")) {
-            throw new IOException("组件配置地址无效");
-        }
-        JSONObject remote = new JSONObject(new String(download(
-                cacheBustedUrl(configUrl), MAX_COMPONENT_CONFIG_BYTES), "UTF-8"));
-        if (!id.equals(safeName(remote.optString("id", "")))) {
-            throw new IOException("组件配置 ID 不匹配");
-        }
-        int remoteVersion = remote.optInt("v", 0);
-        Log.i(TAG, "Component checked id=" + id + " local=" + localVersion
-                + " remote=" + remoteVersion);
-        if (remoteVersion <= localVersion) return false;
-        String manifest = remote.optString("manifest", "");
-        if (!manifest.startsWith("https://") && !manifest.startsWith("http://")) {
-            throw new IOException("组件更新地址无效");
-        }
-        String version = installOrUpdateFrom(manifest);
-        Log.i(TAG, "Component update activated id=" + id + " plugin=" + version);
-        return true;
-    }
-
-    private static boolean matchesHost(String actual, JSONArray configured) {
-        if (configured == null) {
-            return false;
-        }
-        String host = actual.toLowerCase(Locale.US);
-        for (int index = 0; index < configured.length(); index++) {
-            String value = configured.optString(index, "").toLowerCase(Locale.US);
-            if (value.length() > 0 && (host.equals(value) || host.endsWith("." + value))) {
-                return true;
-            }
+    private static boolean matchesHost(String host, JSONArray hosts) {
+        if (hosts == null) return false;
+        host = host.toLowerCase(Locale.US);
+        for (int i = 0; i < hosts.length(); i++) {
+            String h = hosts.optString(i).toLowerCase(Locale.US);
+            if (h.length() > 0 && (host.equals(h) || host.endsWith("." + h))) return true;
         }
         return false;
     }
-
-    private static JSONObject scriptBundle() throws IOException, JSONException {
-        return runtime().getJSONObject("scripts");
-    }
-
-    private static JSONObject runtime() throws IOException, JSONException {
-        String abi = currentAbi();
-        String version = preferences().getString(abiPreference(PREF_VERSION, abi), "");
-        String cacheKey = abi + ":" + version;
-        if (runtimeBundle != null && cacheKey.equals(scriptsVersion)) {
-            return runtimeBundle;
-        }
-        byte[] data = readFile(new File(activeDirectory(), "runtime.json"), MAX_SCRIPT_BYTES);
-        JSONObject root = new JSONObject(new String(data, "UTF-8"));
-        if (root.optInt("protocol", 0) != HOST_PROTOCOL) {
-            throw new IOException("JS 插件协议不兼容");
-        }
-        runtimeBundle = root;
-        scripts = root.getJSONObject("scripts");
-        scriptsVersion = cacheKey;
-        return root;
-    }
-
     static final class SitePlugin {
-        final String id;
-        final String component;
-        final String script;
-        final String nativeModule;
-        final String transformer;
-
-        SitePlugin(String id, String component, String script,
-                String nativeModule, String transformer) {
-            this.id = id;
-            this.component = component;
-            this.script = script;
-            this.nativeModule = nativeModule;
-            this.transformer = transformer;
+        final String id, component, script, nativeModule, transformer, engine;
+        SitePlugin(String id, String script, String module, String transformer, String engine) {
+            this.id=id; this.component=id; this.script=script; this.nativeModule=module; this.transformer=transformer; this.engine=engine;
         }
     }
-
-    private static File activeDirectory() {
-        String abi = currentAbi();
-        return versionDirectory(preferences().getString(
-                abiPreference(PREF_VERSION, abi), ""), abi);
-    }
-
-    private static File versionDirectory(String version, String abi) {
-        return new File(abiRoot(abi), safeName(version));
-    }
-
-    private static String currentAbi() {
-        return BuildConfig.CJS_PLUGIN_ABI;
-    }
-
-    private static File abiRoot(String abi) {
-        return new File(new File(requireContext().getFilesDir(), PLUGIN_DIR), safeName(abi));
-    }
-
-    private static String abiPreference(String prefix, String abi) {
-        return prefix + "_" + abi.replace('-', '_');
-    }
-
     private static void verifyNativeAbi(byte[] data, String abi, String name)
             throws IOException {
         if (data.length < 20 || data[0] != 0x7f || data[1] != 'E'

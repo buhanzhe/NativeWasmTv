@@ -268,7 +268,7 @@ final class YangshipinWebResolver {
 
     private static String pluginScript(String name, Map<String, String> values) {
         try {
-            return CjsPluginRuntime.script(name, values);
+            return CjsPluginRuntime.script("yangshipin.cn", name, values);
         } catch (Exception error) {
             throw new IllegalStateException("CJS script is unavailable: " + name, error);
         }

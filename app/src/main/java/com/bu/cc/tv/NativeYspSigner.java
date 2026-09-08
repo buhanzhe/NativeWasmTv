@@ -4,7 +4,7 @@ import xiao.bu.tv.CjsPluginRuntime;
 
 public final class NativeYspSigner {
     static {
-        CjsPluginRuntime.loadNativeLibrary("libysp_keygen.so");
+        CjsPluginRuntime.loadNativeLibrary("yangshipin.cn");
     }
 
     private NativeYspSigner() {

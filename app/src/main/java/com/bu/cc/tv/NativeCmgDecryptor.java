@@ -4,7 +4,7 @@ import xiao.bu.tv.CjsPluginRuntime;
 
 public final class NativeCmgDecryptor {
     static {
-        CjsPluginRuntime.loadNativeLibrary("libcmg_decrypt.so");
+        CjsPluginRuntime.loadNativeLibrary("yangshipin.cn");
     }
 
     private NativeCmgDecryptor() {

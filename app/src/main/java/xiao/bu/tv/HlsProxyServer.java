@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import com.bu.cc.tv.NativeCmgDecryptor;
-import com.bu.cc.tv.NativeCjsTransformer;
+import com.bu.cc.tv.NativeGxtvTransformer;
 import com.bu.cc.tv.NativeH5eDecryptor;
 
 import android.os.SystemClock;
@@ -128,6 +128,7 @@ final class HlsProxyServer implements Closeable {
     private final int cctvStartupDecryptSegments;
     private final boolean configuredVariantQualityEnabled;
     private final String variantQualityMode;
+    private final boolean spsCompatibilityMode;
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
     private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
@@ -247,9 +248,7 @@ final class HlsProxyServer implements Closeable {
         this.configuredVariantQualityEnabled = configuredVariantQualityEnabled;
         this.variantQualityMode = sanitizeVariantQualityMode(variantQualityMode);
         h264SpsCompatibilityMode = spsCompatibilityMode;
-        if (CjsPluginRuntime.isInstalled()) {
-            NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
-        }
+        this.spsCompatibilityMode = spsCompatibilityMode;
         cmgSegmentCacheLimit = lowResourceDevice ? 2 : CMG_SEGMENT_CACHE_LIMIT;
         cctvSegmentCacheLimit = lowResourceDevice
                 ? CCTV_LOW_RAM_SEGMENT_CACHE_LIMIT : CCTV_SEGMENT_CACHE_LIMIT;
@@ -372,7 +371,7 @@ final class HlsProxyServer implements Closeable {
 
     static void resetCmgSessionForChannelSwitch() {
         synchronized (CMG_DECRYPT_LOCK) {
-            if (CjsPluginRuntime.isInstalled()) {
+            if (CjsPluginRuntime.isNativeLoaded("yangshipin.cn")) {
                 NativeCmgDecryptor.resetRuntimeForProbe();
             }
             cmgSessionWarmed = false;
@@ -996,7 +995,7 @@ final class HlsProxyServer implements Closeable {
     private byte[] transformCjsSegment(String originUrl) throws IOException {
         byte[] encrypted = downloadRaw(originUrl);
         long started = SystemClock.elapsedRealtime();
-        byte[] transformed = NativeCjsTransformer.transformTransportStream(
+        byte[] transformed = NativeGxtvTransformer.transformTransportStream(
                 encrypted, cjsTransformer, cjsTransformerArgs);
         if (transformed == null) {
             throw new IOException("CJS native transformer rejected transport stream");
@@ -1628,7 +1627,7 @@ final class HlsProxyServer implements Closeable {
                         try {
                             task.run();
                         } finally {
-                            if (CjsPluginRuntime.isInstalled()) {
+                            if (CjsPluginRuntime.isNativeLoaded("tv.cctv.com")) {
                                 NativeH5eDecryptor.releaseThreadContext();
                             }
                         }
@@ -1719,6 +1718,7 @@ final class HlsProxyServer implements Closeable {
             Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND);
         } catch (RuntimeException ignored) {
         }
+        NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
         byte[] decrypted = NativeH5eDecryptor.decryptTransportStream(body);
         if (decrypted == null && running) {
             /* A wasm trap invalidates only this worker's thread-local runtime.
@@ -2715,7 +2715,7 @@ final class HlsProxyServer implements Closeable {
                 + " upstreamBytes=" + upstreamDownloadedBytes.get());
         running = false;
         monitoredCctvPlaylistUrl = null;
-        if (CjsPluginRuntime.isInstalled()) {
+        if (CjsPluginRuntime.isNativeLoaded("tv.cctv.com")) {
             NativeH5eDecryptor.cancelPendingDecrypts();
         }
         List<FutureTask<byte[]>> pendingCctvTasks;
