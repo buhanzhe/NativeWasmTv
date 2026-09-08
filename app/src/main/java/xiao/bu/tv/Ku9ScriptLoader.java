@@ -118,6 +118,10 @@ final class Ku9ScriptLoader {
     }
 
     String load(String sourceUrl) throws IOException {
+        return load(sourceUrl, true);
+    }
+
+    String load(String sourceUrl, boolean legacySyntax) throws IOException {
         URI uri;
         try {
             uri = URI.create(sourceUrl);
@@ -146,7 +150,7 @@ final class Ku9ScriptLoader {
                     ? loadOnlineCache(scriptUrl)
                     : Ku9HttpClient.getText(scriptUrl, null, MAX_SCRIPT_BYTES);
         }
-        return HNYX_SCRIPT.equalsIgnoreCase(fileName) ? toLegacySyntax(script) : script;
+        return legacySyntax && HNYX_SCRIPT.equalsIgnoreCase(fileName) ? toLegacySyntax(script) : script;
     }
 
     private String readLocal(String fileName) throws IOException {
