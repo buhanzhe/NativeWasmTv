@@ -80,8 +80,7 @@ final class HttpStreamResolver {
     private static Result resolveInternal(String value) throws IOException {
         String current = value;
         for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
-            HttpURLConnection connection = (HttpURLConnection) URI.create(current)
-                    .toURL().openConnection();
+            HttpURLConnection connection = NetworkClient.open(URI.create(current).toURL());
             connection.setConnectTimeout(7000);
             connection.setReadTimeout(7000);
             connection.setInstanceFollowRedirects(false);

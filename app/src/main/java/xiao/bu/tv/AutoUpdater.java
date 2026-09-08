@@ -366,7 +366,7 @@ final class AutoUpdater {
     }
 
     private static HttpURLConnection openConnection(String url) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(url));
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(true);

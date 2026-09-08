@@ -120,7 +120,7 @@ final class LiveUrlResolver {
                 + "&hbss=" + timestamp;
 
         HttpURLConnection connection =
-                (HttpURLConnection) URI.create(url).toURL().openConnection();
+                NetworkClient.open(URI.create(url).toURL());
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(8000);
         connection.setInstanceFollowRedirects(true);

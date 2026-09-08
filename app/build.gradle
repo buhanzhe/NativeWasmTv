@@ -127,6 +127,9 @@ android {
 
 dependencies {
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
+    // 3.12.x is the final OkHttp branch that supports Android 4.4 and Java 7.
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+    implementation 'com.squareup.okhttp3:okhttp-urlconnection:3.12.13'
 }
 
 task generateVersionFile {

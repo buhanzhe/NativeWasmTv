@@ -24,7 +24,9 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Locale;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Generic loader for the separately published C/JS compatibility plugin.
@@ -33,7 +35,7 @@ import java.util.Map;
  * native libraries are touched only when a provider needs them or the user requests an update.
  */
 public final class CjsPluginRuntime {
-    public static final int HOST_PROTOCOL = 2;
+    public static final int HOST_PROTOCOL = 3;
     public static final String DEFAULT_MANIFEST_URL =
             "https://raw.githubusercontent.com/TvWasm/cjs/main/plugin.json";
 
@@ -48,6 +50,7 @@ public final class CjsPluginRuntime {
     private static final int MAX_MANIFEST_BYTES = 256 * 1024;
     private static final int MAX_SCRIPT_BYTES = 512 * 1024;
     private static final int MAX_NATIVE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_COMPONENT_CONFIG_BYTES = 2048;
     private static final String PUBLIC_KEY_DER_BASE64 =
             "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoobFrR8hHh907HkYVIFV"
             + "TnkCmWuHGSm3Y7staBkIxTcXwV+25GPyfjeFtJMjl7Lxl4TeQIaopn0nzUJzj0t"
@@ -64,6 +67,7 @@ public final class CjsPluginRuntime {
     private static String verifiedInstallationKey;
     private static boolean nativeLibrariesLoaded;
     private static boolean abiChangedAtStartup;
+    private static final Set<String> checkedComponents = new HashSet<String>();
 
     private CjsPluginRuntime() {
     }
@@ -138,8 +142,13 @@ public final class CjsPluginRuntime {
             return false;
         }
         try {
-            return abi.equals(new String(readFile(marker, 64), "UTF-8").trim());
-        } catch (IOException error) {
+            if (!abi.equals(new String(readFile(marker, 64), "UTF-8").trim())) {
+                return false;
+            }
+            JSONObject runtime = new JSONObject(new String(readFile(
+                    new File(directory, "runtime.json"), MAX_SCRIPT_BYTES), "UTF-8"));
+            return runtime.optInt("protocol", 0) == HOST_PROTOCOL;
+        } catch (Exception error) {
             return false;
         }
     }
@@ -160,8 +169,12 @@ public final class CjsPluginRuntime {
 
     /** Downloads and activates a complete plugin transactionally. Call from a worker thread. */
     public static synchronized String installOrUpdate() throws Exception {
+        return installOrUpdateFrom(getManifestUrl());
+    }
+
+    private static synchronized String installOrUpdateFrom(String manifestUrl) throws Exception {
         JSONObject envelope = new JSONObject(new String(
-                download(cacheBustedManifestUrl(getManifestUrl()), MAX_MANIFEST_BYTES), "UTF-8"));
+                download(cacheBustedUrl(manifestUrl), MAX_MANIFEST_BYTES), "UTF-8"));
         if (envelope.optInt("protocol", 0) != HOST_PROTOCOL) {
             throw new IOException("插件清单协议不受支持");
         }
@@ -242,6 +255,7 @@ public final class CjsPluginRuntime {
                 verifiedInstallationKey = abi + ":" + version;
                 pruneOldVersions(root, version);
             }
+            checkedComponents.clear();
             return version;
         } finally {
             deleteRecursively(staging);
@@ -310,7 +324,8 @@ public final class CjsPluginRuntime {
             if (source.length() == 0) {
                 throw new IOException("站点插件缺少 JS 入口");
             }
-            return new SitePlugin(site.optString("id", host), source,
+            return new SitePlugin(site.optString("id", host),
+                    safeName(site.optString("component", "")), source,
                     nativeModule, transformer);
         }
         return null;
@@ -326,6 +341,62 @@ public final class CjsPluginRuntime {
             Log.w(TAG, "Unable to inspect installed site plugin", error);
             return false;
         }
+    }
+
+    static synchronized String componentForUrl(String pageUrl) {
+        if (!isInstalled()) return "";
+        try {
+            SitePlugin site = siteForUrl(pageUrl);
+            return site == null ? "" : site.component;
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to find site component", error);
+            return "";
+        }
+    }
+
+    static synchronized boolean needsComponentCheck(String component) {
+        String id = safeName(component);
+        return isInstalled() && id.length() > 0 && !checkedComponents.contains(id);
+    }
+
+    static synchronized void componentCheckFailed(String component) {
+        checkedComponents.remove(safeName(component));
+    }
+
+    /** Checks a tiny online descriptor once per component and process. */
+    static synchronized boolean ensureComponentCurrent(String component) throws Exception {
+        String id = safeName(component);
+        if (id.length() == 0 || !isInstalled() || checkedComponents.contains(id)) {
+            return false;
+        }
+        checkedComponents.add(id);
+        JSONObject components = runtime().optJSONObject("components");
+        JSONObject local = components == null ? null : components.optJSONObject(id);
+        if (local == null) {
+            Log.w(TAG, "No component descriptor for " + id);
+            return false;
+        }
+        int localVersion = local.optInt("version", 0);
+        String configUrl = local.optString("config", "");
+        if (!configUrl.startsWith("https://") && !configUrl.startsWith("http://")) {
+            throw new IOException("组件配置地址无效");
+        }
+        JSONObject remote = new JSONObject(new String(download(
+                cacheBustedUrl(configUrl), MAX_COMPONENT_CONFIG_BYTES), "UTF-8"));
+        if (!id.equals(safeName(remote.optString("id", "")))) {
+            throw new IOException("组件配置 ID 不匹配");
+        }
+        int remoteVersion = remote.optInt("v", 0);
+        Log.i(TAG, "Component checked id=" + id + " local=" + localVersion
+                + " remote=" + remoteVersion);
+        if (remoteVersion <= localVersion) return false;
+        String manifest = remote.optString("manifest", "");
+        if (!manifest.startsWith("https://") && !manifest.startsWith("http://")) {
+            throw new IOException("组件更新地址无效");
+        }
+        String version = installOrUpdateFrom(manifest);
+        Log.i(TAG, "Component update activated id=" + id + " plugin=" + version);
+        return true;
     }
 
     private static boolean matchesHost(String actual, JSONArray configured) {
@@ -366,12 +437,15 @@ public final class CjsPluginRuntime {
 
     static final class SitePlugin {
         final String id;
+        final String component;
         final String script;
         final String nativeModule;
         final String transformer;
 
-        SitePlugin(String id, String script, String nativeModule, String transformer) {
+        SitePlugin(String id, String component, String script,
+                String nativeModule, String transformer) {
             this.id = id;
+            this.component = component;
             this.script = script;
             this.nativeModule = nativeModule;
             this.transformer = transformer;
@@ -420,7 +494,7 @@ public final class CjsPluginRuntime {
         if (url.contains("github.com/") || url.contains("raw.githubusercontent.com/")) {
             url = GithubProxy.apply(url);
         }
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(url));
         connection.setConnectTimeout(10000);
         connection.setReadTimeout(20000);
         connection.setInstanceFollowRedirects(true);
@@ -453,7 +527,7 @@ public final class CjsPluginRuntime {
         }
     }
 
-    private static String cacheBustedManifestUrl(String url) {
+    private static String cacheBustedUrl(String url) {
         String separator = url != null && url.indexOf('?') >= 0 ? "&" : "?";
         return url + separator + "ntv=" + System.currentTimeMillis();
     }

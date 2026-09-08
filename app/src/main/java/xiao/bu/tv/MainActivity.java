@@ -270,6 +270,7 @@ public final class MainActivity extends Activity {
     private YangshipinWebResolver yangshipinResolver;
     private boolean cjsPluginInstallInProgress;
     private int pendingCjsChannelIndex = -1;
+    private String pendingCjsComponentCheck = "";
     private Ku9ScriptResolver ku9ScriptResolver;
     private CjsSiteResolver cjsSiteResolver;
     private DirectVideoView videoView;
@@ -523,6 +524,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         // Context assignment only: no plugin file access, parsing, hashing, network or dlopen.
+        NetworkClient.initialize(this);
         CjsPluginRuntime.initialize(this);
         CrashReporter.install(this);
         showCrashRecoveryNotice();
@@ -1276,8 +1278,8 @@ public final class MainActivity extends Activity {
         } else {
             throw new IOException("网页资源不存在");
         }
-        HttpURLConnection connection = (HttpURLConnection) new URL(
-                GithubProxy.apply(sourceUrl)).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(
+                GithubProxy.apply(sourceUrl)));
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(18000);
         connection.setInstanceFollowRedirects(true);
@@ -1392,6 +1394,7 @@ public final class MainActivity extends Activity {
             root.put("settings", new JSONObject()
                     .put("reverseKeys", reverseUpDown)
                     .put("autoStart", autoStart)
+                    .put("dnsMode", NetworkClient.getDnsMode())
                     .put("decodeMode", decodeMode)
                     .put("hardwareDecoder", hardwareDecoder)
                     .put("hardwareDecoders", availableHardwareDecodersJson())
@@ -1720,6 +1723,15 @@ public final class MainActivity extends Activity {
             CjsPluginRuntime.setManifestUrl(request.optString("cjsPluginManifestUrl", ""));
         }
         final boolean updateCjsPlugin = request.optBoolean("updateCjsPlugin", false);
+        if (request.has("dnsMode")) {
+            String rawDns = request.optString("dnsMode", NetworkClient.DEFAULT_DNS);
+            String requestedDns = NetworkClient.sanitizeDnsMode(rawDns);
+            if (!requestedDns.equals(rawDns)) {
+                throw new JSONException("不支持的 DNS 配置");
+            }
+            restartPlayback |= !requestedDns.equals(NetworkClient.getDnsMode());
+            NetworkClient.setDnsMode(requestedDns);
+        }
         if (request.has("reverseKeys")) {
             reverseUpDown = request.optBoolean("reverseKeys", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
@@ -2504,6 +2516,9 @@ public final class MainActivity extends Activity {
             installCjsPluginAndStart(currentChannelIndex, channel.name);
             return;
         }
+        String cjsComponent = cjsComponentForChannel(channel, source);
+        pendingCjsComponentCheck = CjsPluginRuntime.needsComponentCheck(cjsComponent)
+                ? cjsComponent : "";
         syncPlaybackRecoveryTarget();
         saveLastChannelSnapshot(group, channel);
         configureEmbeddedResolverMode(group, channel);
@@ -2599,6 +2614,58 @@ public final class MainActivity extends Activity {
             }
         }
         return false;
+    }
+
+    private String cjsComponentForChannel(Channel channel, int source) {
+        if (source == ChannelCatalog.SOURCE_CCTV_WEB) return "cctv";
+        if (source == ChannelCatalog.SOURCE_YSP_CCTV
+                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) return "cmg";
+        if (source != ChannelCatalog.SOURCE_CUSTOM || channel == null) return "";
+        String url = channel.sourceUrl(currentSourceIndex);
+        if (extractYangshipinPid(url) != null) return "cmg";
+        if (isCctvDirectStream(url) || extractCctvWebChannel(url) != null) return "cctv";
+        if (isWebViewSource(url)) {
+            String page = webViewPage(url);
+            return page == null ? "" : CjsPluginRuntime.componentForUrl(page);
+        }
+        return "";
+    }
+
+    private void scheduleCjsComponentCheck(final String component) {
+        // Let cached scripts/native code start playback first. The descriptor is tiny, but
+        // even a DNS timeout must not lengthen the cold-start path on an Android 4.4 TV.
+        root.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (cjsPluginInstallInProgress
+                        || !CjsPluginRuntime.needsComponentCheck(component)) return;
+                cjsPluginInstallInProgress = true;
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        boolean updated = false;
+                        try {
+                            updated = CjsPluginRuntime.ensureComponentCurrent(component);
+                        } catch (Throwable error) {
+                            // A version probe must never make a cached plugin unavailable.
+                            CjsPluginRuntime.componentCheckFailed(component);
+                            Log.w(TAG, "Component update check failed: " + component, error);
+                        }
+                        final boolean updateAvailable = updated;
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                cjsPluginInstallInProgress = false;
+                                if (updateAvailable) {
+                                    showChannelBar(currentChannel().name,
+                                            "播放插件已更新，重启后启用");
+                                }
+                            }
+                        });
+                    }
+                }, "cjs-component-check").start();
+            }
+        }, 250L);
     }
 
     private void installCjsPluginAndStart(int channelIndex, String channelName) {
@@ -3537,6 +3604,9 @@ public final class MainActivity extends Activity {
                     Log.i(TAG, "First video frame rendered decoder="
                             + (softwareDecode ? "software" : "hardware")
                             + " channel=" + channel.name);
+                    String component = pendingCjsComponentCheck;
+                    pendingCjsComponentCheck = "";
+                    if (component.length() > 0) scheduleCjsComponentCheck(component);
                 } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
                     buffering = true;
                     bufferingStartedAt = SystemClock.elapsedRealtime();

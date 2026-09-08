@@ -2,7 +2,7 @@
 
 NativeWasmTv no longer packages the provider wasm2c sources, provider JavaScript, or their
 native libraries. They are released by [TvWasm/cjs](https://github.com/TvWasm/cjs) and loaded
-through the online-only protocol v2.
+through the online-only protocol v3.
 
 The shell accepts a configurable manifest URL. It verifies the RSA-SHA256 envelope and every
 SHA-256 file digest, selects the current ABI, stages all required files in application-private
@@ -15,7 +15,12 @@ parsing, network access, hashing, or native loading.
 The active JS bundle and C modules open on first use of a related source. Normal custom streams
 never require the plugin.
 
-Protocol v2 adds signed per-site declarations. `webview://` pages from a declared online host
+Protocol v3 adds signed per-site declarations and the compact `cmg.cjs`, `cctv.cjs`, and
+`gxtv.cjs` version descriptors. After cached playback has rendered its first frame, the host
+checks the matching descriptor once per process. A higher component version downloads the
+complete signed plugin transactionally and activates it on the next safe process start.
+
+`webview://` pages from a declared online host
 are resolved by that site's JS entry, while media decryption stays in its native module. The
 first site is `tv.gxtv.cn`: its JS requests the current channel metadata and the common native
 site module dispatches its xhls transformer to restore both H.264 and AAC PES payloads before

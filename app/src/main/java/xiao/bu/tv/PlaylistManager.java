@@ -715,7 +715,7 @@ final class PlaylistManager {
     private byte[] download(String sourceUrl, String cookie, String referer,
             int challengeCount) throws IOException {
         URL url = new URL(sourceUrl);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        HttpURLConnection connection = NetworkClient.open(url);
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(PLAYLIST_READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(true);

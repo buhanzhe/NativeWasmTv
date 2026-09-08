@@ -214,7 +214,7 @@ final class EpgManager {
         if (!"http".equalsIgnoreCase(protocol) && !"https".equalsIgnoreCase(protocol)) {
             throw new IOException("节目单地址仅支持 HTTP 或 HTTPS");
         }
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        HttpURLConnection connection = NetworkClient.open(url);
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(25000);
         connection.setInstanceFollowRedirects(true);

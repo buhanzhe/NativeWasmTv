@@ -558,7 +558,7 @@ final class HlsProxyServer implements Closeable {
             return new ProxyResponse("video/MP2T", transformCjsSegment(originUrl));
         }
 
-        HttpURLConnection connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+        HttpURLConnection connection = NetworkClient.open(URI.create(originUrl).toURL());
         connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(needsH5eDecrypt(originUrl)
                 ? 10000 : UPSTREAM_READ_TIMEOUT_MS);
@@ -666,7 +666,7 @@ final class HlsProxyServer implements Closeable {
             boolean responseStarted = false;
             boolean responseCompleted = false;
             try {
-                connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+                connection = NetworkClient.open(URI.create(originUrl).toURL());
                 connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
                 connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
                 connection.setInstanceFollowRedirects(true);
@@ -1011,7 +1011,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean consumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(originUrl).toURL());
             connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(UPSTREAM_READ_TIMEOUT_MS);
             connection.setInstanceFollowRedirects(true);
@@ -1455,7 +1455,7 @@ final class HlsProxyServer implements Closeable {
         }
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) URI.create(playlistUrl).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(playlistUrl).toURL());
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
             connection.setInstanceFollowRedirects(true);
@@ -1771,7 +1771,7 @@ final class HlsProxyServer implements Closeable {
 
     private byte[] downloadCctvSegmentOnce(String originUrl, int attempt) throws IOException {
         HttpURLConnection connection =
-                (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
+                NetworkClient.open(URI.create(originUrl).toURL());
         connection.setConnectTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(needsH5eDecrypt(originUrl)
                 ? CCTV_SEGMENT_READ_TIMEOUT_MS : 10000);
@@ -1958,7 +1958,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(url).toURL());
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);
@@ -1998,7 +1998,7 @@ final class HlsProxyServer implements Closeable {
     private Resolution probeTransportStreamResolution(String url) throws IOException {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(url).toURL());
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);
@@ -2189,7 +2189,7 @@ final class HlsProxyServer implements Closeable {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(segmentUrl).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(segmentUrl).toURL());
             connection.setConnectTimeout(3000);
             connection.setReadTimeout(5000);
             connection.setInstanceFollowRedirects(true);

@@ -834,7 +834,7 @@ final class YangshipinWebResolver {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(url).toURL());
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(8000);
             connection.setInstanceFollowRedirects(true);
@@ -858,7 +858,7 @@ final class YangshipinWebResolver {
         HttpURLConnection connection = null;
         boolean responseConsumed = false;
         try {
-            connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            connection = NetworkClient.open(URI.create(url).toURL());
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(8000);
             connection.setInstanceFollowRedirects(true);

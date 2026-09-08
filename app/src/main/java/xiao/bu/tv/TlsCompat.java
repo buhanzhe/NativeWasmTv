@@ -24,6 +24,9 @@ import javax.net.ssl.X509TrustManager;
 final class TlsCompat {
     private static final String TAG = "TlsCompat";
     private static boolean installed;
+    private static SSLSocketFactory installedSocketFactory;
+    private static X509TrustManager installedTrustManager;
+    private static HostnameVerifier installedHostnameVerifier;
 
     private TlsCompat() {
     }
@@ -41,24 +44,42 @@ final class TlsCompat {
 
         try {
             SSLContext context = SSLContext.getInstance("TLS");
-            context.init(null, new TrustManager[] {new TrustAllManager()}, new SecureRandom());
+            installedTrustManager = new TrustAllManager();
+            context.init(null, new TrustManager[] {installedTrustManager}, new SecureRandom());
             SSLSocketFactory socketFactory = context.getSocketFactory();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN
                     && Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                 socketFactory = new ModernTlsSocketFactory(socketFactory);
             }
-            HttpsURLConnection.setDefaultSSLSocketFactory(socketFactory);
-            HttpsURLConnection.setDefaultHostnameVerifier(new HostnameVerifier() {
+            installedSocketFactory = socketFactory;
+            installedHostnameVerifier = new HostnameVerifier() {
                 @Override
                 public boolean verify(String hostname, SSLSession session) {
                     return true;
                 }
-            });
+            };
+            HttpsURLConnection.setDefaultSSLSocketFactory(installedSocketFactory);
+            HttpsURLConnection.setDefaultHostnameVerifier(installedHostnameVerifier);
             Log.w(TAG, "HTTPS certificate and hostname verification disabled for Android "
                     + Build.VERSION.RELEASE);
         } catch (Exception error) {
             Log.e(TAG, "Unable to install trust-all HTTPS compatibility", error);
         }
+    }
+
+    static synchronized SSLSocketFactory socketFactory() {
+        install();
+        return installedSocketFactory;
+    }
+
+    static synchronized X509TrustManager trustManager() {
+        install();
+        return installedTrustManager;
+    }
+
+    static synchronized HostnameVerifier hostnameVerifier() {
+        install();
+        return installedHostnameVerifier;
     }
 
     private static final class TrustAllManager implements X509TrustManager {

@@ -855,7 +855,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private byte[] downloadAndPatchJavascript(String resourceUrl) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(resourceUrl).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(resourceUrl));
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(20000);
         connection.setInstanceFollowRedirects(true);

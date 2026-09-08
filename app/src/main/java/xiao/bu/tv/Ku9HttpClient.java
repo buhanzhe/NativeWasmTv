@@ -118,8 +118,7 @@ final class Ku9HttpClient {
 
     private static HttpURLConnection open(String url, String method, JSONObject headers,
             boolean followRedirects) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) URI.create(url).toURL()
-                .openConnection();
+        HttpURLConnection connection = NetworkClient.open(URI.create(url).toURL());
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(followRedirects);
