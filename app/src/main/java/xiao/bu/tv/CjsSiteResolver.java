@@ -75,6 +75,7 @@ final class CjsSiteResolver {
     }
 
     void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
+            final String sourceUrl,
             final Callback callback) {
         cancel();
         final int requestGeneration = generation;
@@ -92,7 +93,7 @@ final class CjsSiteResolver {
                         public void run() {
                             if (requestGeneration == generation && !activity.isFinishing()) {
                                 start(new Pending(requestId, requestGeneration,
-                                        channelName, pageUrl, quality, site, callback));
+                                        channelName, pageUrl, quality, sourceUrl, site, callback));
                             }
                         }
                     });
@@ -197,7 +198,10 @@ final class CjsSiteResolver {
             item.put("url", request.pageUrl);
             item.put("quality", CjsPluginRuntime.quality(request.site.id, request.quality, null));
             item.put("name", request.channelName == null ? "" : request.channelName);
-        } catch (JSONException ignored) {
+            CjsSource source = CjsSource.parse(request.sourceUrl);
+            item.put("source", request.sourceUrl);
+            item.put("params", source == null ? new JSONObject() : new JSONObject(source.parameters));
+        } catch (Exception ignored) {
         }
         return "(function(){'use strict';"
                 + "function json(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
@@ -330,7 +334,7 @@ final class CjsSiteResolver {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest((request.site.id + "\n" + request.site.script
-                    + "\n" + request.pageUrl + "\n" + request.quality).getBytes("UTF-8"));
+                    + "\n" + request.pageUrl + "\n" + request.quality + "\n" + request.sourceUrl).getBytes("UTF-8"));
             return android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP);
         } catch (Exception error) { throw new IllegalStateException(error); }
     }
@@ -445,16 +449,19 @@ final class CjsSiteResolver {
         final String channelName;
         final String pageUrl;
         final String quality;
+        final String sourceUrl;
         final CjsPluginRuntime.SitePlugin site;
         final Callback callback;
 
         Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
+                String sourceUrl,
                 CjsPluginRuntime.SitePlugin site, Callback callback) {
             this.requestId = requestId;
             this.generation = generation;
             this.channelName = channelName;
             this.pageUrl = pageUrl;
             this.quality = quality;
+            this.sourceUrl = sourceUrl;
             this.site = site;
             this.callback = callback;
         }

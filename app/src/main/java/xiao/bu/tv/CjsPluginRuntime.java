@@ -138,6 +138,47 @@ public final class CjsPluginRuntime {
             refreshCatalog();
         }
     }
+    private static synchronized State sourceState(CjsSource source) {
+        if (source == null || !hasCatalog()) return null;
+        String url = GithubProxy.unwrap(source.descriptorUrl);
+        for (State s : states.values()) {
+            if (url.equals(s.entry.optString("config"))) return s;
+            JSONArray sources = s.entry.optJSONArray("sources");
+            if (sources != null) for (int i = 0; i < sources.length(); i++)
+                if (url.equals(sources.optString(i))) return s;
+        }
+        return null;
+    }
+    static synchronized boolean knowsSource(CjsSource source) {
+        State s = sourceState(source);
+        return s != null && s.entry.has("playback");
+    }
+    static void prepareSource(String url) throws Exception {
+        CjsSource source = CjsSource.parse(url);
+        if (source == null) throw new IOException("不是 CJS 频道地址");
+        synchronized (INSTALL_LOCK) {
+            boolean cached = hasCatalog();
+            ensureCatalog();
+            if (!knowsSource(source) && cached) refreshCatalog();
+            playbackUrl(url); // Validate parameters before retrying playback.
+        }
+    }
+    static synchronized String playbackUrl(String url) throws Exception {
+        CjsSource source = CjsSource.parse(url);
+        if (source == null) return url;
+        State s = sourceState(source);
+        if (s == null || !s.entry.has("playback"))
+            throw new IOException("插件目录未登记此 CJS 频道入口，请检查目录配置");
+        JSONObject playback = s.entry.getJSONObject("playback");
+        JSONObject declared = playback.getJSONObject("parameters");
+        Map<String, String> rules = new LinkedHashMap<String, String>();
+        Iterator<String> keys = declared.keys();
+        while (keys.hasNext()) { String key = keys.next(); rules.put(key, declared.getString(key)); }
+        String page = online(source.page(playback.getString("page"), rules));
+        if (!matchesHost(URI.create(page).getHost(), s.entry.optJSONArray("hosts")))
+            throw new IOException("CJS 频道页面与站点不匹配");
+        return "webview://" + page;
+    }
     private static void refreshCatalog() throws Exception {
         byte[] bytes = download(cacheBustedUrl(getManifestUrl()), MAX_MANIFEST_BYTES);
         JSONObject value = signed(bytes);

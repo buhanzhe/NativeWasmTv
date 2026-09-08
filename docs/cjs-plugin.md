@@ -5,6 +5,15 @@ installs the current channel's site, containing its own `runtime.json` and one n
 library for the APK architecture. Caches, version checks, pending updates and loaded
 libraries are keyed by site + ABI.
 
+Channel M3Us also accept online `.cjs` addresses such as
+`https://raw.githubusercontent.com/TvWasm/cjs/main/gxtv.cjs?id=f3335975f9fe11e88bcfe41f13b60c62`.
+Signed catalog `sources` and `playback` metadata select the site and validate its parameters.
+`cctv.cjs?id=cctv1` and `cmg.cjs?id=600001859` use the same path. Optional
+`quality=high|medium|low` applies only to that playback. Scripts receive decoded query
+parameters in `item.params`; stored channel URLs remain the original `.cjs` URLs.
+Legacy page URLs remain supported. Earlier protocol 4 APKs need updating to recognize
+these direct `.cjs` channel entries; site scripts and native library versions are unchanged.
+
 - `sites/tv.cctv.com`: `cctv.so` and CCTV API JS.
 - `sites/yangshipin.cn`: `yangshipin.so` combines signing and CMG; all YSP templates live here.
 - `sites/tv.gxtv.cn`: `gxtv.so` and its API JS; no shared site-transformer SO.
