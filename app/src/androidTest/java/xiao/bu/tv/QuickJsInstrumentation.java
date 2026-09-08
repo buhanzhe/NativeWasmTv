@@ -8,10 +8,12 @@ import java.io.IOException;
 public final class QuickJsInstrumentation extends Instrumentation {
     private boolean testTls;
     private boolean testGithub;
+    private boolean testKu9Sources;
     @Override public void onCreate(Bundle args) {
         super.onCreate(args);
         testTls = args != null && "true".equals(args.getString("tls"));
         testGithub = args != null && "true".equals(args.getString("github"));
+        testKu9Sources = args != null && "true".equals(args.getString("ku9sources"));
         start();
     }
 
@@ -32,6 +34,11 @@ public final class QuickJsInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle results = new Bundle();
         try {
+            if (testKu9Sources) {
+                results.putString("stream", Ku9SourceSmokeTest.run(getTargetContext()));
+                finish(-1, results);
+                return;
+            }
             String contractResult = Ku9CjsContractTest.run(getTargetContext());
             if (testGithub) {
                 results.putString("stream", LegacyTlsTest.githubDownload(getTargetContext()));

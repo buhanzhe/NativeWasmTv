@@ -40,6 +40,13 @@ final class Ku9CjsContractTest {
     static String run(Context context) throws Exception {
         String script = "function main(item){"
                 + "function ok(v){if(!v)throw Error('Ku9 contract assertion');}"
+                + "ok(atob(' Y Q==\\n')==='a');ok(atob('YWI')==='ab');ok(btoa('abc')==='YWJj');"
+                + "var binary='';for(var i=0;i<256;i++)binary+=String.fromCharCode(i);"
+                + "ok(atob(btoa(binary))===binary);ok(btoa('')==='');ok(atob('')==='');"
+                + "var failed=false;try{atob('a');}catch(e){failed=true;}ok(failed);"
+                + "failed=false;try{atob('AA=');}catch(e){failed=true;}ok(failed);"
+                + "failed=false;try{btoa('中文');}catch(e){failed=true;}ok(failed);"
+                + "console.log('Ku9',123);console.warn('warning');"
                 + "ok(cjs===ku9);ok(ku9.getQuery(item.url,'id')==='中文 +');"
                 + "ok(ku9.getQuery(item.url,'missing')==='');"
                 + "ok(ku9.get('https://example.test/',{Accept:'test'})==='get body');"

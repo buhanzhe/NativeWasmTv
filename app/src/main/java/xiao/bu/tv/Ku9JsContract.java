@@ -19,8 +19,32 @@ final class Ku9JsContract {
                 + "getCache:function(k){return " + bridge + ".getCache(String(k));},"
                 + "setCache:function(k,v,t){" + bridge + ".setCache(String(k),String(v),Number(t)||0);},"
                 + "md5:function(v){return " + bridge + ".md5(String(v));},"
-                + "log:function(v){" + bridge + ".log(String(v));}};";
+                + "log:function(v){" + bridge + ".log(String(v));}};"
+                + BROWSER_GLOBALS;
     }
+
+    // Ku9 scripts commonly use these browser globals even when all I/O uses ku9.*.
+    // Preserve WebView implementations; QuickJS only receives the missing functions.
+    private static final String BROWSER_GLOBALS =
+            "(function(){var alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';"
+            + "if(typeof window.atob!=='function')window.atob=function(value){"
+            + "var s=String(value).replace(/[\\t\\n\\f\\r ]/g,'');"
+            + "if(s.length%4===0)s=s.replace(/==?$/,'');"
+            + "if(s.length%4===1||/[^A-Za-z0-9+/]/.test(s))throw new Error('Invalid base64');"
+            + "var out='',bits=0,buffer=0;for(var i=0;i<s.length;i++){"
+            + "buffer=(buffer<<6)|alphabet.indexOf(s.charAt(i));bits+=6;"
+            + "if(bits>=8){bits-=8;out+=String.fromCharCode((buffer>>bits)&255);}}return out;};"
+            + "if(typeof window.btoa!=='function')window.btoa=function(value){"
+            + "var s=String(value),out='',bits=0,buffer=0;for(var i=0;i<s.length;i++){"
+            + "var c=s.charCodeAt(i);if(c>255)throw new Error('Invalid binary string');"
+            + "buffer=(buffer<<8)|c;bits+=8;while(bits>=6){bits-=6;out+=alphabet.charAt((buffer>>bits)&63);}}"
+            + "if(bits)out+=alphabet.charAt((buffer<<(6-bits))&63);while(out.length%4)out+='=';return out;};"
+            + "if(!window.console)window.console={};"
+            + "var names=['log','info','warn','error','debug'];"
+            + "for(var n=0;n<names.length;n++)if(typeof window.console[names[n]]!=='function')"
+            + "window.console[names[n]]=(function(level){return function(){var a=[];"
+            + "for(var j=0;j<arguments.length;j++)a.push(String(arguments[j]));"
+            + "ku9.log('['+level+'] '+a.join(' '));};})(names[n]);})();";
 
     static final class Output {
         final JSONObject fields;
