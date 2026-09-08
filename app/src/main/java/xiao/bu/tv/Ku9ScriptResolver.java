@@ -15,10 +15,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.json.JSONTokener;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -222,18 +220,7 @@ final class Ku9ScriptResolver {
         } catch (JSONException ignored) {
         }
         return "(function(){'use strict';"
-                + "function parseJson(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
-                + "function headerJson(v){return typeof v==='string'?v:JSON.stringify(v||{});}"
-                + "window.ku9={"
-                + "get:function(u,h){return NtvKu9Bridge.get(String(u),headerJson(h));},"
-                + "post:function(u,b,h){return NtvKu9Bridge.post(String(u),String(b||''),headerJson(h));},"
-                + "request:function(u,m,h,b,f){return parseJson(NtvKu9Bridge.request(String(u),String(m||'GET'),headerJson(h),String(b||''),f!==false),{});},"
-                + "getQuery:function(u,n){try{var q=String(u).split('?')[1]||'',a=q.split('&');for(var i=0;i<a.length;i++){var p=a[i].split('=');if(decodeURIComponent(p[0]||'')===String(n))return decodeURIComponent((p.slice(1).join('=')||'').replace(/\\+/g,' '));}}catch(e){}return '';},"
-                + "getCache:function(k){return NtvKu9Bridge.getCache(String(k));},"
-                + "setCache:function(k,v,t){NtvKu9Bridge.setCache(String(k),String(v),Number(t)||0);},"
-                + "md5:function(v){return NtvKu9Bridge.md5(String(v));},"
-                + "log:function(v){NtvKu9Bridge.log(String(v));}"
-                + "};"
+                + Ku9JsContract.bootstrap("NtvKu9Bridge")
                 + ES5_COMPAT
                 + "function done(v){try{if(v===undefined||v===null)v={};"
                 + "NtvKu9Bridge.complete(JSON.stringify(v));}catch(e){fail(e);}}"
@@ -247,29 +234,9 @@ final class Ku9ScriptResolver {
 
     private void complete(Pending request, String json) {
         try {
-            Object value = new JSONTokener(json == null ? "" : json).nextValue();
-            String url = null;
-            String m3u8 = null;
-            if (value instanceof String) {
-                String text = ((String) value).trim();
-                if (text.startsWith("#EXTM3U")) {
-                    m3u8 = text;
-                } else {
-                    url = text;
-                }
-            } else if (value instanceof JSONObject) {
-                JSONObject object = (JSONObject) value;
-                url = firstNonEmpty(object.optString("url", ""),
-                        object.optString("playUrl", ""), object.optString("playurl", ""));
-                m3u8 = firstNonEmpty(object.optString("m3u8", ""),
-                        object.optString("content", ""));
-                if (TextUtils.isEmpty(url)) {
-                    JSONArray urls = object.optJSONArray("urls");
-                    if (urls != null && urls.length() > 0) {
-                        url = urls.optString(0, "");
-                    }
-                }
-            }
+            Ku9JsContract.Output output = Ku9JsContract.parse(json);
+            String url = output.url;
+            String m3u8 = output.playlist;
             if (!TextUtils.isEmpty(m3u8) && m3u8.trim().startsWith("#EXTM3U")) {
                 if (containsIpv6Literal(m3u8) && !hasUsableIpv6Network()) {
                     throw new IOException("当前网络没有 IPv6，无法播放此频道");
@@ -280,7 +247,7 @@ final class Ku9ScriptResolver {
                 if (containsIpv6Literal(url) && !hasUsableIpv6Network()) {
                     throw new IOException("当前网络没有 IPv6，无法播放此频道");
                 }
-                Result result = new Result(url.trim(), isDirectDataSource(url));
+                Result result = new Result(url.trim(), Ku9JsContract.isDirectDataSource(url));
                 clearPending();
                 request.callback.onResolved(request.requestId, result);
                 return;
@@ -310,7 +277,7 @@ final class Ku9ScriptResolver {
         }
     }
 
-    private static long playlistRefreshDelay(String content) {
+    static long playlistRefreshDelay(String content) {
         Matcher matcher = TARGET_DURATION.matcher(content);
         long targetMs = matcher.find() ? (long) parseInt(matcher.group(1)) * 500L
                 : MAX_PLAYLIST_REFRESH_MS;
@@ -509,22 +476,6 @@ final class Ku9ScriptResolver {
                 }
             });
         }
-    }
-
-    private static String firstNonEmpty(String... values) {
-        for (String value : values) {
-            if (!TextUtils.isEmpty(value)) {
-                return value;
-            }
-        }
-        return "";
-    }
-
-    private static boolean isDirectDataSource(String value) {
-        String lower = value == null ? "" : value.toLowerCase(Locale.US);
-        return lower.startsWith("file://") || lower.startsWith("rtmp://")
-                || lower.startsWith("rtsp://") || lower.endsWith(".flv")
-                || lower.endsWith(".mp4") || lower.endsWith(".ts");
     }
 
     private static int parseInt(String value) {

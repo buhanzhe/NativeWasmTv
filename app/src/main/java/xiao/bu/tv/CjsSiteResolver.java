@@ -23,6 +23,7 @@ final class CjsSiteResolver {
     static final class Result {
         final String url;
         final String referer;
+        final boolean directDataSource;
         final String transformer;
         final String[] transformerArgs;
         final String[] mediaHosts;
@@ -30,6 +31,7 @@ final class CjsSiteResolver {
         Result(String url, String referer, String transformer,
                 String[] transformerArgs, String[] mediaHosts) {
             this.url = url;
+            this.directDataSource = Ku9JsContract.isDirectDataSource(url);
             this.referer = referer;
             this.transformer = transformer;
             this.transformerArgs = transformerArgs;
@@ -43,6 +45,14 @@ final class CjsSiteResolver {
     private final Activity activity;
     private volatile Pending pending;
     private volatile int generation;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Ku9PlaylistServer playlistServer;
+    private final Runnable refreshPlaylist = new Runnable() {
+        @Override public void run() {
+            Pending request = pending;
+            if (request != null && request.generation == generation) execute(request);
+        }
+    };
 
     CjsSiteResolver(Activity activity, FrameLayout root) {
         this.activity = activity;
@@ -100,7 +110,10 @@ final class CjsSiteResolver {
             }
         }
         pending = request;
-        final Pending work = request;
+        execute(request);
+    }
+
+    private void execute(final Pending work) {
         new Thread(new Runnable() {
             @Override public void run() {
                 Bridge host = new Bridge(work);
@@ -122,7 +135,8 @@ final class CjsSiteResolver {
     private static String buildJavascript(Pending request) {
         JSONObject item = new JSONObject();
         try {
-            item.put("url", request.pageUrl);
+            item.put("url", "ku9".equals(request.site.jsApi) && !TextUtils.isEmpty(request.sourceUrl) ? request.sourceUrl : request.pageUrl);
+            item.put("pageUrl", request.pageUrl);
             item.put("quality", CjsPluginRuntime.quality(request.site.id, request.quality, null));
             item.put("name", request.channelName == null ? "" : request.channelName);
             CjsSource source = CjsSource.parse(request.sourceUrl);
@@ -130,18 +144,16 @@ final class CjsSiteResolver {
             item.put("params", source == null ? new JSONObject() : new JSONObject(source.parameters));
         } catch (Exception ignored) {
         }
+        return buildJavascript(request.site.script, item);
+    }
+
+    static String buildJavascript(String script, JSONObject item) {
         return "(function(){'use strict';"
-                + "function json(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
-                + "function headers(v){return typeof v==='string'?v:JSON.stringify(v||{});}"
-                + "window.cjs={"
-                + "get:function(u,h){return NtvCjsBridge.get(String(u),headers(h));},"
-                + "post:function(u,b,h){return NtvCjsBridge.post(String(u),String(b||''),headers(h));},"
-                + "request:function(u,m,h,b,f){return json(NtvCjsBridge.request(String(u),String(m||'GET'),headers(h),String(b||''),f!==false),{});},"
-                + "md5:function(v){return NtvCjsBridge.md5(String(v));},"
-                + "log:function(v){NtvCjsBridge.log(String(v));}};"
+                + Ku9JsContract.bootstrap("NtvCjsBridge")
+                + "window.cjs=window.ku9;"
                 + "function done(v){NtvCjsBridge.complete(JSON.stringify(v==null?{}:v));}"
                 + "function fail(e){NtvCjsBridge.fail(String(e)+(e&&e.stack?'\\n'+e.stack:''));}"
-                + "try{var pluginMain=(function(){" + request.site.script + "\n"
+                + "try{var pluginMain=(function(){" + script + "\n"
                 + "return typeof main==='function'?main:null;})();"
                 + "if(typeof pluginMain!=='function')throw new Error('站点插件没有 main(item) 入口');"
                 + "var r=pluginMain(" + item.toString() + ");"
@@ -151,8 +163,9 @@ final class CjsSiteResolver {
 
     private void complete(final Pending request, String json) {
         try {
-            JSONObject value = new JSONObject(json == null ? "{}" : json);
-            String url = value.optString("url", "").trim();
+            Ku9JsContract.Output output = Ku9JsContract.parse(json);
+            JSONObject value = output.fields;
+            String url = output.url;
             JSONArray streams = value.optJSONArray("streams");
             if (streams != null) {
                 if (streams.length() < 1 || streams.length() > 3) throw new IOException("站点最多返回三档清晰度");
@@ -162,7 +175,7 @@ final class CjsSiteResolver {
                     JSONObject stream = streams.getJSONObject(i);
                     String tier = stream.getString("quality"), candidate = stream.getString("url");
                     if ((!"high".equals(tier) && !"medium".equals(tier) && !"low".equals(tier))
-                            || !tiers.add(tier) || !isOnline(candidate)) throw new IOException("站点清晰度列表无效");
+                            || !tiers.add(tier) || !isOnlineMedia(candidate)) throw new IOException("站点清晰度列表无效");
                     if (i == 0) url = candidate;
                     if (tier.equals(request.quality)) selected = candidate;
                 }
@@ -172,7 +185,7 @@ final class CjsSiteResolver {
             String transformer = value.optString("transformer", "").trim();
             String[] transformerArgs = stringArray(value.optJSONArray("transformerArgs"));
             String[] mediaHosts = stringArray(value.optJSONArray("mediaHosts"));
-            if (!isOnline(url)) {
+            if (output.playlist.length() == 0 && !isOnlineMedia(url)) {
                 throw new IOException("站点插件没有返回在线播放地址");
             }
             if (!isOnline(referer)) {
@@ -184,6 +197,23 @@ final class CjsSiteResolver {
             }
             if (transformer.length() > 0 && !"gxtv.so".equals(request.site.nativeModule)) {
                 throw new IOException("当前宿主不支持该站点原生接口");
+            }
+            if (output.playlist.length() > 0) {
+                if (playlistServer == null) {
+                    playlistServer = new Ku9PlaylistServer();
+                    playlistServer.start();
+                }
+                playlistServer.update(output.playlist);
+                handler.removeCallbacks(refreshPlaylist);
+                // Finite VOD lists need no refresh; live lists use Ku9's existing cadence.
+                if (!output.playlist.contains("#EXT-X-ENDLIST"))
+                    handler.postDelayed(refreshPlaylist, Ku9ScriptResolver.playlistRefreshDelay(output.playlist));
+                if (!request.initialCompleted) {
+                    request.initialCompleted = true;
+                    request.callback.onResolved(request.requestId, new Result(playlistServer.url(),
+                            referer, transformer, transformerArgs, mediaHosts));
+                }
+                return;
             }
             long ttl = Math.min(600L, Math.max(0L, value.optLong("ttlSec", 0)));
             if (ttl > 0) {
@@ -221,13 +251,27 @@ final class CjsSiteResolver {
         if (request == null || pending != request) {
             return;
         }
+        if (request.initialCompleted) {
+            Log.w(TAG, reason + "; retaining last live playlist");
+            handler.removeCallbacks(refreshPlaylist);
+            handler.postDelayed(refreshPlaylist, 5000L);
+            return;
+        }
         clearPending();
+        closePlaylistServer();
         request.callback.onFailed(request.requestId, reason);
     }
 
-    private void clearPending() { pending = null; }
+    private void clearPending() {
+        handler.removeCallbacks(refreshPlaylist);
+        pending = null;
+    }
 
-    void cancel() { generation++; clearPending(); }
+    private void closePlaylistServer() {
+        if (playlistServer != null) { playlistServer.close(); playlistServer = null; }
+    }
+
+    void cancel() { generation++; clearPending(); closePlaylistServer(); }
 
     void destroy() { cancel(); }
 
@@ -239,6 +283,10 @@ final class CjsSiteResolver {
                     + "\n" + request.pageUrl + "\n" + request.quality + "\n" + request.sourceUrl).getBytes("UTF-8"));
             return android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP);
         } catch (Exception error) { throw new IllegalStateException(error); }
+    }
+
+    private static boolean isOnlineMedia(String url) {
+        return isOnline(url) || (url != null && (url.startsWith("rtsp://") || url.startsWith("rtmp://")));
     }
 
     private static boolean isOnline(String url) {
@@ -280,8 +328,14 @@ final class CjsSiteResolver {
                 case 4: log(args[0]); return null;
                 case 5: complete(args[0]); return null;
                 case 6: fail(args[0]); return null;
+                case 7: return scriptCache().get(args[0]);
+                case 8: scriptCache().put(args[0], args[1], Double.parseDouble(args[2])); return null;
                 default: throw new IOException("Unknown CJS host operation");
             }
+        }
+
+        private Ku9SiteCache scriptCache() {
+            return new Ku9SiteCache(activity, request.site.id);
         }
 
         public String get(String url, String headersJson) {
@@ -374,6 +428,7 @@ final class CjsSiteResolver {
         final String sourceUrl;
         final CjsPluginRuntime.SitePlugin site;
         final Callback callback;
+        boolean initialCompleted;
 
         Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
                 String sourceUrl,

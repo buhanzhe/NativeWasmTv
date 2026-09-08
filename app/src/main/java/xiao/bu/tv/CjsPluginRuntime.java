@@ -358,8 +358,11 @@ public final class CjsPluginRuntime {
         State s = state(id);
         String entry = s.runtime.optString("entry");
         if (entry.length() == 0) return null;
+        String jsApi = s.runtime.optString("jsApi", "cjs-v4");
+        if (!"ku9".equals(jsApi) && !"cjs-v4".equals(jsApi))
+            throw new IOException("站点脚本接口需要更新客户端: " + jsApi);
         return new SitePlugin(id, script(id, entry, null), s.entry.getString("module") + ".so",
-                s.runtime.optString("transformer"), s.runtime.optString("engine"));
+                s.runtime.optString("transformer"), s.runtime.optString("engine"), jsApi);
     }
     static boolean supportsSite(String pageUrl) {
         try { return siteForUrl(pageUrl) != null; } catch (Exception ignored) { return false; }
@@ -420,9 +423,9 @@ public final class CjsPluginRuntime {
         return false;
     }
     static final class SitePlugin {
-        final String id, component, script, nativeModule, transformer, engine;
-        SitePlugin(String id, String script, String module, String transformer, String engine) {
-            this.id=id; this.component=id; this.script=script; this.nativeModule=module; this.transformer=transformer; this.engine=engine;
+        final String id, component, script, nativeModule, transformer, engine, jsApi;
+        SitePlugin(String id, String script, String module, String transformer, String engine, String jsApi) {
+            this.id=id; this.component=id; this.script=script; this.nativeModule=module; this.transformer=transformer; this.engine=engine; this.jsApi=jsApi;
         }
     }
     private static void verifyNativeAbi(byte[] data, String abi, String name)

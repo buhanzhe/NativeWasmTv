@@ -3352,7 +3352,7 @@ public final class MainActivity extends Activity {
                                         result.transformerArgs, result.mediaHosts);
                             }
                         }
-                        startResolvedPlayer(channel, result.url);
+                        startResolvedPlayer(channel, result.url, result.directDataSource);
                     }
 
                     @Override

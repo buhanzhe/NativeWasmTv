@@ -56,7 +56,7 @@ final class Ku9HttpClient {
             String requestMethod = TextUtils.isEmpty(method) ? "GET"
                     : method.toUpperCase(Locale.US);
             connection = open(url, requestMethod, parseHeaders(headersJson), followRedirects);
-            if (!"GET".equals(requestMethod) && body != null) {
+            if (!"GET".equals(requestMethod) && !"HEAD".equals(requestMethod) && body != null) {
                 connection.setDoOutput(true);
                 connection.getOutputStream().write(body.getBytes("UTF-8"));
                 connection.getOutputStream().close();

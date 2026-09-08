@@ -92,8 +92,8 @@ JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecute(JNIEnv *e, jc
     if (!ctx) goto oom;
     JS_SetContextOpaque(ctx, &h);
     JSValue global = JS_GetGlobalObject(ctx), bridge = JS_NewObject(ctx);
-    const char *names[] = {"get", "post", "request", "md5", "log", "complete", "fail"};
-    for (int i = 0; i < 7; i++)
+    const char *names[] = {"get", "post", "request", "md5", "log", "complete", "fail", "getCache", "setCache"};
+    for (int i = 0; i < sizeof(names) / sizeof(names[0]); i++)
         JS_SetPropertyStr(ctx, bridge, names[i], JS_NewCFunctionMagic(ctx, call_host, names[i], 0, JS_CFUNC_generic_magic, i));
     JS_SetPropertyStr(ctx, global, "NtvCjsBridge", bridge);
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));

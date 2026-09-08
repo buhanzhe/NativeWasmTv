@@ -32,6 +32,7 @@ public final class QuickJsInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle results = new Bundle();
         try {
+            String contractResult = Ku9CjsContractTest.run(getTargetContext());
             if (testGithub) {
                 results.putString("stream", LegacyTlsTest.githubDownload(getTargetContext()));
                 finish(-1, results);
@@ -64,7 +65,7 @@ public final class QuickJsInstrumentation extends Instrumentation {
                 host = new Host(); NativeQuickJs.execute("NtvCjsBridge.complete(String(6*7))", host);
                 check("42".equals(host.result), "Repeated runtime lifecycle");
             }
-            results.putString("stream", "PASS QuickJS: Unicode/NUL, bridge, Promise, BigInt, syntax error, cancellation, heap limit, 50 runtimes in "
+            results.putString("stream", contractResult + "PASS QuickJS: Unicode/NUL, bridge, Promise, BigInt, syntax error, cancellation, heap limit, 50 runtimes in "
                     + (SystemClock.elapsedRealtime() - start) + " ms\n");
             finish(-1, results);
         } catch (Throwable error) {
