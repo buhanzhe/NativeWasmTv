@@ -56,10 +56,10 @@ public final class DesktopZoomInstrumentation extends Instrumentation {
                 check(json("zoomSnapshot()").getInt("clicks")==7,"Zoom lost page state");
                 note("live zoom 200% -> 100% -> 200% preserves document state");
             }
-            main(() -> source.setCastCaptureActive(true));SystemClock.sleep(1000);
+            main(() -> source.setCastCaptureActive(true, 30));SystemClock.sleep(1000);
             JSONObject cast=json("zoomSnapshot()");note("cast preserves browser 2k 200% "+cast);
             if(!args.containsKey("probe")) {verify(cast,2560,2);clickTarget(cast);}
-            main(() -> source.setCastCaptureActive(false));SystemClock.sleep(1000);
+            main(() -> source.setCastCaptureActive(false, 30));SystemClock.sleep(1000);
             JSONObject restored=json("zoomSnapshot()");note("restored "+restored);
             if(!args.containsKey("probe"))verify(restored,2560,2);
             json("(function(){document.querySelector('meta[name=viewport]').content='width=device-width,initial-scale=1';return {ok:true}})()");

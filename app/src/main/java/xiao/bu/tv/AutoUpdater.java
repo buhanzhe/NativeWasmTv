@@ -171,7 +171,7 @@ final class AutoUpdater {
 
     private UpdateInfo loadUpdateInfo(String manifestUrl, boolean allowArchitectureUpgrade)
             throws IOException, JSONException {
-        // The selected accelerator also covers update metadata and APK downloads.
+        // Updates use the default HTTPS accelerator and shared TLS stack.
         HttpURLConnection connection = openConnection(GithubProxy.apply(activity, manifestUrl)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
@@ -467,7 +467,7 @@ final class AutoUpdater {
     }
 
     private static HttpURLConnection openConnection(String url) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(url));
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(true);

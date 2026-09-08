@@ -57,11 +57,11 @@ public final class FlyMouseInstrumentation extends Instrumentation {
                 // Page zoom and cast viewport use different transforms from output pixels.
                 open("http://127.0.0.1:18889/mouse.html","1080p",1.25f);
                 checkFixture("1080p zoom 125%");
-                onMain(() -> source.setCastCaptureActive(true));
+                onMain(() -> source.setCastCaptureActive(true, 30));
                 SystemClock.sleep(800);
                 check(!json("({muted:video.muted,volume:video.volume})").getBoolean("muted"),"Cast forcibly muted video");
                 check(json("({volume:video.volume})").getDouble("volume")>0,"Cast zeroed volume");
-                onMain(() -> source.setCastCaptureActive(false));
+                onMain(() -> source.setCastCaptureActive(false, 30));
                 note("cast transition preserves media mute/volume settings");
                 checkContinuousInput();
                 screenshot("mouse-fixture.png");

@@ -1,6 +1,7 @@
 package xiao.bu.tv;
 
 import com.bu.cc.tv.NativeCmgDecryptor;
+import com.bu.cc.tv.NativeGxtvTransformer;
 import com.bu.cc.tv.NativeH5eDecryptor;
 
 import android.os.SystemClock;
@@ -145,6 +146,7 @@ final class HlsProxyServer implements Closeable {
     void selectVideoVariant(String url) {
         requestedVideoVariant = url;
     }
+    private final boolean spsCompatibilityMode;
     private final ScheduledExecutorService cctvPlaylistMonitor =
             Executors.newSingleThreadScheduledExecutor();
     private final AtomicLong upstreamDownloadedBytes = new AtomicLong();
@@ -244,6 +246,9 @@ final class HlsProxyServer implements Closeable {
     private volatile String webCookies;
     private volatile boolean remoteConsumer;
     private volatile boolean carrierIptvSession;
+    private volatile String cjsTransformer;
+    private volatile String[] cjsTransformerArgs;
+    private volatile String[] cjsMediaHosts;
     private boolean cctvPlaylistMonitorStarted;
     private long cmgLastYangshipinSegment = -1L;
 
@@ -273,7 +278,7 @@ final class HlsProxyServer implements Closeable {
         this.configuredVariantQualityEnabled = configuredVariantQualityEnabled;
         this.variantQualityMode = sanitizeVariantQualityMode(variantQualityMode);
         h264SpsCompatibilityMode = spsCompatibilityMode;
-        NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
+        this.spsCompatibilityMode = spsCompatibilityMode;
         cmgSegmentCacheLimit = lowResourceDevice ? 2 : CMG_SEGMENT_CACHE_LIMIT;
         cctvSegmentCacheLimit = lowResourceDevice
                 ? CCTV_LOW_RAM_SEGMENT_CACHE_LIMIT : CCTV_SEGMENT_CACHE_LIMIT;
@@ -404,7 +409,9 @@ final class HlsProxyServer implements Closeable {
 
     static void resetCmgSessionForChannelSwitch() {
         synchronized (CMG_DECRYPT_LOCK) {
-            NativeCmgDecryptor.resetRuntimeForProbe();
+            if (CjsPluginRuntime.isNativeLoaded("yangshipin.cn")) {
+                NativeCmgDecryptor.resetRuntimeForProbe();
+            }
             cmgSessionWarmed = false;
             cmgLiveVideoDecodeEnabled = false;
             cmgInitialUpdateTag = 0;
@@ -422,6 +429,14 @@ final class HlsProxyServer implements Closeable {
         webReferer = sanitizeHeaderValue(referer);
         webUserAgent = sanitizeHeaderValue(userAgent);
         webCookies = sanitizeHeaderValue(cookies);
+    }
+
+    void configureCjsTransformer(String transformer, String[] arguments,
+            String[] mediaHosts) {
+        cjsTransformer = transformer == null ? null : transformer.trim();
+        cjsTransformerArgs = arguments == null ? null : arguments.clone();
+        cjsMediaHosts = mediaHosts == null ? null : mediaHosts.clone();
+        Log.i(TAG, "Configured CJS media transformer=" + cjsTransformer);
     }
 
     private void acceptLoop() {
@@ -472,7 +487,8 @@ final class HlsProxyServer implements Closeable {
 
             String token = path.substring(prefix.length());
             String originUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
-            if (canStreamWithoutRewrite(originUrl) && !hasAesSegmentKey(originUrl)
+            if (!needsCjsTransform(originUrl) && canStreamWithoutRewrite(originUrl)
+                    && !hasAesSegmentKey(originUrl)
                     && !hasGenericSegmentTask(originUrl)) {
                 streamUpstream(originUrl, rangeHeader, output);
                 return;
@@ -580,6 +596,9 @@ final class HlsProxyServer implements Closeable {
         }
         if (isTransportStream(originUrl, null) && needsCmgDecrypt(originUrl)) {
             return new ProxyResponse("video/MP2T", getCmgSegment(originUrl));
+        }
+        if (isTransportStream(originUrl, null) && needsCjsTransform(originUrl)) {
+            return new ProxyResponse("video/MP2T", transformCjsSegment(originUrl));
         }
 
         HttpURLConnection connection = openUpstreamConnection(originUrl);
@@ -1054,6 +1073,20 @@ final class HlsProxyServer implements Closeable {
         } catch (Exception error) {
             throw new IOException("Unable to decrypt AES-128 HLS segment", error);
         }
+    }
+
+    private byte[] transformCjsSegment(String originUrl) throws IOException {
+        byte[] encrypted = downloadRaw(originUrl);
+        long started = SystemClock.elapsedRealtime();
+        byte[] transformed = NativeGxtvTransformer.transformTransportStream(
+                encrypted, cjsTransformer, cjsTransformerArgs);
+        if (transformed == null) {
+            throw new IOException("CJS native transformer rejected transport stream");
+        }
+        Log.i(TAG, "CJS media transformed " + segmentName(originUrl)
+                + " bytes=" + transformed.length + " elapsedMs="
+                + (SystemClock.elapsedRealtime() - started));
+        return transformed;
     }
 
     private byte[] downloadRaw(String originUrl) throws IOException {
@@ -1679,7 +1712,9 @@ final class HlsProxyServer implements Closeable {
                         try {
                             task.run();
                         } finally {
-                            NativeH5eDecryptor.releaseThreadContext();
+                            if (CjsPluginRuntime.isNativeLoaded("tv.cctv.com")) {
+                                NativeH5eDecryptor.releaseThreadContext();
+                            }
                         }
                     }
                 }, "cctv-decrypt-" + threadIds.incrementAndGet());
@@ -1768,6 +1803,7 @@ final class HlsProxyServer implements Closeable {
             Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND);
         } catch (RuntimeException ignored) {
         }
+        NativeH5eDecryptor.setSpsCompatibilityMode(spsCompatibilityMode);
         byte[] decrypted = NativeH5eDecryptor.decryptTransportStream(body);
         if (decrypted == null && running) {
             /* A wasm trap invalidates only this worker's thread-local runtime.
@@ -2155,6 +2191,30 @@ final class HlsProxyServer implements Closeable {
 
     private static boolean needsCmgDecrypt(String url) {
         return isYangshipinUrl(url);
+    }
+
+    private boolean needsCjsTransform(String url) {
+        String transformer = cjsTransformer;
+        String[] hosts = cjsMediaHosts;
+        if (transformer == null || transformer.length() == 0
+                || hosts == null || hosts.length == 0 || url == null) {
+            return false;
+        }
+        try {
+            String host = URI.create(url).getHost();
+            String lowerHost = host == null ? "" : host.toLowerCase(Locale.US);
+            for (String configured : hosts) {
+                String lowerConfigured = configured == null ? ""
+                        : configured.trim().toLowerCase(Locale.US);
+                if (lowerConfigured.length() > 0 && (lowerHost.equals(lowerConfigured)
+                        || lowerHost.endsWith("." + lowerConfigured))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException error) {
+            return false;
+        }
     }
 
     static boolean needsSpecialDecrypt(String url) {
@@ -2746,7 +2806,9 @@ final class HlsProxyServer implements Closeable {
         running = false;
         carrierNetworkRoute.close();
         monitoredCctvPlaylistUrl = null;
-        NativeH5eDecryptor.cancelPendingDecrypts();
+        if (CjsPluginRuntime.isNativeLoaded("tv.cctv.com")) {
+            NativeH5eDecryptor.cancelPendingDecrypts();
+        }
         List<FutureTask<byte[]>> pendingCctvTasks;
         synchronized (cctvSegmentTasks) {
             pendingCctvTasks =

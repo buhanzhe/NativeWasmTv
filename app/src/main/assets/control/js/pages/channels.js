@@ -57,62 +57,6 @@ function saveAutoUpdateChannelList() {
   });
 }
 
-function renderGithubProxySettings() {
-  if (!state || !state.settings) return;
-  var settings = state.settings,
-    mode = settings.githubProxyMode || "gh_proxy",
-    select = document.getElementById("githubProxyMode"),
-    custom = document.getElementById("githubProxyCustomPrefix"),
-    row = document.getElementById("githubProxyCustomRow"),
-    hint = document.getElementById("githubProxyHint");
-  select.value = mode;
-  custom.value = settings.githubProxyCustomPrefix || "";
-  row.style.display = mode === "custom" ? "flex" : "none";
-  hint.textContent =
-    mode === "direct"
-      ? "直接连接 GitHub，不使用加速"
-      : mode === "custom"
-        ? settings.githubProxyPrefix || "请填写自定义加速地址"
-        : mode === "legacy"
-          ? "使用兼容 Android 4.0 的内置 HTTP 加速"
-          : "使用 https://gh-proxy.com";
-}
-
-function githubProxyModeChanged() {
-  var mode = document.getElementById("githubProxyMode").value,
-    row = document.getElementById("githubProxyCustomRow");
-  row.style.display = mode === "custom" ? "flex" : "none";
-  if (mode === "custom") {
-    document.getElementById("githubProxyCustomPrefix").focus();
-    return;
-  }
-  saveGithubProxy();
-}
-
-function saveGithubProxy() {
-  var mode = document.getElementById("githubProxyMode").value,
-    custom = String(document.getElementById("githubProxyCustomPrefix").value || "").replace(
-      /^\s+|\s+$/g,
-      ""
-    );
-  if (mode === "custom" && !/^https?:\/\//i.test(custom)) {
-    toast("请输入以 http:// 或 https:// 开头的加速地址", true);
-    return;
-  }
-  api(
-    "/api/settings",
-    { githubProxyMode: mode, githubProxyCustomPrefix: custom },
-    function (error) {
-      if (error) {
-        toast(error.message, true);
-        refresh();
-        return;
-      }
-      toast("GitHub 加速设置已保存");
-      setTimeout(refresh, 200);
-    }
-  );
-}
 function newPlaylistSource(name, location) {
   return {
     id: "source_" + Date.now() + "_" + Math.floor(Math.random() * 10000),
@@ -477,48 +421,13 @@ function isLocalPlaylistLocation(location) {
 
 function githubProxySourceUrl(value) {
   var url = String(value || "").replace(/^\s+|\s+$/g, ""),
-    settings = (state && state.settings) || {},
-    custom = String(settings.githubProxyCustomPrefix || ""),
-    marker = custom.indexOf("{url}"),
-    customBefore = marker >= 0 ? custom.substring(0, marker) : "",
-    customAfter = marker >= 0 ? custom.substring(marker + 5) : "",
-    prefixes = ["https://gh-proxy.com/", "http://gh.3w.pm/", "https://gh-proxy.org/"];
-  if (custom && marker < 0)
-    prefixes.push(custom.charAt(custom.length - 1) === "/" ? custom : custom + "/");
-  for (var pass = 0; pass < 3; pass++) {
-    var changed = false;
-    if (
-      marker >= 0 &&
-      url.indexOf(customBefore) === 0 &&
-      url.slice(url.length - customAfter.length) === customAfter
-    ) {
-      url = url.substring(customBefore.length, url.length - customAfter.length);
-      changed = true;
-    } else
-      for (var i = 0; i < prefixes.length; i++)
-        if (prefixes[i] && url.indexOf(prefixes[i]) === 0) {
-          url = url.substring(prefixes[i].length);
-          changed = true;
-          break;
-        }
-    if (!changed) break;
-  }
-  var link = document.createElement("a");
-  link.href = url;
-  var host = String(link.hostname || "").toLowerCase();
-  if (
-    host !== "github.com" &&
-    host !== "raw.githubusercontent.com" &&
-    !/\.githubusercontent\.com$/.test(host)
-  )
-    return value;
-  var mode = settings.githubProxyMode || "gh_proxy";
-  if (mode === "direct") return url;
-  var prefix =
-    mode === "legacy" ? "http://gh.3w.pm/" : mode === "custom" ? custom : "https://gh-proxy.com/";
-  if (prefix.indexOf("{url}") >= 0) return prefix.replace("{url}", url);
-  if (prefix && prefix.charAt(prefix.length - 1) !== "/") prefix += "/";
-  return prefix + url;
+    prefix = "https://gh-proxy.com/";
+  if (url.indexOf(prefix) === 0) return url;
+  var anchor = document.createElement("a");
+  anchor.href = url;
+  var host = String(anchor.hostname || "").toLowerCase();
+  return host === "github.com" || host === "raw.githubusercontent.com" ||
+    /\.githubusercontent\.com$/.test(host) ? prefix + url : value;
 }
 
 function requestPlaylistText(source, done) {
@@ -853,7 +762,6 @@ function renderPageState() {
   var draft = readChannelDraft();
   var s = state.settings;
   document.getElementById("autoUpdateChannelList").checked = s.autoUpdateChannelList === true;
-  renderGithubProxySettings();
   playlistSources = JSON.parse(JSON.stringify(s.playlistSources || []));
   channelBaseSources = channelSourceSnapshot(playlistSources);
   channelBaseEpg = s.epgUrl || "";

@@ -45,7 +45,7 @@ final class CastEdgeController extends FrameLayout {
         bubble.setImageDrawable(new CastIconDrawable(dp(24)));
         bubble.setScaleType(ImageButton.ScaleType.FIT_CENTER);
         bubble.setPadding(dp(13), dp(13), dp(13), dp(13));
-        bubble.setBackground(round(0xe6232328, 26));
+        bubble.setBackgroundDrawable(round(0xe6232328, 26));
         bubble.setContentDescription("投屏");
         if (Build.VERSION.SDK_INT >= 21) bubble.setElevation(dp(10));
         LayoutParams bubbleParams = new LayoutParams(dp(52), dp(52),
@@ -56,7 +56,7 @@ final class CastEdgeController extends FrameLayout {
         panel.setClickable(true);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(16), dp(12), dp(12), dp(12));
-        panel.setBackground(round(0xf5f7f7f9, 22));
+        panel.setBackgroundDrawable(round(0xf5f7f7f9, 22));
         if (Build.VERSION.SDK_INT >= 21) panel.setElevation(dp(12));
         LayoutParams panelParams = new LayoutParams(dp(282), LayoutParams.WRAP_CONTENT,
                 Gravity.RIGHT | Gravity.CENTER_VERTICAL);
@@ -200,7 +200,7 @@ final class CastEdgeController extends FrameLayout {
     private TextView action(String text, String description, int background, int color) {
         TextView value = label(text, "结束".equals(text) ? 13 : 28, color, true);
         value.setGravity(Gravity.CENTER);
-        value.setBackground(round(background, 15));
+        value.setBackgroundDrawable(round(background, 15));
         value.setContentDescription(description);
         return value;
     }

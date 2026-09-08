@@ -72,6 +72,7 @@ function renderHardwareDecoders() {
 }
 function renderPageState() {
   var s = state.settings;
+  document.getElementById("dnsMode").value = s.dnsMode || "ali";
   document.getElementById("reverse").checked = s.reverseKeys === true;
   document.getElementById("autoStart").checked = s.autoStart === true;
   document.getElementById("decoder").value = s.decodeMode || "auto";
@@ -80,4 +81,5 @@ function renderPageState() {
   document.getElementById("spsCompatibility").value = String(s.h264SpsCompatibility !== false);
   renderHardwareDecoders();
 }
+function saveDns(){var dns=document.getElementById('dnsMode');toast('正在切换 DNS…');api('/api/settings',{dnsMode:dns.value},function(error){if(error){toast(error.message,true);refresh();return}toast('DNS 配置已保存')})}
 startPage();

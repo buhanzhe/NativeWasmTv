@@ -228,7 +228,7 @@ final class EpgManager {
         }
         URL current = checkedHttpUrl(new URL(sourceUrl.trim()));
         for (int redirects = 0; redirects <= 5; redirects++) {
-            HttpURLConnection connection = (HttpURLConnection) current.openConnection();
+            HttpURLConnection connection = NetworkClient.open(current);
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(25000);
             // Android 7 does not reliably follow an HTTP -> HTTPS redirect. Handle

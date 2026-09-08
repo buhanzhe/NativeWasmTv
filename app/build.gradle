@@ -61,6 +61,7 @@ android {
             dimension 'architecture'
             minSdkVersion 14
             ndk { abiFilters 'armeabi-v7a' }
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"armeabi-v7a"'
             buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk32Url"'
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25632"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv.apk"'
@@ -70,6 +71,7 @@ android {
             // Android supports 64-bit native processes from API 21 onward.
             minSdkVersion 21
             ndk { abiFilters 'arm64-v8a' }
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"arm64-v8a"'
             buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apk64Url"'
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha25664"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTv64.apk"'
@@ -135,6 +137,9 @@ dependencies {
     implementation 'androidx.webkit:webkit:1.9.0'
     // 4.x already includes Native crash reporting; do not add a second NDK SDK.
     implementation 'com.tencent.bugly:crashreport:4.1.9.3'
+    // 3.12.x is the final OkHttp branch that supports Android 4.4 and Java 7.
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+    implementation 'com.squareup.okhttp3:okhttp-urlconnection:3.12.13'
 }
 
 task generateVersionFile {

@@ -270,5 +270,16 @@ function renderSystemInfo() {
 function renderPageState() {
   renderSystemInfo();
   renderApkTransfer();
+  renderCjsPlugin();
 }
+function renderCjsPlugin() {
+  var plugin = state.cjsPlugin || {}, input = document.getElementById("cjsPluginUrl");
+  if (document.activeElement !== input) input.value = plugin.manifestUrl || "";
+  document.getElementById("cjsPluginStatus").textContent = plugin.pendingVersion
+    ? "已下载 " + plugin.pendingVersion + "，重启后启用"
+    : plugin.installed ? "已安装 " + plugin.version + " · " + plugin.abi : "未安装";
+  renderCjsSites(plugin.sites || []);
+}
+function renderCjsSites(sites){var list=document.getElementById('cjsSiteList');list.innerHTML='';for(var i=0;i<sites.length;i++){var site=sites[i],row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');row.className='system-info-row';label.textContent=site.id+' · '+(site.installed?'v'+site.version:'未安装')+(site.pendingVersion?' · v'+site.pendingVersion+' 重启后启用':'');button.textContent=site.installed?'检查更新':'下载';button.onclick=(function(id){return function(){api('/api/settings',{updateCjsPlugin:true,cjsSiteId:id},function(e,v){toast(e?e.message:v.message,!!e);refresh()})}})(site.id);row.appendChild(label);row.appendChild(button);list.appendChild(row)}}
+function updateCjsPlugin(){var input=document.getElementById('cjsPluginUrl'),status=document.getElementById('cjsPluginStatus'),value=input.value.replace(/^\s+|\s+$/g,'');status.textContent='正在下载并校验…';api('/api/settings',{cjsPluginManifestUrl:value,updateCjsPlugin:true},function(error,result){if(error){status.textContent='更新失败';toast(error.message,true);return}toast(result.message||'兼容插件已更新');refresh()})}
 startPage();

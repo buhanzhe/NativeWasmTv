@@ -75,9 +75,9 @@ public final class DesktopProfileInstrumentation extends Instrumentation {
             }
             open("http://127.0.0.1:18890/","windows","1080p",1.25f);
             verify(json("firstProfile"),"windows",1920,1.25);
-            main(() -> source.setCastCaptureActive(true));SystemClock.sleep(1200);
+            main(() -> source.setCastCaptureActive(true, 30));SystemClock.sleep(1200);
             verify(json("profileSnapshot()"),"windows",1920,1.25);
-            main(() -> source.setCastCaptureActive(false));
+            main(() -> source.setCastCaptureActive(false, 30));
             open("http://127.0.0.1:18890/","native","720p",1f);
             check(json("firstProfile").getString("ua").contains("Android"),"Native mode must remain native");
             }

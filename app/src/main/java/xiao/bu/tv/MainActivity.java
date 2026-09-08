@@ -321,9 +321,13 @@ public final class MainActivity extends Activity {
     private EpgListAdapter epgAdapter;
     private boolean channelPanelInitialized;
     private EpgManager epgManager;
-    private LiveUrlResolver liveUrlResolver;
     private YangshipinWebResolver yangshipinResolver;
+    private boolean cjsPluginInstallInProgress;
+    private int pendingCjsChannelIndex = -1;
+    private CjsSource activeCjsSource;
+    private String pendingCjsComponentCheck = "";
     private Ku9ScriptResolver ku9ScriptResolver;
+    private CjsSiteResolver cjsSiteResolver;
     private DirectVideoView videoView;
     private Drawable castRootBackground;
     private View channelSwitchBlackout;
@@ -446,6 +450,7 @@ public final class MainActivity extends Activity {
     private String directHttpMediaUrl;
     private boolean activeEmbeddedCctvResolver;
     private boolean activeEmbeddedYangshipinResolver;
+    private boolean activeEmbeddedCjsResolver;
     private String webStreamHeaders;
     private HlsMediaTracks.Manifest mediaTrackManifest;
     private HlsSubtitlePlayer hlsSubtitlePlayer;
@@ -740,6 +745,9 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         CastKeepAliveService.attach(this);
+        // Context assignment only: no plugin file access, parsing, hashing, network or dlopen.
+        NetworkClient.initialize(this);
+        CjsPluginRuntime.initialize(this);
         CrashReporter.install(this);
         showCrashRecoveryNotice();
         TlsCompat.install();
@@ -971,10 +979,10 @@ public final class MainActivity extends Activity {
         refreshFavoriteCatalog();
         requestLocalPlaylistPermissionIfNeeded();
         epgManager = new EpgManager(this);
-        liveUrlResolver = new LiveUrlResolver(getSharedPreferences("live_url_resolver", MODE_PRIVATE));
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
+        cjsSiteResolver = new CjsSiteResolver(this, (FrameLayout) root);
         if (lowResourceDevice) {
             root.postDelayed(new Runnable() {
                 @Override
@@ -2355,8 +2363,8 @@ public final class MainActivity extends Activity {
         } else {
             throw new IOException("网页资源不存在");
         }
-        HttpURLConnection connection = (HttpURLConnection) new URL(
-                GithubProxy.apply(this, sourceUrl)).openConnection();
+        HttpURLConnection connection = NetworkClient.open(new URL(
+                GithubProxy.apply(sourceUrl)));
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(18000);
         connection.setInstanceFollowRedirects(true);
@@ -2602,6 +2610,7 @@ public final class MainActivity extends Activity {
             if (full || "system".equals(view)) {
                 root.put("system", systemInfoProvider == null ? new JSONObject()
                         : systemInfoProvider.snapshot());
+                root.put("cjsPlugin", CjsPluginRuntime.statusJson());
                 root.put("update", autoUpdater == null ? new JSONObject()
                         : autoUpdater.stateJson());
             }
@@ -2675,6 +2684,7 @@ public final class MainActivity extends Activity {
         JSONObject settings = new JSONObject();
         if (full || "advanced".equals(view)) {
             settings.put("reverseKeys", reverseUpDown)
+                    .put("dnsMode", NetworkClient.getDnsMode())
                     .put("autoStart", autoStart)
                     .put("decodeMode", decodeMode)
                     .put("hardwareDecoder", hardwareDecoder)
@@ -2688,6 +2698,9 @@ public final class MainActivity extends Activity {
                     .put("uiScaleMode", uiScaleMode)
                     .put("uiScaleFactor", Math.round(effectiveUiScale * 100f) / 100.0d)
                     .put("resolutionMode", resolutionMode)
+                    .put("siteQualities", CjsPluginRuntime.qualityOptions(
+                            cjsComponentForChannel(currentChannel(),
+                                    catalogSource(currentGroup(), currentChannel()))))
                     .put("clockLocation", clockLocation)
                     .put("showDebugInfo", showDebugInfo)
                     .put("showNetworkSpeed", showNetworkSpeed)
@@ -2725,9 +2738,6 @@ public final class MainActivity extends Activity {
                     .put("playlistSources", playlistManager.getSourcesJson())
                     .put("playlistGroups", playlistManager.getGroupSettingsJson())
                     .put("mobileMergedPlaylist", playlistManager.hasMobileMerge())
-                    .put("githubProxyMode", GithubProxy.getMode(this))
-                    .put("githubProxyPrefix", GithubProxy.getEffectivePrefix(this))
-                    .put("githubProxyCustomPrefix", GithubProxy.getCustomPrefix(this))
                     .put("recommendedPlaylistUrl", playlistManager.getRecommendedUrl())
                     .put("recommendedPlaylistSources",
                             playlistManager.getRecommendedSourcesJson());
@@ -3897,7 +3907,7 @@ public final class MainActivity extends Activity {
             }
         }
         castRootBackground = root.getBackground();
-        root.setBackground(null);
+        root.setBackgroundDrawable(null);
         if (webSourceView != null) {
             // Capture belongs to the session, including web channels opened later.
             webSourceView.setCastVisualScale(castVisualScale);
@@ -3918,7 +3928,7 @@ public final class MainActivity extends Activity {
         if (root == null || castRootBackground == null) {
             return;
         }
-        root.setBackground(castRootBackground);
+        root.setBackgroundDrawable(castRootBackground);
         castRootBackground = null;
         if (root instanceof CastRootLayout) {
             ((CastRootLayout) root).setCastViewport(0, 0);
@@ -4647,6 +4657,19 @@ public final class MainActivity extends Activity {
         boolean restartPlayback = false;
         boolean recreateSurface = false;
         boolean applyWebViewSettings = false;
+        if (request.has("cjsPluginManifestUrl")) {
+            CjsPluginRuntime.setManifestUrl(request.optString("cjsPluginManifestUrl", ""));
+        }
+        final boolean updateCjsPlugin = request.optBoolean("updateCjsPlugin", false);
+        if (request.has("dnsMode")) {
+            String rawDns = request.optString("dnsMode", NetworkClient.DEFAULT_DNS);
+            String requestedDns = NetworkClient.sanitizeDnsMode(rawDns);
+            if (!requestedDns.equals(rawDns)) {
+                throw new JSONException("不支持的 DNS 配置");
+            }
+            restartPlayback |= !requestedDns.equals(NetworkClient.getDnsMode());
+            NetworkClient.setDnsMode(requestedDns);
+        }
         if (request.has("reverseKeys")) {
             reverseUpDown = request.optBoolean("reverseKeys", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
@@ -4979,14 +5002,6 @@ public final class MainActivity extends Activity {
                     .putBoolean(AUTO_UPDATE_CHANNEL_LIST, autoUpdateChannelList).apply();
             Log.i(TAG, "Automatic channel list update=" + autoUpdateChannelList);
         }
-        if (request.has("githubProxyMode")) {
-            try {
-                GithubProxy.save(this, request.optString("githubProxyMode", ""),
-                        request.optString("githubProxyCustomPrefix", ""));
-            } catch (IllegalArgumentException error) {
-                throw new JSONException(error.getMessage());
-            }
-        }
         if (request.has("liveDelayMode")) {
             String rawMode = request.optString("liveDelayMode", LIVE_DELAY_STABLE);
             String requestedMode = sanitizeLiveDelayMode(rawMode);
@@ -5094,6 +5109,12 @@ public final class MainActivity extends Activity {
             });
         }
         String message = clearWebCache ? "网页缓存已清除" : "设置已保存";
+        if (updateCjsPlugin) {
+            String siteId = request.optString("cjsSiteId", "");
+            String version = siteId.length() == 0 ? CjsPluginRuntime.installOrUpdate()
+                    : CjsPluginRuntime.installOrUpdate(siteId);
+            message = siteId.length() == 0 ? version : siteId + " v" + version + " 已下载";
+        }
         if (request.has("playlistGroupStates")) {
             final ChannelCatalog.Group[] customGroups = playlistManager.updateGroupStates(
                     request.optJSONArray("playlistGroupStates"));
@@ -5904,6 +5925,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startChannel(int index) {
+        pendingCjsChannelIndex = -1;
         armCrashRecovery();
         if (navigateExistingCastPage(index)) return;
         final boolean committedGestureSwitch = channelSwitchAnimating
@@ -5922,6 +5944,34 @@ public final class MainActivity extends Activity {
         updateCastEdgeState();
         clearRemotePlaybackGateway();
         final int source = catalogSource(group, channel);
+        activeCjsSource = null;
+        try {
+            if (source == ChannelCatalog.SOURCE_CUSTOM)
+                activeCjsSource = CjsSource.parse(channel.sourceUrl(currentSourceIndex));
+            if (activeCjsSource != null) {
+                if (!CjsPluginRuntime.knowsSource(activeCjsSource)) {
+                    installCjsPluginAndStart(currentChannelIndex, channel.name, activeCjsSource.url);
+                    return;
+                }
+                CjsPluginRuntime.playbackUrl(activeCjsSource.url);
+            }
+        } catch (Exception error) {
+            abortChannelSwitchAnimation();
+            hideLoading();
+            showChannelBar(channel.name, "CJS 频道配置错误：" + error.getMessage());
+            return;
+        }
+        if (requiresCjsPlugin(channel, source) && !CjsPluginRuntime.hasCatalog()) {
+            installCjsPluginAndStart(currentChannelIndex, channel.name, "");
+            return;
+        }
+        String cjsComponent = cjsComponentForChannel(channel, source);
+        if (cjsComponent.length() > 0 && !CjsPluginRuntime.isInstalled(cjsComponent)) {
+            installCjsPluginAndStart(currentChannelIndex, channel.name, cjsComponent);
+            return;
+        }
+        pendingCjsComponentCheck = CjsPluginRuntime.needsComponentCheck(cjsComponent)
+                ? cjsComponent : "";
         syncPlaybackRecoveryTarget();
         saveLastChannelSnapshot(group, channel);
         configureEmbeddedResolverMode(group, channel);
@@ -5976,13 +6026,17 @@ public final class MainActivity extends Activity {
         int nextIndex = ChannelCatalog.wrapIndex(group.channels, index);
         Channel channel = group.channels[nextIndex];
         String url = channel.sourceUrl(currentSourceIndex);
+        // Plugin-backed pages must use startChannel's install/resolve path, even
+        // while a generic webpage already has a running cast transport.
+        if (!isWebViewSource(url) || extractYangshipinPid(url) != null
+                || extractCctvWebChannel(url) != null || !CjsPluginRuntime.hasCatalog()
+                || CjsPluginRuntime.supportsSite(webViewPage(url))) return false;
         if (rejectUnsupportedWebViewSource(channel, url)) {
             nextPlaybackRequestedByReceiver = false;
             return true;
         }
-        // Embedded CCTV resolvers still use the ordinary native-player path.
-        if (!isWebViewSource(url) || extractYangshipinPid(url) != null
-                || extractCctvWebChannel(url) != null) return false;
+        activeCjsSource = null;
+        pendingCjsComponentCheck = "";
         dispatchFlyMouseButtonUp(true);
         clearPendingPlayer();
         clearSniffedResources();
@@ -6020,19 +6074,36 @@ public final class MainActivity extends Activity {
         channelList.setSelection(currentChannelIndex);
     }
 
+    private String configuredPlaybackUrl(Channel channel) {
+        String source = channel.sourceUrl(currentSourceIndex);
+        try { return CjsPluginRuntime.playbackUrl(source); }
+        catch (Exception ignored) { return source; } // startChannel reports invalid CJS inputs.
+    }
+
+    private String playbackResolutionMode() {
+        String quality = activeCjsSource == null ? null : activeCjsSource.parameters.get("quality");
+        return quality == null ? resolutionMode : quality;
+    }
+
     private void configureEmbeddedResolverMode(ChannelCatalog.Group group, Channel channel) {
         activeEmbeddedCctvResolver = false;
         activeEmbeddedYangshipinResolver = false;
+        activeEmbeddedCjsResolver = false;
         if (catalogSource(group, channel) != ChannelCatalog.SOURCE_CUSTOM) {
             return;
         }
-        String configuredUrl = channel.sourceUrl(currentSourceIndex);
+        String configuredUrl = configuredPlaybackUrl(channel);
         if (!isWebViewSource(configuredUrl)) {
             activeEmbeddedCctvResolver = isCctvDirectStream(configuredUrl);
             return;
         }
         activeEmbeddedYangshipinResolver = extractYangshipinPid(configuredUrl) != null;
+        String page = webViewPage(configuredUrl);
+        activeEmbeddedCctvResolver = extractCctvWebChannel(configuredUrl) != null;
+        activeEmbeddedCjsResolver = !activeEmbeddedYangshipinResolver && !activeEmbeddedCctvResolver
+                && page != null && CjsPluginRuntime.supportsSite(page);
         activeEmbeddedCctvResolver = !activeEmbeddedYangshipinResolver
+                && !activeEmbeddedCjsResolver
                 && extractCctvWebChannel(configuredUrl) != null;
     }
 
@@ -6043,6 +6114,133 @@ public final class MainActivity extends Activity {
         String normalized = url.toLowerCase(Locale.US);
         return normalized.contains("cctvwbcd") && normalized.contains("/cdrmld")
                 && normalized.contains(".m3u8");
+    }
+
+    private static boolean requiresCjsPlugin(Channel channel, int source) {
+        if (source == ChannelCatalog.SOURCE_CCTV_WEB
+                || source == ChannelCatalog.SOURCE_YSP_CCTV
+                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) {
+            return true;
+        }
+        if (source != ChannelCatalog.SOURCE_CUSTOM || channel == null) {
+            return false;
+        }
+        for (int index = 0; index < channel.sourceCount(); index++) {
+            String url = channel.sourceUrl(index);
+            if (isCctvDirectStream(url) || extractYangshipinPid(url) != null
+                    || isWebViewSource(url) || CjsSource.isSource(url)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String cjsComponentForChannel(Channel channel, int source) {
+        if (source == ChannelCatalog.SOURCE_CCTV_WEB) return "tv.cctv.com";
+        if (source == ChannelCatalog.SOURCE_YSP_CCTV
+                || source == ChannelCatalog.SOURCE_YSP_SATELLITE) return "yangshipin.cn";
+        if (source != ChannelCatalog.SOURCE_CUSTOM || channel == null) return "";
+        String url = configuredPlaybackUrl(channel);
+        if (extractYangshipinPid(url) != null) return "yangshipin.cn";
+        if (isCctvDirectStream(url) || extractCctvWebChannel(url) != null) return "tv.cctv.com";
+        if (isWebViewSource(url)) {
+            String page = webViewPage(url);
+            return page == null ? "" : CjsPluginRuntime.componentForUrl(page);
+        }
+        return "";
+    }
+
+    private void scheduleCjsComponentCheck(final String component) {
+        // Let cached scripts/native code start playback first. The descriptor is tiny, but
+        // even a DNS timeout must not lengthen the cold-start path on an Android 4.4 TV.
+        root.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (cjsPluginInstallInProgress
+                        || !CjsPluginRuntime.needsComponentCheck(component)) return;
+                cjsPluginInstallInProgress = true;
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        boolean updated = false;
+                        try {
+                            updated = CjsPluginRuntime.ensureComponentCurrent(component);
+                        } catch (Throwable error) {
+                            // A version probe must never make a cached plugin unavailable.
+                            CjsPluginRuntime.componentCheckFailed(component);
+                            Log.w(TAG, "Component update check failed: " + component, error);
+                        }
+                        final boolean updateAvailable = updated;
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                cjsPluginInstallInProgress = false;
+                                if (pendingCjsChannelIndex >= 0) {
+                                    startChannel(currentChannelIndex);
+                                    return;
+                                }
+                                if (updateAvailable) {
+                                    showChannelBar(currentChannel().name,
+                                            "播放插件已更新，重启后启用");
+                                }
+                            }
+                        });
+                    }
+                }, "cjs-component-check").start();
+            }
+        }, 250L);
+    }
+
+    private void installCjsPluginAndStart(int channelIndex, String channelName, final String siteId) {
+        pendingCjsChannelIndex = channelIndex;
+        showLoading(channelName, "正在下载播放兼容插件");
+        showChannelBar(channelName, "首次使用正在安装兼容插件");
+        if (cjsPluginInstallInProgress) {
+            return;
+        }
+        cjsPluginInstallInProgress = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String installedVersion = null;
+                Throwable failure = null;
+                try {
+                    if (CjsSource.isSource(siteId)) {
+                        CjsPluginRuntime.prepareSource(siteId);
+                        installedVersion = "CJS 频道入口";
+                    } else if (siteId.length() == 0) {
+                        CjsPluginRuntime.ensureCatalog();
+                        installedVersion = "站点目录";
+                    } else {
+                        installedVersion = CjsPluginRuntime.installOrUpdate(siteId);
+                    }
+                } catch (Throwable error) {
+                    failure = error;
+                    Log.e(TAG, "Unable to install CJS plugin", error);
+                }
+                final String version = installedVersion;
+                final Throwable error = failure;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        cjsPluginInstallInProgress = false;
+                        int requestedIndex = pendingCjsChannelIndex;
+                        pendingCjsChannelIndex = -1;
+                        if (requestedIndex < 0) return;
+                        if (error != null) {
+                            abortChannelSwitchAnimation();
+                            hideLoading();
+                            String reason = error.getMessage();
+                            showChannelBar(currentChannel().name,
+                                    "兼容插件安装失败" + (reason == null ? "" : "：" + reason));
+                            return;
+                        }
+                        Log.i(TAG, "CJS plugin activated version=" + version);
+                        startChannel(currentChannelIndex);
+                    }
+                });
+            }
+        }, "cjs-plugin-install").start();
     }
 
     private boolean isActiveCctvWebSource() {
@@ -6285,7 +6483,7 @@ public final class MainActivity extends Activity {
                 h264SpsCompatibility, cctvLiveEdgeHoldBackSegments(),
                 currentCatalogSource() != ChannelCatalog.SOURCE_CUSTOM
                         || activeEmbeddedCctvResolver || activeEmbeddedYangshipinResolver,
-                resolutionMode,
+                playbackResolutionMode(),
                 cctvStartupDownloadSegments(), cctvStartupDecryptSegments());
         next.start();
         proxy = next;
@@ -6550,7 +6748,7 @@ public final class MainActivity extends Activity {
         final boolean directCustomSource = currentCatalogSource()
                 == ChannelCatalog.SOURCE_CUSTOM;
         final String configuredUrl = directCustomSource
-                ? channel.sourceUrl(currentSourceIndex) : channel.url;
+                ? configuredPlaybackUrl(channel) : channel.url;
         if (configuredUrl == null) {
             abortChannelSwitchAnimation();
             hideLoading();
@@ -6564,7 +6762,18 @@ public final class MainActivity extends Activity {
         if (!Ku9ScriptResolver.isKu9Source(configuredUrl) && ku9ScriptResolver != null) {
             ku9ScriptResolver.cancel();
         }
+        String cjsSitePage = webViewPage(configuredUrl);
+        if (cjsSitePage != null && !CjsPluginRuntime.supportsSite(cjsSitePage)) {
+            cjsSitePage = null;
+        }
+        if (cjsSitePage == null && cjsSiteResolver != null) {
+            cjsSiteResolver.cancel();
+        }
         if (isWebViewSource(configuredUrl)) {
+            if (cjsSitePage != null) {
+                resolveCjsSite(channel, cjsSitePage, requestId);
+                return;
+            }
             if (rejectUnsupportedWebViewSource(channel, configuredUrl)) {
                 return;
             }
@@ -6593,6 +6802,10 @@ public final class MainActivity extends Activity {
             resolveKu9Source(channel, configuredUrl, requestId);
             return;
         }
+        if (!directCustomSource) {
+            resolveCjsSite(channel, "https://tv.cctv.com/live/" + channel.streamId + "/", requestId);
+            return;
+        }
         updateLoadingStatus(directCustomSource
                 ? customSourceStatus("正在连接") : "正在获取高清线路");
         showChannelBar(channel.name, directCustomSource
@@ -6603,13 +6816,7 @@ public final class MainActivity extends Activity {
                 String streamUrl = configuredUrl;
                 boolean directHttpMedia = directCustomSource
                         && isDirectHttpMediaSource(streamUrl);
-                if (!directCustomSource) {
-                    try {
-                        streamUrl = liveUrlResolver.resolve(channel);
-                    } catch (IOException error) {
-                        Log.w(TAG, "Falling back to static HLS for " + channel.name, error);
-                    }
-                } else if (HttpStreamResolver.shouldResolve(streamUrl)) {
+                if (HttpStreamResolver.shouldResolve(streamUrl)) {
                     try {
                         HttpStreamResolver.Result result = HttpStreamResolver.resolve(streamUrl);
                         streamUrl = result.url;
@@ -6693,34 +6900,8 @@ public final class MainActivity extends Activity {
 
     private void resolveEmbeddedCctvUrl(final Channel playbackChannel,
             final Channel resolverChannel, final int requestId) {
-        updateLoadingStatus("正在获取央视网直播线路");
-        showChannelBar(playbackChannel.name, "正在解析央视网源");
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                String streamUrl = resolverChannel.url;
-                try {
-                    streamUrl = liveUrlResolver.resolve(resolverChannel);
-                } catch (IOException error) {
-                    Log.w(TAG, "Using built-in CCTV fallback for "
-                            + resolverChannel.streamId, error);
-                }
-                final String resolvedUrl = streamUrl;
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (requestId != playRequestId) {
-                            return;
-                        }
-                        if (resolvedUrl == null || resolvedUrl.length() == 0) {
-                            switchCustomSource(1, true, "央视网解析失败");
-                            return;
-                        }
-                        startResolvedPlayer(playbackChannel, resolvedUrl);
-                    }
-                });
-            }
-        }, "embedded-cctv-resolve").start();
+        resolveCjsSite(playbackChannel,
+                "https://tv.cctv.com/live/" + resolverChannel.streamId + "/", requestId);
     }
 
     private void startResolvedPlayer(Channel channel, String streamUrl) {
@@ -6750,6 +6931,40 @@ public final class MainActivity extends Activity {
                         abortChannelSwitchAnimation();
                         hideLoading();
                         showChannelBar(channel.name, reason);
+                    }
+                });
+    }
+
+    private void resolveCjsSite(final Channel channel, final String pageUrl,
+            final int requestId) {
+        updateLoadingStatus("正在执行在线站点插件");
+        showChannelBar(channel.name, customSourceStatus("正在解析站点视频源"));
+        cjsSiteResolver.resolve(requestId, channel.name, pageUrl, playbackResolutionMode(),
+                activeCjsSource == null ? "" : activeCjsSource.url,
+                new CjsSiteResolver.Callback() {
+                    @Override
+                    public void onResolved(int resolvedRequestId, CjsSiteResolver.Result result) {
+                        if (resolvedRequestId != playRequestId) {
+                            return;
+                        }
+                        if (proxy != null) {
+                            proxy.setWebRequestHeaders(result.referer,
+                                    "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36", null);
+                            if (result.transformer.length() > 0) {
+                                proxy.configureCjsTransformer(result.transformer,
+                                        result.transformerArgs, result.mediaHosts);
+                            }
+                        }
+                        startResolvedPlayer(channel, result.url, result.directDataSource);
+                    }
+
+                    @Override
+                    public void onFailed(int failedRequestId, String reason) {
+                        if (failedRequestId != playRequestId) {
+                            return;
+                        }
+                        Log.w(TAG, "CJS site resolve failed for " + pageUrl + ": " + reason);
+                        switchCustomSource(1, true, "站点插件解析失败");
                     }
                 });
     }
@@ -6829,6 +7044,14 @@ public final class MainActivity extends Activity {
             }
         }
         return null;
+    }
+
+    private static String webViewPage(String configuredUrl) {
+        Uri pageUri = parseWebViewPageUri(configuredUrl);
+        if (pageUri == null || pageUri.getHost() == null) {
+            return null;
+        }
+        return pageUri.toString();
     }
 
     private static Uri parseWebViewPageUri(String configuredUrl) {
@@ -7135,7 +7358,6 @@ public final class MainActivity extends Activity {
                 scheduleVideoInfoRefresh();
                 scheduleVideoRenderWatchdog(channel, streamUrl, nextPlayer,
                         sourceRequestId, softwareDecode);
-                prefetchNearbyChannels(channel);
                 if (!isWaitingForIncomingFrame(sourceRequestId)) {
                     hideLoading();
                 }
@@ -7160,6 +7382,9 @@ public final class MainActivity extends Activity {
                     Log.i(TAG, "First video frame rendered decoder="
                             + (softwareDecode ? "software" : "hardware")
                             + " channel=" + channel.name);
+                    String component = pendingCjsComponentCheck;
+                    pendingCjsComponentCheck = "";
+                    if (component.length() > 0) scheduleCjsComponentCheck(component);
                 } else if (what == IMediaPlayer.MEDIA_INFO_BUFFERING_START) {
                     buffering = true;
                     bufferingStartedAt = SystemClock.elapsedRealtime();
@@ -7326,6 +7551,7 @@ public final class MainActivity extends Activity {
     private boolean isDirectThirdPartyRecordingSource(String streamUrl) {
         return currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM
                 && !activeEmbeddedCctvResolver && !activeEmbeddedYangshipinResolver
+                && !activeEmbeddedCjsResolver
                 && webStreamHeaders == null && isHttpHlsSource(streamUrl)
                 && !HlsProxyServer.needsSpecialDecrypt(streamUrl);
     }
@@ -8472,39 +8698,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void prefetchNearbyChannels(final Channel playingChannel) {
-        final ChannelCatalog.Group group = currentGroup();
-        if (group.source != ChannelCatalog.SOURCE_CCTV_WEB
-                || group.channels[currentChannelIndex] != playingChannel) {
-            return;
-        }
-        final Channel previous = group.channels[ChannelCatalog.wrapIndex(
-                group.channels, currentChannelIndex - 1)];
-        final Channel next = group.channels[ChannelCatalog.wrapIndex(
-                group.channels, currentChannelIndex + 1)];
-        final int requestId = playRequestId;
-        channelBar.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (requestId != playRequestId) {
-                    return;
-                }
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        prefetchChannel(next);
-                    }
-                }, "channel-url-prefetch-next").start();
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        prefetchChannel(previous);
-                    }
-                }, "channel-url-prefetch-previous").start();
-            }
-        }, CHANNEL_PREFETCH_DELAY_MS);
-    }
-
     private void persistPlayingChannel(Channel channel, int requestId) {
         if (shouldFreezeReceiverChannelHistory() || requestId != playRequestId
                 || currentGroupIndex < 0
@@ -8595,14 +8788,6 @@ public final class MainActivity extends Activity {
             }
         }
         crashRecoveryBound = false;
-    }
-
-    private void prefetchChannel(Channel channel) {
-        try {
-            liveUrlResolver.resolve(channel);
-        } catch (IOException error) {
-            Log.d(TAG, "Unable to prefetch " + channel.streamId, error);
-        }
     }
 
     private void switchRelative(int offset) {
@@ -9520,14 +9705,8 @@ public final class MainActivity extends Activity {
     }
 
     private String yangshipinDefinition(Channel channel) {
-        if (RESOLUTION_MODE_LOW.equals(resolutionMode)) {
-            return "hd";
-        }
-        if (RESOLUTION_MODE_MEDIUM.equals(resolutionMode)
-                || "shd".equals(channel.yangshipinMaxDefinition)) {
-            return "shd";
-        }
-        return "fhd";
+        return CjsPluginRuntime.quality("yangshipin.cn", playbackResolutionMode(),
+                channel.yangshipinMaxDefinition);
     }
 
     private void showLoading(final String channel, final String status) {
@@ -11567,6 +11746,9 @@ public final class MainActivity extends Activity {
         }
         if (ku9ScriptResolver != null) {
             ku9ScriptResolver.destroy();
+        }
+        if (cjsSiteResolver != null) {
+            cjsSiteResolver.destroy();
         }
         if (proxy != null) {
             proxy.close();

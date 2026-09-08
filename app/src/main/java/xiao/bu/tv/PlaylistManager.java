@@ -98,8 +98,8 @@ final class PlaylistManager {
         return GithubProxy.apply(context, BuildConfig.RECOMMENDED_WEBVIEW_SOURCE_URL);
     }
 
-    private String getRecommendedLiveTvUrl() {
-        return GithubProxy.apply(context, RECOMMENDED_LIVE_TV_RAW_URL);
+    private static String getRecommendedLiveTvUrl() {
+        return GithubProxy.apply(RECOMMENDED_LIVE_TV_RAW_URL);
     }
 
     String getPlaylistUrl() {
@@ -711,7 +711,7 @@ final class PlaylistManager {
             int challengeCount) throws IOException {
         String requestUrl = GithubProxy.apply(context, sourceUrl);
         URL url = new URL(requestUrl);
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        HttpURLConnection connection = NetworkClient.open(url);
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(PLAYLIST_READ_TIMEOUT_MS);
         connection.setInstanceFollowRedirects(true);

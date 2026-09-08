@@ -49,7 +49,7 @@ final class CarrierNetworkRoute implements Closeable {
                 return connection;
             }
         }
-        return (HttpURLConnection) new URL(sourceUrl).openConnection();
+        return NetworkClient.open(new URL(sourceUrl));
     }
 
     @Override

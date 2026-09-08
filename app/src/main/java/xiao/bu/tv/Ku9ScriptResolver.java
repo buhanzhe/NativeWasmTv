@@ -16,10 +16,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.json.JSONTokener;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,7 +35,7 @@ import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Executes Ku9-style source scripts in an isolated, off-screen WebView. */
+/** Runs Ku9 scripts in QuickJS on legacy Android, or an isolated WebView on API 21+. */
 final class Ku9ScriptResolver {
     interface Callback {
         void onResolved(int requestId, Result result);
@@ -56,7 +54,8 @@ final class Ku9ScriptResolver {
     }
 
     private static final String TAG = "Ku9ScriptResolver";
-    private static final int MIN_ANDROID_API = Build.VERSION_CODES.LOLLIPOP;
+    private final boolean nativeExecution = Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final long TIMEOUT_MS = 30000L;
     private static final long MIN_PLAYLIST_REFRESH_MS = 2000L;
@@ -127,16 +126,12 @@ final class Ku9ScriptResolver {
     void resolve(final int requestId, final String channelName, final String sourceUrl,
             final Callback callback) {
         cancel();
-        if (Build.VERSION.SDK_INT < MIN_ANDROID_API) {
-            callback.onFailed(requestId, "酷9 JS 源仅支持 Android 5.0 及以上");
-            return;
-        }
         final int requestGeneration = generation;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    final String script = scriptLoader.load(sourceUrl);
+                    final String script = scriptLoader.load(sourceUrl, !nativeExecution);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -225,6 +220,11 @@ final class Ku9ScriptResolver {
     }
 
     private void startExecution(Pending request) {
+        if (nativeExecution) {
+            pending = request;
+            execute(request);
+            return;
+        }
         try {
             ensureWebView(request);
         } catch (IOException error) {
@@ -242,7 +242,28 @@ final class Ku9ScriptResolver {
         if (pending != request || request.generation != generation) {
             return;
         }
-        webView.evaluateJavascript(buildJavascript(request), null);
+        if (nativeExecution) {
+            final Pending work = request;
+            handler.removeCallbacks(timeout);
+            handler.postDelayed(timeout, TIMEOUT_MS);
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    Bridge host = new Bridge(work);
+                    long started = android.os.SystemClock.elapsedRealtime();
+                    try {
+                        NativeQuickJs.execute(buildJavascript(work), host);
+                        if (!host.terminal && !host.isCancelled()) host.fail("脚本没有返回播放结果");
+                    } catch (Throwable error) {
+                        if (!host.isCancelled()) host.fail("QuickJS: " + safeMessage(error));
+                    } finally {
+                        Log.i(TAG, "QuickJS channel=" + work.channelName + " elapsedMs="
+                                + (android.os.SystemClock.elapsedRealtime() - started));
+                    }
+                }
+            }, "ku9-quickjs").start();
+        } else {
+            webView.evaluateJavascript(buildJavascript(request), null);
+        }
     }
 
     private String buildJavascript(Pending request) {
@@ -254,11 +275,15 @@ final class Ku9ScriptResolver {
         }
         // Ku9 scripts and the legacy RSA module intentionally create a few globals,
         // so this compatibility scope must use the browser's normal sloppy mode.
-        return "(function(){"
+        return (nativeExecution
+                ? "var NtvKu9Bridge=NtvCjsBridge;window.navigator=window.navigator||{appName:'Netscape'};"
+                : "") + "(function(){"
                 + "function parseJson(v,d){try{return JSON.parse(v);}catch(e){return d;}}"
                 + "function headerJson(v){return typeof v==='string'?v:JSON.stringify(v||{});}"
                 + "function parseStored(v){if(v===null||v===undefined||v==='')return null;return parseJson(v,v);}"
-                + "function uri(v){var a=document.createElement('a'),u=String(v||'');a.href=u;"
+                + "function uri(v){if(typeof NtvKu9Bridge.parseUri==='function')"
+                + "return parseJson(NtvKu9Bridge.parseUri(String(v||'')),{});"
+                + "var a=document.createElement('a'),u=String(v||'');a.href=u;"
                 + "var q=a.search||'',p={},s=q.charAt(0)==='?'?q.substring(1):q,parts=s?s.split('&'):[];"
                 + "for(var i=0;i<parts.length;i++){var pair=parts[i].split('='),k=decodeURIComponent(pair.shift()||''),"
                 + "val=decodeURIComponent(pair.join('=').replace(/\\+/g,' '));if(k)p[k]=val;}"
@@ -294,6 +319,8 @@ final class Ku9ScriptResolver {
                 + "rc4Decrypt:function(d,k,i,o,c){return ku9Rc4(true,d,k,i,o);},"
                 + "log:function(v){NtvKu9Bridge.log(String(v));}"
                 + "};"
+                + Ku9JsContract.BROWSER_GLOBALS
+                + "window.cjs=window.ku9;"
                 + ES5_COMPAT
                 + "try{"
                 + moduleBootstrap(request.script)
@@ -376,40 +403,20 @@ final class Ku9ScriptResolver {
 
     private void complete(Pending request, String json) {
         try {
-            Object value = new JSONTokener(json == null ? "" : json).nextValue();
-            String url = null;
-            String m3u8 = null;
-            if (value instanceof String) {
-                String text = ((String) value).trim();
-                if (text.startsWith("#EXTM3U")) {
-                    m3u8 = text;
-                } else {
-                    url = text;
-                }
-            } else if (value instanceof JSONObject) {
-                JSONObject object = (JSONObject) value;
-                url = firstNonEmpty(object.optString("url", ""),
-                        object.optString("playUrl", ""), object.optString("playurl", ""));
-                m3u8 = firstNonEmpty(object.optString("m3u8", ""),
-                        object.optString("content", ""));
-                if (TextUtils.isEmpty(url)) {
-                    JSONArray urls = object.optJSONArray("urls");
-                    if (urls != null && urls.length() > 0) {
-                        url = urls.optString(0, "");
-                    }
-                }
-            }
+            Ku9JsContract.Output output = Ku9JsContract.parse(json);
+            String url = output.url;
+            String m3u8 = output.playlist;
             if (!TextUtils.isEmpty(m3u8) && m3u8.trim().startsWith("#EXTM3U")) {
-                if (containsIpv6Literal(m3u8) && !hasUsableIpv6Network()) {
+                if (!nativeExecution && containsIpv6Literal(m3u8) && !hasUsableIpv6Network()) {
                     throw new IOException("当前网络没有 IPv6，无法播放此频道");
                 }
                 completeLivePlaylist(request, m3u8.trim() + "\n");
                 return;
             } else if (!TextUtils.isEmpty(url)) {
-                if (containsIpv6Literal(url) && !hasUsableIpv6Network()) {
+                if (!nativeExecution && containsIpv6Literal(url) && !hasUsableIpv6Network()) {
                     throw new IOException("当前网络没有 IPv6，无法播放此频道");
                 }
-                Result result = new Result(url.trim(), isDirectDataSource(url));
+                Result result = new Result(url.trim(), Ku9JsContract.isDirectDataSource(url));
                 clearPending();
                 request.callback.onResolved(request.requestId, result);
                 return;
@@ -427,6 +434,12 @@ final class Ku9ScriptResolver {
             playlistServer.start();
         }
         playlistServer.update(content);
+        if (nativeExecution) {
+            handler.removeCallbacks(timeout);
+            handler.removeCallbacks(refreshPlaylist);
+            if (!content.contains("#EXT-X-ENDLIST"))
+                handler.postDelayed(refreshPlaylist, playlistRefreshDelay(content));
+        }
         if (webView != null) {
             webView.removeCallbacks(timeout);
             webView.removeCallbacks(refreshPlaylist);
@@ -439,7 +452,7 @@ final class Ku9ScriptResolver {
         }
     }
 
-    private static long playlistRefreshDelay(String content) {
+    static long playlistRefreshDelay(String content) {
         Matcher matcher = TARGET_DURATION.matcher(content);
         long targetMs = matcher.find() ? (long) parseInt(matcher.group(1)) * 500L
                 : MAX_PLAYLIST_REFRESH_MS;
@@ -490,6 +503,11 @@ final class Ku9ScriptResolver {
         }
         if (request.initialCompleted) {
             Log.w(TAG, reason + "; retaining the last live playlist");
+            if (nativeExecution) {
+                handler.removeCallbacks(timeout);
+                handler.removeCallbacks(refreshPlaylist);
+                handler.postDelayed(refreshPlaylist, MAX_PLAYLIST_REFRESH_MS);
+            }
             if (webView != null) {
                 webView.removeCallbacks(refreshPlaylist);
                 webView.postDelayed(refreshPlaylist, MAX_PLAYLIST_REFRESH_MS);
@@ -502,6 +520,8 @@ final class Ku9ScriptResolver {
     }
 
     private void clearPending() {
+        handler.removeCallbacks(timeout);
+        handler.removeCallbacks(refreshPlaylist);
         if (webView != null) {
             webView.removeCallbacks(timeout);
             webView.removeCallbacks(refreshPlaylist);
@@ -540,8 +560,37 @@ final class Ku9ScriptResolver {
         }
     }
 
-    private final class Bridge {
+    private final class Bridge implements NativeQuickJs.Host {
         private final Pending request;
+        private boolean terminal;
+
+        @Override public boolean isCancelled() {
+            return request.generation != generation || pending != request || Thread.currentThread().isInterrupted();
+        }
+
+        @Override public String invoke(int operation, String[] args) throws Exception {
+            if (isCancelled()) throw new IOException("Ku9 request cancelled");
+            switch (operation) {
+                case 0: return get(args[0], args[1]);
+                case 1: return post(args[0], args[1], args[2]);
+                case 2: return request(args[0], args[1], args[2], args[3], Boolean.parseBoolean(args[4]));
+                case 3: return md5(args[0]);
+                case 4: log(args[0]); return null;
+                case 5: complete(args[0]); return null;
+                case 6: fail(args[0]); return null;
+                case 7: return getCache(args[0]);
+                case 8: setCache(args[0], args[1], Double.parseDouble(args[2])); return null;
+                case 9: return digest(args[0], args[1]);
+                case 10: return encodeBase64(args[0]);
+                case 11: return decodeBase64(args[0]);
+                case 12: return String.valueOf(toTimestamp(args[0], args[1], args[2]));
+                case 13: return toDate(Double.parseDouble(args[0]), args[1], args[2]);
+                case 14: return formatDateTime(args[0], args[1], args[2],
+                        Double.parseDouble(args[3]), args[4], args[5]);
+                case 15: return parseUri(args[0]);
+                default: throw new IOException("Unknown Ku9 host operation");
+            }
+        }
 
         Bridge(Pending request) {
             this.request = request;
@@ -586,6 +635,31 @@ final class Ku9ScriptResolver {
                     : System.currentTimeMillis() + Math.max(0L, (long) ttlMs);
             cache.edit().putString(key, value == null ? "" : value)
                     .putLong(key + "__expires", expiresAt).apply();
+        }
+
+        // Native equivalent of the browser anchor parser used by ku9.Uri.
+        private String parseUri(String value) throws Exception {
+            java.net.URI uri = java.net.URI.create(value);
+            String path = uri.getRawPath();
+            if (path == null || path.length() == 0) path = "/";
+            String query = uri.getRawQuery(), fragment = uri.getRawFragment();
+            JSONObject params = new JSONObject();
+            if (query != null && query.length() > 0) {
+                for (String part : query.split("&")) {
+                    int equals = part.indexOf('=');
+                    String key = equals < 0 ? part : part.substring(0, equals);
+                    String val = equals < 0 ? "" : part.substring(equals + 1);
+                    if (key.length() > 0) params.put(java.net.URLDecoder.decode(key, "UTF-8"),
+                            java.net.URLDecoder.decode(val, "UTF-8"));
+                }
+            }
+            return new JSONObject().put("Scheme", uri.getScheme() == null ? "" : uri.getScheme())
+                    .put("Host", uri.getHost() == null ? "" : uri.getHost())
+                    .put("Port", uri.getPort()).put("FullPath", path)
+                    .put("Path", path.substring(0, path.lastIndexOf('/') + 1))
+                    .put("Query", query == null ? "" : "?" + query)
+                    .put("Fragment", fragment == null ? "" : "#" + fragment)
+                    .put("Params", params).toString();
         }
 
         @JavascriptInterface
@@ -665,6 +739,8 @@ final class Ku9ScriptResolver {
 
         @JavascriptInterface
         public void complete(final String resultJson) {
+            if (nativeExecution && terminal) return;
+            if (nativeExecution) terminal = true;
             if (pending != request) {
                 return;
             }
@@ -680,6 +756,8 @@ final class Ku9ScriptResolver {
 
         @JavascriptInterface
         public void fail(final String reason) {
+            if (nativeExecution && terminal) return;
+            if (nativeExecution) terminal = true;
             if (pending != request) {
                 return;
             }

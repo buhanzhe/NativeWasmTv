@@ -203,7 +203,7 @@ function renderPageState() {
   for (var i = 0; i < checked.length; i++)
     document.getElementById(checked[i]).checked = s[checked[i]] === true;
   document.getElementById("videoScale").value = s.videoScaleMode || "fit";
-  document.getElementById("resolutionMode").value = s.resolutionMode || "high";
+  renderSiteQualities();
   document.getElementById("uiScaleMode").value = s.uiScaleMode || "auto";
   var display = state.display || {},
     size = Number(display.diagonalInches) || 0,
@@ -217,4 +217,5 @@ function renderPageState() {
   syncLegacySelectButtons();
 }
 setupLegacyDateTimeSelects();
+function renderSiteQualities(){var select=document.getElementById('resolutionMode'),modes=state.settings.siteQualities||['high','medium','low'],names={high:'最高',medium:'适中',low:'最低'};select.innerHTML='';for(var i=0;i<modes.length&&i<3;i++){var option=document.createElement('option');option.value=modes[i];option.textContent=names[modes[i]]||modes[i];select.appendChild(option)}var preferred=state.settings.resolutionMode||'high';select.value=modes.indexOf(preferred)>=0?preferred:modes[0];select.disabled=modes.length===1}
 startPage();

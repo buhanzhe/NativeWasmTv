@@ -56,38 +56,7 @@
       </section>
       <section class="browser-section">
         <div class="section-head"><h2>GitHub 加速</h2></div>
-        <div class="browser-settings-list">
-          <div class="browser-setting-row">
-            <div class="browser-setting-copy">
-              <b>频道源下载方式</b
-              ><span id="githubProxyHint">Android 4.1 及以上默认使用 gh-proxy.com</span>
-            </div>
-            <select
-              id="githubProxyMode"
-              aria-label="GitHub 加速"
-              onchange="githubProxyModeChanged()"
-            >
-              <option value="gh_proxy">gh-proxy.com（推荐）</option>
-              <option value="legacy">gh.3w.pm（Android 4.0）</option>
-              <option value="direct">GitHub 直连</option>
-              <option value="custom">自定义加速地址</option>
-            </select>
-          </div>
-          <div id="githubProxyCustomRow" class="browser-setting-row initially-hidden">
-            <div class="browser-setting-copy">
-              <b>自定义地址</b><span>填写代理前缀，可用 {url} 表示原始 GitHub 地址</span>
-            </div>
-            <div class="github-proxy-input">
-              <input
-                id="githubProxyCustomPrefix"
-                type="url"
-                inputmode="url"
-                placeholder="例如 https://example.com/"
-              /><button onclick="saveGithubProxy()">保存</button>
-            </div>
-          </div>
-        </div>
-        <div class="config-note">频道源和 Ku9 在线脚本使用此设置；普通直播地址不会经过代理。</div>
+        <p class="hint">GitHub 频道源、在线脚本和插件统一使用 https://gh-proxy.com。</p>
       </section>
       <section class="config-epg-section">
         <div class="section-head"><h2>节目单</h2></div>

@@ -25,3 +25,18 @@
 # Do not suppress warnings for the rest of AndroidX or our application code.
 -dontwarn androidx.webkit.internal.ApiHelperForTiramisu
 -dontwarn androidx.webkit.internal.StartupApiFeature
+
+-keep class xiao.bu.tv.NativeQuickJs { *; }
+-keep class xiao.bu.tv.LegacyTlsSocket { *; }
+-keep interface xiao.bu.tv.NativeQuickJs$Host { *; }
+-keepclassmembers class * implements xiao.bu.tv.NativeQuickJs$Host {
+    public java.lang.String invoke(int, java.lang.String[]);
+    public boolean isCancelled();
+}
+
+# OkHttp 3.12 uses optional annotations and probes Conscrypt before loading it.
+# Keep the package-relative publicsuffixes.gz lookup working after obfuscation.
+-dontwarn javax.annotation.**
+-dontwarn org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement
+-dontwarn org.conscrypt.**
+-keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
