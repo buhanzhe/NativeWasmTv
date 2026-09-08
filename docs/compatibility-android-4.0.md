@@ -38,6 +38,11 @@ TLS instrumentation passed three real Gxtv API requests, a rejecting Java trust
 manager, a stalled handshake timeout and concurrent close cancellation. The three
 API requests shared one TLS handshake, confirming HTTP connection reuse.
 
+After removing the Android 4.0-specific HTTP accelerator branch, API 15 also
+downloaded the Gxtv manifest, runtime and ARM32 SO via the default HTTPS GitHub
+accelerator. Both file SHA-256 checks passed (20,655 payload bytes in 1,747 ms).
+No legacy-address migration is performed.
+
 The signed release APK was installed and force-stopped/relaunched three times with
 the plugin already downloaded. Each run resolved the Guangxi API afresh and played:
 

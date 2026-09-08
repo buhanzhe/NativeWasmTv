@@ -3,7 +3,6 @@ package xiao.bu.tv;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Build;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -47,8 +46,6 @@ final class PlaylistManager {
     private static final String MOBILE_MERGED_FILE = "mobile-merged-playlist.m3u";
     private static final String IMPORT_DIRECTORY = "imported-playlists";
     private static final String BUILT_IN_PLAYLIST = "builtin_channels.txt";
-    private static final String RECOMMENDED_LIVE_TV_PROXY_URL =
-            "https://gh-proxy.com/raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt";
     private static final String RECOMMENDED_LIVE_TV_RAW_URL =
             "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt";
     private static final int MAX_SOURCES = 20;
@@ -102,9 +99,7 @@ final class PlaylistManager {
     }
 
     private static String getRecommendedLiveTvUrl() {
-        return Build.VERSION.SDK_INT <= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
-                ? GithubProxy.apply(RECOMMENDED_LIVE_TV_RAW_URL)
-                : RECOMMENDED_LIVE_TV_PROXY_URL;
+        return GithubProxy.apply(RECOMMENDED_LIVE_TV_RAW_URL);
     }
 
     String getPlaylistUrl() {

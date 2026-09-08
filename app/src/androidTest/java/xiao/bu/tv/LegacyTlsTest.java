@@ -22,6 +22,42 @@ final class LegacyTlsTest {
     private static void check(boolean value, String message) {
         if (!value) throw new AssertionError(message);
     }
+    static String githubDownload(Context context) throws Exception {
+        NetworkClient.initialize(context);
+        long started = SystemClock.elapsedRealtime();
+        String manifestUrl = "https://raw.githubusercontent.com/TvWasm/cjs/main/sites/tv.gxtv.cn/plugin.json";
+        String url = GithubProxy.apply(manifestUrl);
+        check(url.equals("https://gh-proxy.com/" + manifestUrl), "Default HTTPS accelerator");
+        org.json.JSONObject manifest = new org.json.JSONObject(Ku9HttpClient.getText(url, null, 1024 * 1024));
+        org.json.JSONArray files = manifest.getJSONArray("files");
+        int downloaded = 0, total = 0;
+        for (int i = 0; i < files.length(); i++) {
+            org.json.JSONObject file = files.getJSONObject(i);
+            if (!"all".equals(file.getString("abi")) && !BuildConfig.CJS_PLUGIN_ABI.equals(file.getString("abi"))) continue;
+            HttpURLConnection request = NetworkClient.open(new URL(GithubProxy.apply(file.getString("url"))));
+            try {
+                check(request.getResponseCode() == 200, "Plugin download HTTP status");
+                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+                java.io.InputStream input = request.getInputStream();
+                try {
+                    byte[] buffer = new byte[8192];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        total += count;
+                        check(total < 16 * 1024 * 1024, "Plugin download size limit");
+                        digest.update(buffer, 0, count);
+                    }
+                } finally { input.close(); }
+                StringBuilder hash = new StringBuilder();
+                for (byte value : digest.digest()) hash.append(String.format(java.util.Locale.US, "%02x", value & 255));
+                check(file.getString("sha256").equals(hash.toString()), "Plugin integrity: " + file.getString("name"));
+                downloaded++;
+            } finally { request.disconnect(); }
+        }
+        check(downloaded == 2, "Runtime and native plugin were not both downloaded");
+        return "PASS GitHub HTTPS: manifest, runtime and " + BuildConfig.CJS_PLUGIN_ABI
+                + " SO verified; " + total + " bytes in " + (SystemClock.elapsedRealtime() - started) + " ms\n";
+    }
     static String run(Context context) throws Exception {
         NetworkClient.initialize(context);
         long start = SystemClock.elapsedRealtime();

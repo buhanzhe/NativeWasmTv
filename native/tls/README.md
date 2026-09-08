@@ -66,3 +66,16 @@ adb -s emulator-5564 shell am instrument -w -e tls true xiao.bu.tv.test/xiao.bu.
 The explicit TLS test covers repeated real Gxtv API requests, rejection by the
 Java trust manager, handshake timeout and concurrent cancellation against a
 local stalled server. See `docs/compatibility-android-4.0.md` for playback evidence.
+
+GitHub downloads use the same default `https://gh-proxy.com/` accelerator on all
+Android versions. The API 14/15 HTTP routing branch and old accelerator prefix
+handling have been removed. There is no migration of previously saved addresses.
+The default accelerator can be verified on API 15 with:
+
+```powershell
+adb -s emulator-5564 shell am instrument -w -e github true xiao.bu.tv.test/xiao.bu.tv.QuickJsInstrumentation
+```
+
+This test uses the application HTTP stack to download the current Gxtv manifest,
+runtime and matching-ABI native module
+from the default HTTPS accelerator, and checks both files against manifest SHA-256.

@@ -94,7 +94,7 @@ final class AutoUpdater {
     }
 
     private UpdateInfo loadUpdateInfo() throws IOException, JSONException {
-        // API 14/15 use the HTTP accelerator because their TLS stack cannot reach gh-proxy.com.
+        // All versions use the default HTTPS accelerator through the shared TLS stack.
         HttpURLConnection connection = openConnection(GithubProxy.apply(VERSION_URL)
                 + "?_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
