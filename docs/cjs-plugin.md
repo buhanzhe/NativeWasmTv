@@ -42,7 +42,7 @@ cached starts use the local site immediately. The protocol 4 catalog requires a 
 
 The old CCTV HTTP implementation has moved to the site's JS. Optional `ttlSec` (max 600)
 keeps resolved URLs in a bounded cache keyed by site, script digest, URL and quality, so
-returning to the channel can skip WebView/API work. No cross-site request prefetch runs.
+returning to the channel can skip script/API work. No cross-site request prefetch runs.
 
 See [full protocol](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol.md).
 
@@ -58,3 +58,13 @@ See [full protocol](https://github.com/TvWasm/cjs/blob/main/docs/plugin-protocol
   terminated the process. This case remains unverified.
 - Additional APK architecture-switch and cache-repair device tests were not completed:
   automatic approval rejected the covering installation command without a detailed reason.
+
+## QuickJS execution
+
+CCTV/Gxtv CJS `main(item)` now runs in a bundled QuickJS interpreter on a worker thread,
+without creating an offscreen WebView. JSON arguments/results and cjs HTTP/MD5 helpers
+keep the existing plugin contract. The independent site SO files do not change.
+Each runtime has memory/stack limits and cancellation/deadline handling; it is released
+after execution. Yangshipin's browser authorization and the separate Ku9 resolver remain
+on their existing paths. See [API 15 test report](compatibility-android-4.0.md) and
+[engine/build documentation](../native/quickjs/README.md).

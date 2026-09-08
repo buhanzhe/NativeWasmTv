@@ -3,7 +3,9 @@ param(
     [string]$OutputDirectory,
     [string]$JavaHome,
     [string]$ReleaseNotes = '修复问题并提升播放体验。',
-    [switch]$SkipClean
+    [switch]$SkipClean,
+    [string]$NdkRoot,
+    [switch]$RebuildQuickJs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -138,6 +140,15 @@ $apksigner = Find-BuildTool $sdkDirectory 'apksigner.bat'
 $aapt = Find-BuildTool $sdkDirectory 'aapt.exe'
 
 $gradleTasks = @()
+if ($RebuildQuickJs -or $NdkRoot) {
+    if (!$NdkRoot) { $NdkRoot = $env:ANDROID_NDK_HOME }
+    & (Join-Path $PSScriptRoot 'build-quickjs.ps1') -NdkRoot $NdkRoot
+}
+foreach ($abi in @('armeabi-v7a','arm64-v8a')) {
+    if (!(Test-Path -LiteralPath (Join-Path $repoRoot "app/src/main/libs/$abi/libntvquickjs.so"))) {
+        throw 'QuickJS library missing. Run scripts/build-quickjs.ps1 -NdkRoot <NDK-r14b> first.'
+    }
+}
 if (-not $SkipClean) { $gradleTasks += 'clean' }
 $gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release', '--no-daemon')
 

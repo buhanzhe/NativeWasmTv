@@ -1,17 +1,8 @@
 package xiao.bu.tv;
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.graphics.Color;
-import android.os.Build;
 import android.text.TextUtils;
 import android.util.Log;
-import android.view.Gravity;
-import android.view.ViewGroup;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
 import org.json.JSONArray;
@@ -22,7 +13,7 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.Locale;
 
-/** Executes a signed CJS site entry in a small off-screen WebView. */
+/** Executes CJS scripts in bounded QuickJS runtimes on background threads. */
 final class CjsSiteResolver {
     interface Callback {
         void onResolved(int requestId, Result result);
@@ -47,31 +38,14 @@ final class CjsSiteResolver {
     }
 
     private static final String TAG = "CjsSiteResolver";
-    private static final String EXECUTOR_URL = "https://ntv.local/cjs/";
-    private static final String EXECUTOR_PAGE =
-            "<!doctype html><meta charset=\"utf-8\"><body></body>";
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-    private static final long TIMEOUT_MS = 20000L;
 
     private final Activity activity;
-    private final FrameLayout root;
-    private WebView webView;
-    private Pending pending;
-    private int generation;
-    private final Bridge bridge = new Bridge();
-    private final Runnable timeout = new Runnable() {
-        @Override
-        public void run() {
-            Pending request = pending;
-            if (request != null) {
-                fail(request, "在线站点插件解析超时");
-            }
-        }
-    };
+    private volatile Pending pending;
+    private volatile int generation;
 
     CjsSiteResolver(Activity activity, FrameLayout root) {
         this.activity = activity;
-        this.root = root;
     }
 
     void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
@@ -111,50 +85,6 @@ final class CjsSiteResolver {
         }, "cjs-site-load").start();
     }
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
-    private void ensureWebView() throws IOException {
-        if (webView != null) {
-            return;
-        }
-        try {
-            webView = new WebView(activity);
-        } catch (RuntimeException error) {
-            throw new IOException("系统 WebView 不可用", error);
-        }
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(false);
-        settings.setDatabaseEnabled(false);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setMediaPlaybackRequiresUserGesture(true);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        }
-        webView.setBackgroundColor(Color.TRANSPARENT);
-        webView.setAlpha(0f);
-        webView.setTranslationX(-10000f);
-        webView.setTranslationY(-10000f);
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1, 1);
-        params.gravity = Gravity.LEFT | Gravity.TOP;
-        root.addView(webView, params);
-        webView.addJavascriptInterface(bridge, "NtvCjsBridge");
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                Pending request = pending;
-                if (request != null && EXECUTOR_URL.equals(url)) {
-                    execute(request);
-                }
-            }
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return !EXECUTOR_URL.equals(url);
-            }
-        });
-    }
-
     private void start(Pending request) {
         android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
         String key = cacheKey(request);
@@ -169,27 +99,24 @@ final class CjsSiteResolver {
                 return;
             }
         }
-        try {
-            ensureWebView();
-        } catch (IOException error) {
-            request.callback.onFailed(request.requestId, error.getMessage());
-            return;
-        }
         pending = request;
-        Log.i(TAG, "Starting site plug-in id=" + request.site.id
-                + " page=" + request.pageUrl);
-        webView.removeCallbacks(timeout);
-        webView.postDelayed(timeout, TIMEOUT_MS);
-        webView.loadDataWithBaseURL(EXECUTOR_URL, EXECUTOR_PAGE,
-                "text/html", "UTF-8", null);
-    }
-
-    private void execute(Pending request) {
-        if (pending != request || generation != request.generation) {
-            return;
-        }
-        Log.d(TAG, "Executing site plug-in id=" + request.site.id);
-        webView.evaluateJavascript(buildJavascript(request), null);
+        final Pending work = request;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                Bridge host = new Bridge(work);
+                long started = android.os.SystemClock.elapsedRealtime();
+                try {
+                    Log.i(TAG, "QuickJS starting site=" + work.site.id);
+                    NativeQuickJs.execute(buildJavascript(work), host);
+                    if (!host.terminal && !host.isCancelled()) host.fail("脚本没有返回播放结果");
+                } catch (Throwable error) {
+                    if (!host.isCancelled()) host.fail("QuickJS: " + safeMessage(error));
+                } finally {
+                    Log.i(TAG, "QuickJS finished site=" + work.site.id + " elapsedMs="
+                            + (android.os.SystemClock.elapsedRealtime() - started));
+                }
+            }
+        }, "cjs-quickjs").start();
     }
 
     private static String buildJavascript(Pending request) {
@@ -213,7 +140,7 @@ final class CjsSiteResolver {
                 + "md5:function(v){return NtvCjsBridge.md5(String(v));},"
                 + "log:function(v){NtvCjsBridge.log(String(v));}};"
                 + "function done(v){NtvCjsBridge.complete(JSON.stringify(v==null?{}:v));}"
-                + "function fail(e){NtvCjsBridge.fail(String(e&&e.stack?e.stack:e));}"
+                + "function fail(e){NtvCjsBridge.fail(String(e)+(e&&e.stack?'\\n'+e.stack:''));}"
                 + "try{var pluginMain=(function(){" + request.site.script + "\n"
                 + "return typeof main==='function'?main:null;})();"
                 + "if(typeof pluginMain!=='function')throw new Error('站点插件没有 main(item) 入口');"
@@ -298,36 +225,11 @@ final class CjsSiteResolver {
         request.callback.onFailed(request.requestId, reason);
     }
 
-    private void clearPending() {
-        if (webView != null) {
-            webView.removeCallbacks(timeout);
-        }
-        pending = null;
-    }
+    private void clearPending() { pending = null; }
 
-    void cancel() {
-        generation++;
-        clearPending();
-        destroyWebView();
-    }
+    void cancel() { generation++; clearPending(); }
 
-    void destroy() {
-        cancel();
-    }
-
-    private void destroyWebView() {
-        if (webView == null) {
-            return;
-        }
-        webView.stopLoading();
-        webView.removeJavascriptInterface("NtvCjsBridge");
-        ViewGroup parent = (ViewGroup) webView.getParent();
-        if (parent != null) {
-            parent.removeView(webView);
-        }
-        webView.destroy();
-        webView = null;
-    }
+    void destroy() { cancel(); }
 
     private static String cacheKey(Pending request) {
         // Site script digest prevents a new plugin version reusing old resolver output.
@@ -359,8 +261,29 @@ final class CjsSiteResolver {
         return TextUtils.isEmpty(value) ? "未知错误" : value;
     }
 
-    private final class Bridge {
-        @JavascriptInterface
+    private final class Bridge implements NativeQuickJs.Host {
+        private final Pending request;
+        private boolean terminal;
+        Bridge(Pending request) { this.request = request; }
+
+        @Override public boolean isCancelled() {
+            return generation != request.generation || Thread.currentThread().isInterrupted();
+        }
+
+        @Override public String invoke(int operation, String[] args) throws Exception {
+            if (isCancelled()) throw new IOException("CJS cancelled");
+            switch (operation) {
+                case 0: return get(args[0], args[1]);
+                case 1: return post(args[0], args[1], args[2]);
+                case 2: return request(args[0], args[1], args[2], args[3], Boolean.parseBoolean(args[4]));
+                case 3: return md5(args[0]);
+                case 4: log(args[0]); return null;
+                case 5: complete(args[0]); return null;
+                case 6: fail(args[0]); return null;
+                default: throw new IOException("Unknown CJS host operation");
+            }
+        }
+
         public String get(String url, String headersJson) {
             if (!isOnline(url)) {
                 return "";
@@ -374,13 +297,11 @@ final class CjsSiteResolver {
             }
         }
 
-        @JavascriptInterface
         public String post(String url, String body, String headersJson) {
             return isOnline(url) ? Ku9HttpClient.postText(
                     url, body, headersJson, MAX_RESPONSE_BYTES) : "";
         }
 
-        @JavascriptInterface
         public String request(String url, String method, String headersJson,
                 String body, boolean followRedirects) {
             if (!isOnline(url)) {
@@ -389,13 +310,16 @@ final class CjsSiteResolver {
             long startedAt = android.os.SystemClock.elapsedRealtime();
             String result = Ku9HttpClient.requestJson(url, method, headersJson, body,
                     followRedirects, MAX_RESPONSE_BYTES);
+            try {
+                JSONObject response = new JSONObject(result);
+                if (response.optInt("code") == 0) Log.w(TAG, "Site HTTP failure: " + response.optString("error"));
+            } catch (JSONException ignored) { }
             Log.i(TAG, "Site request completed elapsedMs="
                     + (android.os.SystemClock.elapsedRealtime() - startedAt)
                     + " url=" + url);
             return result;
         }
 
-        @JavascriptInterface
         public String md5(String value) {
             try {
                 byte[] bytes = MessageDigest.getInstance("MD5")
@@ -410,28 +334,26 @@ final class CjsSiteResolver {
             }
         }
 
-        @JavascriptInterface
         public void log(String value) {
             Log.i(TAG, value);
         }
 
-        @JavascriptInterface
         public void complete(final String json) {
-            final Pending request = pending;
-            if (request != null) {
+            if (!terminal && !isCancelled()) {
+                terminal = true;
                 activity.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        CjsSiteResolver.this.complete(request, json);
+                        if (pending == request && generation == request.generation)
+                            CjsSiteResolver.this.complete(request, json);
                     }
                 });
             }
         }
 
-        @JavascriptInterface
         public void fail(final String reason) {
-            final Pending request = pending;
-            if (request != null) {
+            if (!terminal && !isCancelled()) {
+                terminal = true;
                 activity.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
