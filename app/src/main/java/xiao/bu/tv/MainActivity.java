@@ -271,6 +271,7 @@ public final class MainActivity extends Activity {
     private boolean cjsPluginInstallInProgress;
     private int pendingCjsChannelIndex = -1;
     private Ku9ScriptResolver ku9ScriptResolver;
+    private CjsSiteResolver cjsSiteResolver;
     private DirectVideoView videoView;
     private View channelSwitchBlackout;
     private ImageView channelSwipeSnapshot;
@@ -292,6 +293,7 @@ public final class MainActivity extends Activity {
     private String directHttpMediaUrl;
     private boolean activeEmbeddedCctvResolver;
     private boolean activeEmbeddedYangshipinResolver;
+    private boolean activeEmbeddedCjsResolver;
     private String webStreamHeaders;
     private boolean playingDiscoveredWebStream;
     private final LinkedHashMap<String, SniffedResource> sniffedResources =
@@ -677,6 +679,7 @@ public final class MainActivity extends Activity {
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
+        cjsSiteResolver = new CjsSiteResolver(this, (FrameLayout) root);
         if (lowResourceDevice) {
             root.postDelayed(new Runnable() {
                 @Override
@@ -2552,6 +2555,7 @@ public final class MainActivity extends Activity {
     private void configureEmbeddedResolverMode(ChannelCatalog.Group group, Channel channel) {
         activeEmbeddedCctvResolver = false;
         activeEmbeddedYangshipinResolver = false;
+        activeEmbeddedCjsResolver = false;
         if (catalogSource(group, channel) != ChannelCatalog.SOURCE_CUSTOM) {
             return;
         }
@@ -2561,7 +2565,11 @@ public final class MainActivity extends Activity {
             return;
         }
         activeEmbeddedYangshipinResolver = extractYangshipinPid(configuredUrl) != null;
+        String page = webViewPage(configuredUrl);
+        activeEmbeddedCjsResolver = !activeEmbeddedYangshipinResolver
+                && page != null && CjsPluginRuntime.supportsSite(page);
         activeEmbeddedCctvResolver = !activeEmbeddedYangshipinResolver
+                && !activeEmbeddedCjsResolver
                 && extractCctvWebChannel(configuredUrl) != null;
     }
 
@@ -2585,7 +2593,8 @@ public final class MainActivity extends Activity {
         }
         for (int index = 0; index < channel.sourceCount(); index++) {
             String url = channel.sourceUrl(index);
-            if (isCctvDirectStream(url) || extractYangshipinPid(url) != null) {
+            if (isCctvDirectStream(url) || extractYangshipinPid(url) != null
+                    || isWebViewSource(url)) {
                 return true;
             }
         }
@@ -3080,7 +3089,18 @@ public final class MainActivity extends Activity {
         if (!Ku9ScriptResolver.isKu9Source(configuredUrl) && ku9ScriptResolver != null) {
             ku9ScriptResolver.cancel();
         }
+        String cjsSitePage = webViewPage(configuredUrl);
+        if (cjsSitePage != null && !CjsPluginRuntime.supportsSite(cjsSitePage)) {
+            cjsSitePage = null;
+        }
+        if (cjsSitePage == null && cjsSiteResolver != null) {
+            cjsSiteResolver.cancel();
+        }
         if (isWebViewSource(configuredUrl)) {
+            if (cjsSitePage != null) {
+                resolveCjsSite(channel, cjsSitePage, requestId);
+                return;
+            }
             String yangshipinPid = extractYangshipinPid(configuredUrl);
             if (yangshipinPid != null) {
                 Channel resolverChannel = ChannelCatalog.findYangshipinChannelByPid(
@@ -3223,6 +3243,39 @@ public final class MainActivity extends Activity {
                 });
     }
 
+    private void resolveCjsSite(final Channel channel, final String pageUrl,
+            final int requestId) {
+        updateLoadingStatus("正在执行在线站点插件");
+        showChannelBar(channel.name, customSourceStatus("正在解析站点视频源"));
+        cjsSiteResolver.resolve(requestId, channel.name, pageUrl,
+                new CjsSiteResolver.Callback() {
+                    @Override
+                    public void onResolved(int resolvedRequestId, CjsSiteResolver.Result result) {
+                        if (resolvedRequestId != playRequestId) {
+                            return;
+                        }
+                        if (proxy != null) {
+                            proxy.setWebRequestHeaders(result.referer,
+                                    "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36", null);
+                            if (result.transformer.length() > 0) {
+                                proxy.configureCjsTransformer(result.transformer,
+                                        result.transformerArgs, result.mediaHosts);
+                            }
+                        }
+                        startResolvedPlayer(channel, result.url);
+                    }
+
+                    @Override
+                    public void onFailed(int failedRequestId, String reason) {
+                        if (failedRequestId != playRequestId) {
+                            return;
+                        }
+                        Log.w(TAG, "CJS site resolve failed for " + pageUrl + ": " + reason);
+                        switchCustomSource(1, true, "站点插件解析失败");
+                    }
+                });
+    }
+
     private void startResolvedPlayer(Channel channel, String streamUrl,
             boolean directHttpMedia) {
         updateLoadingStatus("正在连接视频");
@@ -3275,6 +3328,14 @@ public final class MainActivity extends Activity {
             }
         }
         return null;
+    }
+
+    private static String webViewPage(String configuredUrl) {
+        Uri pageUri = parseWebViewPageUri(configuredUrl);
+        if (pageUri == null || pageUri.getHost() == null) {
+            return null;
+        }
+        return pageUri.toString();
     }
 
     private static Uri parseWebViewPageUri(String configuredUrl) {
@@ -3626,6 +3687,7 @@ public final class MainActivity extends Activity {
     private boolean isDirectThirdPartyRecordingSource(String streamUrl) {
         return currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM
                 && !activeEmbeddedCctvResolver && !activeEmbeddedYangshipinResolver
+                && !activeEmbeddedCjsResolver
                 && webStreamHeaders == null && isHttpHlsSource(streamUrl)
                 && !HlsProxyServer.needsSpecialDecrypt(streamUrl);
     }
@@ -7064,6 +7126,9 @@ public final class MainActivity extends Activity {
         }
         if (ku9ScriptResolver != null) {
             ku9ScriptResolver.destroy();
+        }
+        if (cjsSiteResolver != null) {
+            cjsSiteResolver.destroy();
         }
         if (proxy != null) {
             proxy.close();

@@ -1,6 +1,7 @@
 package xiao.bu.tv;
 
 import com.bu.cc.tv.NativeCmgDecryptor;
+import com.bu.cc.tv.NativeCjsTransformer;
 import com.bu.cc.tv.NativeH5eDecryptor;
 
 import android.os.SystemClock;
@@ -224,6 +225,9 @@ final class HlsProxyServer implements Closeable {
     private volatile String webReferer;
     private volatile String webUserAgent;
     private volatile String webCookies;
+    private volatile String cjsTransformer;
+    private volatile String[] cjsTransformerArgs;
+    private volatile String[] cjsMediaHosts;
     private boolean cctvPlaylistMonitorStarted;
     private long cmgLastYangshipinSegment = -1L;
 
@@ -390,6 +394,14 @@ final class HlsProxyServer implements Closeable {
         webCookies = sanitizeHeaderValue(cookies);
     }
 
+    void configureCjsTransformer(String transformer, String[] arguments,
+            String[] mediaHosts) {
+        cjsTransformer = transformer == null ? null : transformer.trim();
+        cjsTransformerArgs = arguments == null ? null : arguments.clone();
+        cjsMediaHosts = mediaHosts == null ? null : mediaHosts.clone();
+        Log.i(TAG, "Configured CJS media transformer=" + cjsTransformer);
+    }
+
     private void acceptLoop() {
         while (running) {
             try {
@@ -432,7 +444,8 @@ final class HlsProxyServer implements Closeable {
 
             String token = path.substring(prefix.length());
             String originUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
-            if (canStreamWithoutRewrite(originUrl) && !hasAesSegmentKey(originUrl)
+            if (!needsCjsTransform(originUrl) && canStreamWithoutRewrite(originUrl)
+                    && !hasAesSegmentKey(originUrl)
                     && !hasGenericSegmentTask(originUrl)) {
                 streamUpstream(originUrl, rangeHeader, output);
                 return;
@@ -540,6 +553,9 @@ final class HlsProxyServer implements Closeable {
         }
         if (isTransportStream(originUrl, null) && needsCmgDecrypt(originUrl)) {
             return new ProxyResponse("video/MP2T", getCmgSegment(originUrl));
+        }
+        if (isTransportStream(originUrl, null) && needsCjsTransform(originUrl)) {
+            return new ProxyResponse("video/MP2T", transformCjsSegment(originUrl));
         }
 
         HttpURLConnection connection = (HttpURLConnection) URI.create(originUrl).toURL().openConnection();
@@ -975,6 +991,20 @@ final class HlsProxyServer implements Closeable {
         } catch (Exception error) {
             throw new IOException("Unable to decrypt AES-128 HLS segment", error);
         }
+    }
+
+    private byte[] transformCjsSegment(String originUrl) throws IOException {
+        byte[] encrypted = downloadRaw(originUrl);
+        long started = SystemClock.elapsedRealtime();
+        byte[] transformed = NativeCjsTransformer.transformTransportStream(
+                encrypted, cjsTransformer, cjsTransformerArgs);
+        if (transformed == null) {
+            throw new IOException("CJS native transformer rejected transport stream");
+        }
+        Log.i(TAG, "CJS media transformed " + segmentName(originUrl)
+                + " bytes=" + transformed.length + " elapsedMs="
+                + (SystemClock.elapsedRealtime() - started));
+        return transformed;
     }
 
     private byte[] downloadRaw(String originUrl) throws IOException {
@@ -2071,6 +2101,30 @@ final class HlsProxyServer implements Closeable {
 
     private static boolean needsCmgDecrypt(String url) {
         return isYangshipinUrl(url);
+    }
+
+    private boolean needsCjsTransform(String url) {
+        String transformer = cjsTransformer;
+        String[] hosts = cjsMediaHosts;
+        if (transformer == null || transformer.length() == 0
+                || hosts == null || hosts.length == 0 || url == null) {
+            return false;
+        }
+        try {
+            String host = URI.create(url).getHost();
+            String lowerHost = host == null ? "" : host.toLowerCase(Locale.US);
+            for (String configured : hosts) {
+                String lowerConfigured = configured == null ? ""
+                        : configured.trim().toLowerCase(Locale.US);
+                if (lowerConfigured.length() > 0 && (lowerHost.equals(lowerConfigured)
+                        || lowerHost.endsWith("." + lowerConfigured))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException error) {
+            return false;
+        }
     }
 
     static boolean needsSpecialDecrypt(String url) {

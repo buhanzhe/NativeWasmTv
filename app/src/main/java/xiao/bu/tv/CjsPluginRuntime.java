@@ -16,6 +16,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
@@ -32,7 +33,7 @@ import java.util.Map;
  * native libraries are touched only when a provider needs them or the user requests an update.
  */
 public final class CjsPluginRuntime {
-    public static final int HOST_PROTOCOL = 1;
+    public static final int HOST_PROTOCOL = 2;
     public static final String DEFAULT_MANIFEST_URL =
             "https://raw.githubusercontent.com/TvWasm/cjs/main/plugin.json";
 
@@ -58,6 +59,7 @@ public final class CjsPluginRuntime {
 
     private static Context context;
     private static JSONObject scripts;
+    private static JSONObject runtimeBundle;
     private static String scriptsVersion;
     private static String verifiedInstallationKey;
     private static boolean nativeLibrariesLoaded;
@@ -131,7 +133,8 @@ public final class CjsPluginRuntime {
         if (!new File(directory, "runtime.json").isFile()
                 || !new File(directory, "libcctv_h5e.so").isFile()
                 || !new File(directory, "libcmg_decrypt.so").isFile()
-                || !new File(directory, "libysp_keygen.so").isFile()) {
+                || !new File(directory, "libysp_keygen.so").isFile()
+                || !new File(directory, "libcjs_site.so").isFile()) {
             return false;
         }
         try {
@@ -158,7 +161,7 @@ public final class CjsPluginRuntime {
     /** Downloads and activates a complete plugin transactionally. Call from a worker thread. */
     public static synchronized String installOrUpdate() throws Exception {
         JSONObject envelope = new JSONObject(new String(
-                download(getManifestUrl(), MAX_MANIFEST_BYTES), "UTF-8"));
+                download(cacheBustedManifestUrl(getManifestUrl()), MAX_MANIFEST_BYTES), "UTF-8"));
         if (envelope.optInt("protocol", 0) != HOST_PROTOCOL) {
             throw new IOException("插件清单协议不受支持");
         }
@@ -218,7 +221,7 @@ public final class CjsPluginRuntime {
                 if ("runtime.json".equals(name)) hasScripts = true;
                 if (nativeFile) nativeCount++;
             }
-            if (!hasScripts || nativeCount != 3) {
+            if (!hasScripts || nativeCount != 4) {
                 throw new IOException("插件内容不完整");
             }
             writeAndSync(new File(staging, "manifest.payload"), payload);
@@ -234,6 +237,7 @@ public final class CjsPluginRuntime {
                 preferences().edit().putString(versionPreference, version)
                         .remove(pendingPreference).commit();
                 scripts = null;
+                runtimeBundle = null;
                 scriptsVersion = null;
                 verifiedInstallationKey = abi + ":" + version;
                 pruneOldVersions(root, version);
@@ -268,21 +272,110 @@ public final class CjsPluginRuntime {
         return result;
     }
 
+    /** Finds a signed site entry for an online HTTP(S) page. */
+    static synchronized SitePlugin siteForUrl(String pageUrl) throws IOException, JSONException {
+        if (pageUrl == null || (!pageUrl.startsWith("http://")
+                && !pageUrl.startsWith("https://"))) {
+            return null;
+        }
+        String host;
+        try {
+            host = URI.create(pageUrl).getHost();
+        } catch (RuntimeException error) {
+            return null;
+        }
+        if (host == null || host.length() == 0) {
+            return null;
+        }
+        JSONArray sites = runtime().optJSONArray("sites");
+        if (sites == null) {
+            return null;
+        }
+        for (int index = 0; index < sites.length(); index++) {
+            JSONObject site = sites.optJSONObject(index);
+            if (site == null || !matchesHost(host, site.optJSONArray("hosts"))) {
+                continue;
+            }
+            String entry = site.optString("entry", "");
+            String nativeModule = safeName(site.optString("nativeModule", ""));
+            String transformer = site.optString("transformer", "");
+            if (entry.length() == 0 || nativeModule.length() == 0
+                    || transformer.length() == 0) {
+                throw new IOException("站点插件声明不完整");
+            }
+            if (!"libcjs_site.so".equals(nativeModule)) {
+                throw new IOException("站点插件使用了宿主不支持的原生模块");
+            }
+            String source = scriptBundle().optString(entry, "");
+            if (source.length() == 0) {
+                throw new IOException("站点插件缺少 JS 入口");
+            }
+            return new SitePlugin(site.optString("id", host), source,
+                    nativeModule, transformer);
+        }
+        return null;
+    }
+
+    static synchronized boolean supportsSite(String pageUrl) {
+        if (!isInstalled()) {
+            return false;
+        }
+        try {
+            return siteForUrl(pageUrl) != null;
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to inspect installed site plugin", error);
+            return false;
+        }
+    }
+
+    private static boolean matchesHost(String actual, JSONArray configured) {
+        if (configured == null) {
+            return false;
+        }
+        String host = actual.toLowerCase(Locale.US);
+        for (int index = 0; index < configured.length(); index++) {
+            String value = configured.optString(index, "").toLowerCase(Locale.US);
+            if (value.length() > 0 && (host.equals(value) || host.endsWith("." + value))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static JSONObject scriptBundle() throws IOException, JSONException {
+        return runtime().getJSONObject("scripts");
+    }
+
+    private static JSONObject runtime() throws IOException, JSONException {
         String abi = currentAbi();
         String version = preferences().getString(abiPreference(PREF_VERSION, abi), "");
         String cacheKey = abi + ":" + version;
-        if (scripts != null && cacheKey.equals(scriptsVersion)) {
-            return scripts;
+        if (runtimeBundle != null && cacheKey.equals(scriptsVersion)) {
+            return runtimeBundle;
         }
         byte[] data = readFile(new File(activeDirectory(), "runtime.json"), MAX_SCRIPT_BYTES);
         JSONObject root = new JSONObject(new String(data, "UTF-8"));
         if (root.optInt("protocol", 0) != HOST_PROTOCOL) {
             throw new IOException("JS 插件协议不兼容");
         }
+        runtimeBundle = root;
         scripts = root.getJSONObject("scripts");
         scriptsVersion = cacheKey;
-        return scripts;
+        return root;
+    }
+
+    static final class SitePlugin {
+        final String id;
+        final String script;
+        final String nativeModule;
+        final String transformer;
+
+        SitePlugin(String id, String script, String nativeModule, String transformer) {
+            this.id = id;
+            this.script = script;
+            this.nativeModule = nativeModule;
+            this.transformer = transformer;
+        }
     }
 
     private static File activeDirectory() {
@@ -358,6 +451,11 @@ public final class CjsPluginRuntime {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private static String cacheBustedManifestUrl(String url) {
+        String separator = url != null && url.indexOf('?') >= 0 ? "&" : "?";
+        return url + separator + "ntv=" + System.currentTimeMillis();
     }
 
     private static void verifySignature(byte[] payload, byte[] signed) throws Exception {

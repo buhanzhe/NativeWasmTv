@@ -2,7 +2,7 @@
 
 NativeWasmTv no longer packages the provider wasm2c sources, provider JavaScript, or their
 native libraries. They are released by [TvWasm/cjs](https://github.com/TvWasm/cjs) and loaded
-through protocol v1.
+through the online-only protocol v2.
 
 The shell accepts a configurable manifest URL. It verifies the RSA-SHA256 envelope and every
 SHA-256 file digest, selects the current ABI, stages all required files in application-private
@@ -14,6 +14,16 @@ one preference containing the previous APK ABI. Cold start performs no plugin di
 parsing, network access, hashing, or native loading.
 The active JS bundle and C modules open on first use of a related source. Normal custom streams
 never require the plugin.
+
+Protocol v2 adds signed per-site declarations. `webview://` pages from a declared online host
+are resolved by that site's JS entry, while media decryption stays in its native module. The
+first site is `tv.gxtv.cn`: its JS requests the current channel metadata and the common native
+site module dispatches its xhls transformer to restore both H.264 and AAC PES payloads before
+IJK receives the TS segment. The app host handles signed site declarations generically and
+does not contain the Guangxi algorithm or domain-specific playback code.
+
+The CJS protocol accepts HTTP(S) manifests and files only. It does not load local manifests,
+user-uploaded scripts, external-storage plugins, `file://`, or `content://` sources.
 
 Plugin state and files are isolated by the compile-time APK ABI. Switching between the 32-bit
 and 64-bit APKs selects a separate cache and downloads the matching native modules when needed.
