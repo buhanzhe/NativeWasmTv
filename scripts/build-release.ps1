@@ -5,7 +5,8 @@ param(
     [string]$ReleaseNotes = '修复问题并提升播放体验。',
     [switch]$SkipClean,
     [string]$NdkRoot,
-    [switch]$RebuildQuickJs
+    [switch]$RebuildQuickJs,
+    [switch]$RebuildTls
 )
 
 $ErrorActionPreference = 'Stop'
@@ -148,6 +149,13 @@ foreach ($abi in @('armeabi-v7a','arm64-v8a')) {
     if (!(Test-Path -LiteralPath (Join-Path $repoRoot "app/src/main/libs/$abi/libntvquickjs.so"))) {
         throw 'QuickJS library missing. Run scripts/build-quickjs.ps1 -NdkRoot <NDK-r14b> first.'
     }
+}
+if ($RebuildTls -or $NdkRoot) {
+    if (!$NdkRoot) { $NdkRoot = $env:ANDROID_NDK_HOME }
+    & (Join-Path $PSScriptRoot 'build-tls.ps1') -NdkRoot $NdkRoot
+}
+if (!(Test-Path -LiteralPath (Join-Path $repoRoot 'app/src/main/libs/armeabi-v7a/libntvtls.so'))) {
+    throw 'Legacy TLS library missing. Run scripts/build-tls.ps1 -NdkRoot <NDK-r14b> first.'
 }
 if (-not $SkipClean) { $gradleTasks += 'clean' }
 $gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release', '--no-daemon')

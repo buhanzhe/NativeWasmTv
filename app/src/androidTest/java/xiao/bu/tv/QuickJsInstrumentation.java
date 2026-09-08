@@ -6,7 +6,12 @@ import android.os.SystemClock;
 import java.io.IOException;
 
 public final class QuickJsInstrumentation extends Instrumentation {
-    @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
+    private boolean testTls;
+    @Override public void onCreate(Bundle args) {
+        super.onCreate(args);
+        testTls = args != null && "true".equals(args.getString("tls"));
+        start();
+    }
 
     private static final class Host implements NativeQuickJs.Host {
         String result;
@@ -25,6 +30,11 @@ public final class QuickJsInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle results = new Bundle();
         try {
+            if (testTls) {
+                results.putString("stream", LegacyTlsTest.run(getTargetContext()));
+                finish(-1, results);
+                return;
+            }
             Host host = new Host();
             NativeQuickJs.execute("NtvCjsBridge.complete(NtvCjsBridge.get('中文😀\\u0000', '{}'))", host);
             check("中文😀\u0000".equals(host.result), "UTF-8/JNI bridge roundtrip");

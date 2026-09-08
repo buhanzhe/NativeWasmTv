@@ -47,8 +47,9 @@ final class TlsCompat {
             installedTrustManager = new TrustAllManager();
             context.init(null, new TrustManager[] {installedTrustManager}, new SecureRandom());
             SSLSocketFactory socketFactory = context.getSocketFactory();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN
-                    && Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN) {
+                socketFactory = new LegacyTlsSocket.Factory(installedTrustManager);
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                 socketFactory = new ModernTlsSocketFactory(socketFactory);
             }
             installedSocketFactory = socketFactory;
