@@ -1062,6 +1062,7 @@ final class PlaylistManager {
         String pendingName = null;
         String pendingGroup = null;
         String pendingEpgId = null;
+        String pendingLogo = null;
         int count = 0;
         int lineStart = 0;
         while (lineStart <= text.length()) {
@@ -1085,6 +1086,7 @@ final class PlaylistManager {
                 pendingName = attribute(line, "tvg-name");
                 pendingGroup = attribute(line, "group-title");
                 pendingEpgId = attribute(line, "tvg-id");
+                pendingLogo = attribute(line, "tvg-logo");
                 int comma = line.lastIndexOf(',');
                 if (comma >= 0 && comma + 1 < line.length()) {
                     pendingName = line.substring(comma + 1).trim();
@@ -1102,10 +1104,11 @@ final class PlaylistManager {
             }
             if (pendingName != null && isStreamUrl(line)) {
                 String groupName = emptyToDefault(pendingGroup, currentGroup);
-                add(groups, groupName, pendingName, line, pendingEpgId, count++);
+                add(groups, groupName, pendingName, line, pendingEpgId, pendingLogo, count++);
                 pendingName = null;
                 pendingGroup = null;
                 pendingEpgId = null;
+                pendingLogo = null;
             } else {
                 int comma = line.indexOf(',');
                 if (comma <= 0 || comma + 1 >= line.length()) {
@@ -1116,7 +1119,7 @@ final class PlaylistManager {
                 if ("#genre#".equalsIgnoreCase(value)) {
                     currentGroup = name.length() == 0 ? "在线频道" : name;
                 } else if (isStreamUrl(value)) {
-                    add(groups, currentGroup, name, value, null, count++);
+                    add(groups, currentGroup, name, value, null, null, count++);
                 }
             }
             if (lineEnd == text.length()) {
@@ -1149,7 +1152,7 @@ final class PlaylistManager {
     }
 
     private static void add(Map<String, ChannelBucket> groups, String groupName,
-            String name, String url, String epgId, int index) {
+            String name, String url, String epgId, String logoUrl, int index) {
         String safeGroup = normalizeGroupTitle(groupName);
         ChannelBucket bucket = groups.get(safeGroup);
         if (bucket == null) {
@@ -1162,7 +1165,7 @@ final class PlaylistManager {
                 bucket.channels.size() + 1),
                 safeName, "custom_" + index, url, null, null, null,
                 epgId == null || epgId.trim().length() == 0 ? safeName : epgId.trim());
-        bucket.add(incoming);
+        bucket.add(incoming.withLogo(logoUrl));
     }
 
     private static String channelNumber(String name, String epgId, int fallback) {

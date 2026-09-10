@@ -30,6 +30,22 @@ import org.json.JSONObject;
 
 /** Loads a channel catalog from another nTv device without copying its settings. */
 final class RemoteCatalogClient {
+    private final java.util.Map<String, String> playbackRoutes = new java.util.HashMap<String, String>();
+
+    synchronized void changePlaybackRoute(String previous, String next) {
+        for (java.util.Map.Entry<String, String> route : playbackRoutes.entrySet()) {
+            route.setValue(next);
+        }
+        playbackRoutes.put(previous, next);
+        playbackRoutes.remove(next);
+    }
+
+    synchronized void clearPlaybackRoutes() { playbackRoutes.clear(); }
+
+    private synchronized String playbackHost(String original) {
+        String next = playbackRoutes.get(original);
+        return next == null ? original : next;
+    }
     static final int TAKEOVER_PROTOCOL = 1;
     static final int APK_TRANSFER_PROTOCOL = 1;
     interface TakeoverStateProvider {
@@ -37,6 +53,9 @@ final class RemoteCatalogClient {
         int catalogGeneration();
         long networkDelayMs();
         long encodeDelayMs();
+        long videoBitrate();
+        long audioBitrate();
+        String encodeDetail();
         long videoQueueDelayMs();
         long videoSendDelayMs();
         void onRoundTrip(long delayMs);
@@ -53,6 +72,11 @@ final class RemoteCatalogClient {
     private final Object takeoverSessionLock = new Object();
     private volatile int takeoverSessionGeneration;
     private volatile String takeoverSessionId = "";
+    private volatile long lastTakeoverResponseAt;
+
+    long lastTakeoverResponseAt() {
+        return lastTakeoverResponseAt;
+    }
     private Socket takeoverSessionSocket;
     private static volatile int[][] hardwareAvcCastProfiles;
     private static volatile int[][] hardwareHevcCastProfiles;
@@ -222,7 +246,7 @@ final class RemoteCatalogClient {
                 channels.add(new Channel(number, name,
                         "remote_" + groupIndex + "_" + channelIndex,
                         sources, null, null, null,
-                        jsonChannel.optString("epgId", null)));
+                        jsonChannel.optString("epgId", null)).withLogo(jsonChannel.optString("logoUrl", "")));
             }
             if (!channels.isEmpty()) {
                 groups.add(new ChannelCatalog.Group(groupName,
@@ -240,6 +264,10 @@ final class RemoteCatalogClient {
             boolean lowResourceReceiver, String receiverUrl)
             throws IOException, JSONException {
         Source source = decodeSource(encodedSource);
+        // A retained catalog still contains its original LAN URLs. Resolve them
+        // against the authenticated session route without rebuilding the catalog.
+        source = new Source(playbackHost(source.baseUrl), source.groupIndex,
+                source.channelIndex, source.sourceIndex);
         JSONObject command = new JSONObject();
         command.put("action", "play");
         command.put("group", source.groupIndex);
@@ -324,7 +352,7 @@ final class RemoteCatalogClient {
                 if ("cast".equals(mode)) {
                     String castUrl = playback.optString("sourceUrl", "").trim();
                     if (castUrl.length() > 0) {
-                        return new Result(castUrl, true);
+                        return new Result(castUrl, true, playback.optString("castTransport", "tcp"));
                     }
                 }
                 if ("direct".equals(mode)) {
@@ -347,10 +375,6 @@ final class RemoteCatalogClient {
             }
         }
         throw new IOException("等待手机解析频道超时");
-    }
-
-    private static int even(int value) {
-        return value & ~1;
     }
 
     private static void detachPhonePlayer(String baseUrl) {
@@ -376,12 +400,14 @@ final class RemoteCatalogClient {
         }
     }
 
-    void disconnectReceiver(String receiverUrl) {
+    void disconnectReceiver(String receiverUrl, String sessionId) {
         try {
             String baseUrl = normalizeServerUrl(receiverUrl);
-            if (baseUrl.length() > 0) {
-                postJson(baseUrl + "/api/settings",
-                        new JSONObject().put("remoteCatalogUrl", ""));
+            if (baseUrl.length() > 0 && sessionId.length() > 0) {
+                requestJson(baseUrl + "/api/control", "POST",
+                        new JSONObject().put("action", "endTakeover")
+                                .put("sessionId", sessionId).toString().getBytes("UTF-8"),
+                        600, 900);
             }
         } catch (Exception ignored) {
             // Local takeover state is still released if the receiver went offline.
@@ -391,6 +417,8 @@ final class RemoteCatalogClient {
     void claimReceiver(String receiverUrl, String hostUrl,
             TakeoverStateProvider stateProvider)
             throws IOException, JSONException {
+        final int claimGeneration = takeoverSessionGeneration;
+        final String claimSessionId = UUID.randomUUID().toString();
         String receiverBase = normalizeServerUrl(receiverUrl);
         String hostBase = normalizeServerUrl(hostUrl);
         if (receiverBase.length() == 0 || hostBase.length() == 0) {
@@ -422,15 +450,25 @@ final class RemoteCatalogClient {
             }
         }
         JSONObject result = postJson(receiverBase + "/api/settings",
-                new JSONObject().put("remoteCatalogUrl", hostBase));
+                new JSONObject().put("remoteCatalogUrl", hostBase)
+                        .put("claimSessionId", claimSessionId));
         if (!result.optBoolean("ok", false)) {
             throw new IOException(result.optString("message", "电视拒绝接管请求"));
         }
-        startTakeoverSession(receiverBase, hostBase, stateProvider);
+        synchronized (takeoverSessionLock) {
+            if (claimGeneration == takeoverSessionGeneration) {
+                startTakeoverSession(receiverBase, hostBase, stateProvider,
+                        claimSessionId, null, null);
+                return;
+            }
+        }
+        disconnectReceiver(receiverBase, claimSessionId);
+        throw new IOException("接管操作已取消");
     }
 
     JSONObject receiverState(String receiverUrl) throws IOException, JSONException {
-        return getJson(normalizeServerUrl(receiverUrl) + "/api/state");
+        return requestJson(normalizeServerUrl(receiverUrl) + "/api/state?view=cast",
+                "GET", null, 600, 900);
     }
 
     JSONObject wifiDirect(String receiverUrl, String action)
@@ -468,51 +506,100 @@ final class RemoteCatalogClient {
                 600, 900);
     }
 
-    private void startTakeoverSession(final String receiverBase, final String hostBase,
-            final TakeoverStateProvider stateProvider) {
+    String activeTakeoverSessionId() { return takeoverSessionId; }
+
+    private static final class SessionConnection {
+        final Socket socket;
+        final BufferedReader input;
+        final BufferedWriter output;
+        SessionConnection(Socket socket) throws IOException {
+            this.socket = socket;
+            input = new BufferedReader(new InputStreamReader(socket.getInputStream(), "UTF-8"));
+            output = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), "UTF-8"));
+        }
+    }
+
+    /** Make the new authenticated connection before replacing the working LAN socket. */
+    boolean switchReceiverRoute(String receiverUrl, String previousHostUrl, String hostUrl,
+            String expectedSessionId, TakeoverStateProvider provider) throws Exception {
+        if (expectedSessionId.length() == 0 || !expectedSessionId.equals(takeoverSessionId)) return false;
+        String nextSessionId = UUID.randomUUID().toString();
+        Socket socket = new Socket();
+        boolean accepted = false;
+        try {
+            URL receiver = new URL(normalizeServerUrl(receiverUrl));
+            socket.connect(new InetSocketAddress(receiver.getHost(),
+                    receiver.getPort() > 0 ? receiver.getPort() : receiver.getDefaultPort()), 1000);
+            socket.setSoTimeout(1000);
+            socket.setTcpNoDelay(true);
+            SessionConnection connection = new SessionConnection(socket);
+            JSONObject hello = sessionMessage(provider, "hello", nextSessionId, hostUrl)
+                    .put("previousSessionId", expectedSessionId)
+                    .put("previousHostUrl", previousHostUrl);
+            connection.output.write("NTV-TAKEOVER/1\r\n" + hello.toString() + "\r\n");
+            connection.output.flush();
+            requireSessionAck(connection.input);
+            accepted = startTakeoverSession(receiverUrl, hostUrl, provider,
+                    nextSessionId, connection, expectedSessionId);
+            return accepted;
+        } finally {
+            if (!accepted) closeQuietly(socket);
+        }
+    }
+
+    private boolean startTakeoverSession(final String receiverBase, final String hostBase,
+            final TakeoverStateProvider stateProvider, final String sessionId,
+            final SessionConnection ready, String expectedSessionId) {
         final int generation;
-        final String sessionId = UUID.randomUUID().toString();
         synchronized (takeoverSessionLock) {
+            if (expectedSessionId != null && !expectedSessionId.equals(takeoverSessionId)) return false;
             closeTakeoverSessionLocked();
             generation = ++takeoverSessionGeneration;
             takeoverSessionId = sessionId;
+            lastTakeoverResponseAt = SystemClock.elapsedRealtime();
         }
         Thread thread = new Thread(new Runnable() {
             @Override
             public void run() {
+                SessionConnection prepared = ready;
+                if (generation != takeoverSessionGeneration && prepared != null) closeQuietly(prepared.socket);
                 while (generation == takeoverSessionGeneration) {
                     Socket socket = null;
                     try {
-                        URL receiver = new URL(receiverBase);
-                        int port = receiver.getPort() > 0
-                                ? receiver.getPort() : receiver.getDefaultPort();
-                        socket = new Socket();
-                        socket.connect(new InetSocketAddress(receiver.getHost(), port), 3000);
-                        socket.setSoTimeout(5000);
-                        synchronized (takeoverSessionLock) {
-                            if (generation != takeoverSessionGeneration) {
-                                socket.close();
-                                return;
+                        SessionConnection connection = prepared;
+                        prepared = null;
+                        if (connection != null) {
+                            socket = connection.socket;
+                        } else {
+                            URL receiver = new URL(receiverBase);
+                            socket = new Socket();
+                            synchronized (takeoverSessionLock) {
+                                if (generation != takeoverSessionGeneration) { socket.close(); return; }
+                                takeoverSessionSocket = socket;
                             }
+                            socket.connect(new InetSocketAddress(receiver.getHost(),
+                                    receiver.getPort() > 0 ? receiver.getPort() : receiver.getDefaultPort()), 1500);
+                            socket.setSoTimeout(1000);
+                            socket.setTcpNoDelay(true);
+                            connection = new SessionConnection(socket);
+                            connection.output.write("NTV-TAKEOVER/1\r\n");
+                            connection.output.write(sessionMessage(stateProvider, "hello", sessionId, hostBase).toString());
+                            connection.output.write("\r\n");
+                            connection.output.flush();
+                            requireSessionAck(connection.input);
+                        }
+                        synchronized (takeoverSessionLock) {
+                            if (generation != takeoverSessionGeneration) { socket.close(); return; }
                             takeoverSessionSocket = socket;
                         }
-                        BufferedWriter output = new BufferedWriter(new OutputStreamWriter(
-                                socket.getOutputStream(), "UTF-8"));
-                        BufferedReader input = new BufferedReader(new InputStreamReader(
-                                socket.getInputStream(), "UTF-8"));
-                        output.write("NTV-TAKEOVER/1\r\n");
-                        JSONObject hello = sessionMessage(stateProvider, "hello",
-                                sessionId, hostBase);
-                        output.write(hello.toString());
-                        output.write("\r\n");
-                        output.flush();
-                        requireSessionAck(input);
+                        BufferedReader input = connection.input;
+                        BufferedWriter output = connection.output;
+                        recordTakeoverResponse(generation);
                         socket.setSoTimeout(1000);
                         long nextHeartbeatAt = 0L;
                         long heartbeatSentAt = 0L;
-                        long lastAckAt = System.currentTimeMillis();
                         while (generation == takeoverSessionGeneration) {
-                            long now = System.currentTimeMillis();
+                            long now = SystemClock.elapsedRealtime();
                             if (now >= nextHeartbeatAt) {
                                 JSONObject heartbeat = sessionMessage(stateProvider,
                                         "heartbeat", sessionId, hostBase);
@@ -529,8 +616,8 @@ final class RemoteCatalogClient {
                                 }
                                 JSONObject incoming = new JSONObject(line);
                                 if (incoming.optBoolean("ok", false)) {
-                                    lastAckAt = now;
-                                    if (stateProvider != null && heartbeatSentAt > 0L) {
+                                    recordTakeoverResponse(generation);
+                                    if (generation == takeoverSessionGeneration && stateProvider != null && heartbeatSentAt > 0L) {
                                         stateProvider.onRoundTrip(Math.max(0L,
                                                 SystemClock.elapsedRealtime()
                                                         - heartbeatSentAt));
@@ -543,7 +630,7 @@ final class RemoteCatalogClient {
                                 // need another thread; incoming pointer data wakes the
                                 // read immediately and is not delayed by this timeout.
                             }
-                            if (now - lastAckAt >= 12000L) {
+                            if (SystemClock.elapsedRealtime() - lastTakeoverResponseAt >= 3000L) {
                                 throw new IOException("接管端心跳响应超时");
                             }
                         }
@@ -574,13 +661,29 @@ final class RemoteCatalogClient {
             }
         }, "takeover-session");
         thread.start();
+        return true;
     }
 
     void stopTakeoverSession() {
+        detachTakeoverSession();
+    }
+
+    String detachTakeoverSession() {
         synchronized (takeoverSessionLock) {
+            String stoppedSession = takeoverSessionId;
             takeoverSessionGeneration++;
             takeoverSessionId = "";
+            lastTakeoverResponseAt = 0L;
             closeTakeoverSessionLocked();
+            return stoppedSession;
+        }
+    }
+
+    private void recordTakeoverResponse(int generation) {
+        synchronized (takeoverSessionLock) {
+            if (generation == takeoverSessionGeneration) {
+                lastTakeoverResponseAt = SystemClock.elapsedRealtime();
+            }
         }
     }
 
@@ -604,6 +707,9 @@ final class RemoteCatalogClient {
                     .put("catalogGeneration", provider.catalogGeneration())
                     .put("networkDelayMs", provider.networkDelayMs())
                     .put("encodeDelayMs", provider.encodeDelayMs())
+                    .put("castVideoBitrate", provider.videoBitrate())
+                    .put("castAudioBitrate", provider.audioBitrate())
+                    .put("encodeDetail", provider.encodeDetail())
                     .put("videoQueueDelayMs", provider.videoQueueDelayMs())
                     .put("videoSendDelayMs", provider.videoSendDelayMs());
         } else {
@@ -651,6 +757,13 @@ final class RemoteCatalogClient {
     JSONObject controlReceiver(String receiverUrl, JSONObject request)
             throws IOException, JSONException {
         return postJson(normalizeServerUrl(receiverUrl) + "/api/control", request);
+    }
+
+    JSONObject adjustReceiverVolume(String receiverUrl, int direction)
+            throws IOException, JSONException {
+        return requestJson(normalizeServerUrl(receiverUrl) + "/api/control", "POST",
+                new JSONObject().put("action", "volume").put("direction", direction)
+                        .toString().getBytes("UTF-8"), 1000, 1000);
     }
 
     JSONObject mediaState(String receiverUrl) throws IOException, JSONException {
@@ -861,8 +974,14 @@ final class RemoteCatalogClient {
     static final class Result {
         final String url;
         final boolean directDataSource;
+        final String castTransport;
 
         Result(String url, boolean directDataSource) {
+            this(url, directDataSource, "tcp");
+        }
+
+        Result(String url, boolean directDataSource, String transport) {
+            this.castTransport = "udp".equals(transport) ? "udp" : "tcp";
             this.url = url;
             this.directDataSource = directDataSource;
         }

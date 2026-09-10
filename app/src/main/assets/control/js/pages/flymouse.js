@@ -626,13 +626,8 @@ function sensorReady(name) {
   }
 }
 
-function calibrateGyroscope() {
-  if (!gyroSeen) {
-    setSensorStatus("请先启用传感器并轻轻移动手机。", true);
-    return;
-  }
-  resetMotionTracking();
-  setSensorStatus("动态基准已重置，请保持当前握持姿势。", false);
+function openBrowserSettings() {
+  location.href = "/pages/browser.html";
 }
 
 function clampRate(value) {

@@ -154,6 +154,8 @@ public final class MainActivity extends Activity {
     private static final String WEB_CAST_RESOLUTION_2K = "2560x1440";
     private static final String WEB_CAST_RESOLUTION_4K = "3840x2160";
     private static final String WEB_CAST_FPS = "web_cast_fps";
+    private static final String WEB_CAST_TRANSPORT = "web_cast_transport";
+    private static final String WIFI_DIRECT_EXPERIMENTAL = "wifi_direct_experimental";
     private static final String WEB_CAST_CODEC = "web_cast_codec";
     private static final String WEB_CAST_BITRATE = "web_cast_bitrate_mbps";
     private static final String WEB_CAST_AUDIO = "web_cast_audio";
@@ -215,7 +217,7 @@ public final class MainActivity extends Activity {
     private static final int PLAYBACK_RECOVERY_MAX_ATTEMPTS = 5;
     private static final long CUSTOM_SOURCE_TIMEOUT_MS = 5000L;
     private static final long CARRIER_IPTV_SOURCE_TIMEOUT_MS = 12000L;
-    private static final long NUMERIC_CHANNEL_TIMEOUT_MS = 1200L;
+    private static final long NUMERIC_CHANNEL_TIMEOUT_MS = 3000L;
     private static final int LOCAL_PLAYLIST_PERMISSION_REQUEST = 4201;
     private static final int CAST_AUDIO_PERMISSION_REQUEST = 4202;
     private static final int CAST_MEDIA_PROJECTION_REQUEST = 4203;
@@ -314,6 +316,23 @@ public final class MainActivity extends Activity {
     private ListView channelList;
     private ListView epgList;
     private View epgColumn;
+    private boolean epgExpanded;
+    private TextView epgToggle;
+    private TextView epgFavorite;
+    private long epgIdleSince;
+    private final Runnable deferredEpgRefresh = new Runnable() {
+        @Override public void run() {
+            if (isFinishing()) return;
+            long now = SystemClock.uptimeMillis();
+            if (loadingActive) epgIdleSince = 0L;
+            else if (epgIdleSince == 0L) epgIdleSince = now;
+            if (epgIdleSince == 0L || now - epgIdleSince < 3000L) {
+                root.postDelayed(this, 1500L);
+                return;
+            }
+            refreshEpgNow();
+        }
+    };
     private View epgDivider;
     private TextView epgStatus;
     private ChannelListAdapter groupAdapter;
@@ -412,12 +431,53 @@ public final class MainActivity extends Activity {
             root.postDelayed(receiverTakeoverWatchdog, TAKEOVER_SESSION_TIMEOUT_MS);
         }
     }
+
+    private long controllerTakeoverStartedAt;
+    private final Runnable controllerTakeoverWatchdog = new Runnable() {
+        @Override public void run() {
+            if (isFinishing() || remoteReceiverControlUrl.length() == 0) return;
+            long lastResponse = Math.max(controllerTakeoverStartedAt,
+                    remoteCatalogClient.lastTakeoverResponseAt());
+            long silentFor = SystemClock.elapsedRealtime() - lastResponse;
+            if (silentFor >= TAKEOVER_SESSION_TIMEOUT_MS) {
+                Log.i(TAG, "Receiver lease expired silentMs=" + silentFor);
+                finishReceiverDisconnection();
+            } else {
+                root.postDelayed(this, TAKEOVER_SESSION_TIMEOUT_MS - silentFor);
+            }
+        }
+    };
+
+    private void finishReceiverDisconnection() {
+        String lastPage = webSourceView == null ? "" : webSourceView.currentPageUrl();
+        if (!canResumeControllerWebPage()) playRequestId++;
+        cancelPendingRelativeSwitch();
+        clearPendingPlayer();
+        nextPlaybackRequestedByReceiver = false;
+        pendingCastConfig = null;
+        boolean retainedPage = releaseReceiverPlayback(false, true);
+        wifiDirectActive = false;
+        takeoverNetworkDelayMs = -1L;
+        if (wifiDirectCoordinator != null) wifiDirectCoordinator.removeGroup();
+        if (webViewCastManager != null) webViewCastManager.setAdvertisedAddress("");
+        ManagementActivity.closeAll();
+        closeManagementPanel();
+        if (!retainedPage) resumeControllerContent(lastPage);
+        setTakeoverProgress(false, "电视已断开", "已在手机继续播放当前内容", 100);
+        Toast.makeText(this, "电视已断开，已恢复本机播放", Toast.LENGTH_SHORT).show();
+    }
     private SurfaceHolder videoSurfaceHolder;
     private boolean castSurfaceRestartPending;
     private HlsProxyServer proxy;
     private boolean proxyStatefulCmgSource;
     private boolean lowResourceDevice;
     private IjkMediaPlayer player;
+    private MultimediaCastManager multimedia;
+    private File localMultimediaFile;
+    private ImageView localMultimediaImage;
+    private long localMultimediaPosition;
+    private boolean multimediaSuspended;
+    private Channel multimediaReceiverChannel;
     private boolean prepared;
     private boolean videoRenderingStarted;
     private boolean activeSoftwareDecode;
@@ -431,6 +491,7 @@ public final class MainActivity extends Activity {
     private volatile int remoteReceiverRequestId = -1;
     private CastConfig remoteReceiverCastConfig;
     private volatile String remoteReceiverControlUrl = "";
+    private volatile String claimingReceiverUrl = "";
     private volatile String lastTakeoverReceiverUrl = "";
     private final ArrayList<String> recentTakeoverReceiverUrls = new ArrayList<String>();
     private volatile String castEdgeReceiverUrl = "";
@@ -541,6 +602,11 @@ public final class MainActivity extends Activity {
     private boolean wifiDirectPermissionRequestInFlight;
     private boolean wifiDirectPermissionDenied;
     private volatile boolean wifiDirectActive;
+    private volatile int directUpgradeGeneration;
+    private volatile boolean directUpgradeRunning;
+    private volatile long directUpgradeStartedAt;
+    private volatile long directUpgradeDurationMs;
+    private final Object receiverRouteLock = new Object();
     private final LinkedHashMap<String, LocalControlServer.Resource> controlPageCache =
             new LinkedHashMap<String, LocalControlServer.Resource>();
     private WebViewCastManager webViewCastManager;
@@ -553,7 +619,6 @@ public final class MainActivity extends Activity {
     private final Object pendingTakeoverLock = new Object();
     private String pendingTakeoverReceiverUrl = "";
     private boolean pendingTakeoverStayOnContent;
-    private boolean pendingTakeoverWifiDirectEligible;
     private boolean localNetworkPermissionRequestInFlight;
     private boolean localNetworkPermissionDenied;
     private boolean pendingOpenManagementAfterLocalNetwork;
@@ -576,6 +641,11 @@ public final class MainActivity extends Activity {
     private volatile String webViewUserAgent;
     private volatile String webCastResolution = WEB_CAST_RESOLUTION_720P;
     private volatile int webCastFps = 25;
+    private volatile String webCastTransport = RTSP_TRANSPORT_TCP;
+    private volatile boolean wifiDirectExperimental;
+    private final java.util.concurrent.atomic.AtomicBoolean takeoverCommandRunning =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private String receiverCastTransport = RTSP_TRANSPORT_TCP;
     private volatile String webCastCodec = CastConfig.CODEC_H264;
     private volatile int webCastBitrateMbps = 3;
     private volatile boolean webCastAudio;
@@ -594,6 +664,10 @@ public final class MainActivity extends Activity {
     private volatile long takeoverNetworkDelayMs = -1L;
     private volatile long remoteNetworkDelayMs = -1L;
     private volatile long remoteEncodeDelayMs = -1L;
+    private volatile long remoteCastVideoBitrate = -1L;
+    private volatile long remoteCastAudioBitrate = -1L;
+    private CastAudioRoute castAudioRoute;
+    private volatile String remoteEncodeDetail = "";
     private volatile long remoteVideoQueueDelayMs = -1L;
     private volatile long remoteVideoSendDelayMs = -1L;
     private volatile int remoteCatalogGeneration = -1;
@@ -782,6 +856,9 @@ public final class MainActivity extends Activity {
         subtitleText.addOnLayoutChangeListener(subtitleLayoutListener);
         ((View) subtitleText.getParent()).addOnLayoutChangeListener(subtitleLayoutListener);
         webSourceView = (WebSourceView) findViewById(R.id.web_source);
+        if (Build.VERSION.SDK_INT >= 29) {
+            castAudioRoute = new CastAudioRoute(this, remoteCatalogClient);
+        }
         webViewCastManager = new WebViewCastManager(this);
         systemInfoProvider = new SystemInfoProvider(this);
         wifiDirectCoordinator = new WifiDirectCoordinator(this,
@@ -839,6 +916,21 @@ public final class MainActivity extends Activity {
         channelList = (ListView) findViewById(R.id.channel_list);
         epgList = (ListView) findViewById(R.id.epg_list);
         epgColumn = findViewById(R.id.epg_column);
+        epgToggle = (TextView) findViewById(R.id.epg_toggle);
+        epgFavorite = (TextView) findViewById(R.id.epg_favorite);
+        epgToggle.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                epgExpanded = !epgExpanded;
+                showEpgForBrowsingChannel(browsingChannelPosition());
+                scheduleChannelListDismiss();
+            }
+        });
+        epgFavorite.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                toggleSelectedChannelFavorite();
+                scheduleChannelListDismiss();
+            }
+        });
         epgDivider = findViewById(R.id.channel_epg_divider);
         epgStatus = (TextView) findViewById(R.id.epg_status);
         groupAdapter = new ChannelListAdapter(this, uiScaleHelper);
@@ -915,6 +1007,9 @@ public final class MainActivity extends Activity {
         webCastResolution = sanitizeWebCastResolution(preferences.getString(
                 WEB_CAST_RESOLUTION, WEB_CAST_RESOLUTION_720P));
         webCastFps = sanitizeWebCastFps(preferences.getInt(WEB_CAST_FPS, 25));
+        webCastTransport = sanitizeRtspTransport(preferences.getString(
+                WEB_CAST_TRANSPORT, RTSP_TRANSPORT_TCP));
+        wifiDirectExperimental = preferences.getBoolean(WIFI_DIRECT_EXPERIMENTAL, false);
         webCastCodec = sanitizeWebCastCodec(preferences.getString(
                 WEB_CAST_CODEC, CastConfig.CODEC_H264));
         webCastBitrateMbps = sanitizeWebCastBitrate(
@@ -937,18 +1032,11 @@ public final class MainActivity extends Activity {
         flyMouseEnabled = preferences.getBoolean(FLY_MOUSE_ENABLED, false);
         autoSwitchSource = preferences.getBoolean(AUTO_SWITCH_SOURCE, false);
         autoUpdateChannelList = preferences.getBoolean(AUTO_UPDATE_CHANNEL_LIST, false);
-        try {
-            remoteCatalogUrl = RemoteCatalogClient.normalizeServerUrl(
-                    preferences.getString(REMOTE_CATALOG_URL, ""));
-        } catch (IOException ignored) {
-            remoteCatalogUrl = "";
-            preferences.edit().remove(REMOTE_CATALOG_URL).apply();
-        }
+        // A socket lease cannot survive process death. Boot with the TV's own
+        // saved channel; an online phone can establish a fresh lease afterwards.
+        remoteCatalogUrl = "";
+        preferences.edit().remove(REMOTE_CATALOG_URL).apply();
         loadRecentTakeoverReceivers(preferences);
-        if (remoteCatalogUrl.length() > 0) {
-            lastRemoteTakeoverMessageAt = SystemClock.elapsedRealtime();
-            scheduleReceiverTakeoverWatchdog();
-        }
         liveDelayMode = sanitizeLiveDelayMode(
                 preferences.getString(LIVE_DELAY_MODE, LIVE_DELAY_STABLE));
         subtitleSizePercent = sanitizeSubtitleSizePercent(
@@ -965,12 +1053,6 @@ public final class MainActivity extends Activity {
         playlistManager = new PlaylistManager(this);
         loadFavoriteChannels(preferences);
         final LastChannelSnapshot startupSnapshot = loadLastChannelSnapshot(preferences);
-        if (remoteCatalogUrl.length() > 0 && startupSnapshot != null) {
-            // A receiver can restart while it is still leased by a phone. The
-            // persisted snapshot is the television's own channel because remote
-            // playback is never allowed to replace it.
-            receiverChannelBeforeTakeover = startupSnapshot;
-        }
         // Cold start uses Java constants only. Opening/parsing the bundled M3U and
         // reading SQLite are reserved for loadCompleteCatalogInBackground(), after
         // the first playback request is already under way.
@@ -979,10 +1061,11 @@ public final class MainActivity extends Activity {
         refreshFavoriteCatalog();
         requestLocalPlaylistPermissionIfNeeded();
         epgManager = new EpgManager(this);
+        channelAdapter.setEpgManager(epgManager);
         yangshipinResolver = new YangshipinWebResolver(this, (FrameLayout) root,
                 getIntent().getBooleanExtra("cmg_keep_web_trace", false));
         ku9ScriptResolver = new Ku9ScriptResolver(this, (FrameLayout) root);
-        cjsSiteResolver = new CjsSiteResolver(this, (FrameLayout) root);
+        cjsSiteResolver = new CjsSiteResolver(this);
         if (lowResourceDevice) {
             root.postDelayed(new Runnable() {
                 @Override
@@ -1068,6 +1151,19 @@ public final class MainActivity extends Activity {
             int sourceCount = Math.max(1, currentChannel().sourceCount());
             currentSourceIndex = (startupSnapshot.sourceIndex % sourceCount
                     + sourceCount) % sourceCount;
+            String favoriteKey = preferences.getString("last_channel_favorite_key", "");
+            if (favoriteKey.length() > 0) {
+                for (int index = 0; index < ChannelCatalog.GROUPS.length; index++) {
+                    ChannelCatalog.Group favorites = ChannelCatalog.GROUPS[index];
+                    if (favorites.source != ChannelCatalog.SOURCE_FAVORITES) continue;
+                    int position = findChannelByKey(favorites, favoriteKey);
+                    if (position >= 0) {
+                        currentGroupIndex = index;
+                        currentChannelIndex = position;
+                        break;
+                    }
+                }
+            }
         } else if (hasLastChannel) {
             currentGroupIndex = ChannelCatalog.wrapGroupIndex(
                     preferences.getInt(LAST_GROUP_INDEX,
@@ -1196,7 +1292,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean shouldFreezeReceiverChannelHistory() {
-        return remoteCatalogUrl.length() > 0 || restoreReceiverChannelPending;
+        return multimediaReceiverChannel != null || remoteCatalogUrl.length() > 0 || restoreReceiverChannelPending;
     }
 
     private boolean isTelevisionDevice() {
@@ -1246,6 +1342,7 @@ public final class MainActivity extends Activity {
         channelList.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                channelList.setItemChecked(position, true);
                 showEpgForBrowsingChannel(position);
                 updateFavoriteButton();
             }
@@ -1308,7 +1405,10 @@ public final class MainActivity extends Activity {
                 SniffedResource resource = new SniffedResource(requestId, streamUrl,
                         pageUrl, userAgent, cookies);
                 int resourceCount = rememberSniffedResource(resource);
-                if (webViewAutoPlaySniffed) {
+                // Keep the page being cast, including while capture permission/startup is pending.
+                // Explicit resource selection still uses startSniffedResource below.
+                if (webViewAutoPlaySniffed && !isReceiverTakeoverActive()
+                        && !isCastingWebPage()) {
                     startSniffedResource(resource);
                 } else {
                     showChannelBar(channel.name, "已发现 " + resourceCount
@@ -1335,7 +1435,8 @@ public final class MainActivity extends Activity {
     }
 
     private boolean hasLocalNetworkAccess() {
-        return Build.VERSION.SDK_INT < ANDROID_17_API
+        return !CastPermissionPolicy.requiresLocalNetworkPermission(Build.VERSION.SDK_INT,
+                getApplicationInfo().targetSdkVersion)
                 || checkSelfPermission(ACCESS_LOCAL_NETWORK_PERMISSION)
                         == PackageManager.PERMISSION_GRANTED;
     }
@@ -1369,21 +1470,15 @@ public final class MainActivity extends Activity {
     /** Delay every LAN connection until its Android runtime permissions are ready. */
     private boolean queueTakeoverForPermissions(String receiverUrl,
             boolean stayOnContent) {
-        boolean wifiDirectEligible = shouldTryWifiDirectForReceiver(receiverUrl);
-        boolean wifiDirectPermissionMissing = wifiDirectEligible
-                && !wifiDirectPermissionDenied
-                && !wifiDirectCoordinator.hasPermission();
         boolean audioPermissionMissing = webCastAudio
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
                 && (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                         != PackageManager.PERMISSION_GRANTED
                     || castAudioProjection == null);
-        if (hasLocalNetworkAccess() && !wifiDirectPermissionMissing
-                && !audioPermissionMissing) return false;
+        if (hasLocalNetworkAccess() && !audioPermissionMissing) return false;
         synchronized (pendingTakeoverLock) {
             pendingTakeoverReceiverUrl = receiverUrl;
             pendingTakeoverStayOnContent = stayOnContent;
-            pendingTakeoverWifiDirectEligible = wifiDirectEligible;
         }
         runOnUiThread(new Runnable() {
             @Override public void run() {
@@ -1399,15 +1494,6 @@ public final class MainActivity extends Activity {
         if (!hasPendingTakeover() || isFinishing()) return;
         if (!hasLocalNetworkAccess()) {
             requestLocalNetworkPermission(false, true);
-            return;
-        }
-        boolean directEligible;
-        synchronized (pendingTakeoverLock) {
-            directEligible = pendingTakeoverWifiDirectEligible;
-        }
-        if (directEligible && !wifiDirectPermissionDenied
-                && !wifiDirectCoordinator.hasPermission()) {
-            requestWifiDirectPermission();
             return;
         }
         if (webCastAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1436,7 +1522,6 @@ public final class MainActivity extends Activity {
             stayOnContent = pendingTakeoverStayOnContent;
             pendingTakeoverReceiverUrl = "";
             pendingTakeoverStayOnContent = false;
-            pendingTakeoverWifiDirectEligible = false;
         }
         if (receiverUrl.length() == 0) return;
         new Thread(new Runnable() {
@@ -1480,7 +1565,6 @@ public final class MainActivity extends Activity {
         synchronized (pendingTakeoverLock) {
             pendingTakeoverReceiverUrl = "";
             pendingTakeoverStayOnContent = false;
-            pendingTakeoverWifiDirectEligible = false;
         }
         castEdgeBusy = false;
         setTakeoverProgress(false, "接管已取消", message, 100);
@@ -1493,31 +1577,10 @@ public final class MainActivity extends Activity {
     }
 
     private boolean shouldTryWifiDirect() {
-        return wifiDirectCoordinator != null && wifiDirectCoordinator.isSupported()
+        return wifiDirectExperimental && wifiDirectCoordinator != null && wifiDirectCoordinator.isSupported()
                 && wifiDirectCoordinator.isEnabled()
                 && !isTelevisionDevice()
                 && "wifi".equals(SystemInfoProvider.activeNetworkTransport(this));
-    }
-
-    private boolean shouldTryWifiDirectForReceiver(String receiverUrl) {
-        if (!shouldTryWifiDirect() || !hasLocalNetworkAccess()
-                || !SystemInfoProvider.isPeerOnActiveWifi(this, receiverUrl)
-                || Looper.myLooper() == Looper.getMainLooper()) {
-            return false;
-        }
-        try {
-            JSONObject state = remoteCatalogClient.receiverState(receiverUrl);
-            String transport = state.optString("networkTransport", "");
-            if (transport.length() == 0) {
-                JSONObject system = state.optJSONObject("system");
-                transport = system == null ? ""
-                        : system.optString("networkTransport", "");
-            }
-            return "wifi".equals(transport);
-        } catch (Exception error) {
-            // The normal claim path supplies the precise update/connect error.
-            return false;
-        }
     }
 
     private void requestWifiDirectPermission() {
@@ -1533,7 +1596,7 @@ public final class MainActivity extends Activity {
             return;
         }
         wifiDirectPermissionRequestInFlight = true;
-        requestPermissions(new String[] { Manifest.permission.ACCESS_FINE_LOCATION },
+        requestPermissions(new String[] { wifiDirectCoordinator.requiredPermission() },
                 WIFI_DIRECT_PERMISSION_REQUEST);
     }
 
@@ -1917,7 +1980,7 @@ public final class MainActivity extends Activity {
         webSourceView.hideForStreamPlayback();
         videoView.setVisibility(View.VISIBLE);
         showLoading(channel.name, "正在打开所选嗅探资源");
-        showChannelBar(channel.name, "已从网页打开视频 · 按返回键回网页");
+        showChannelBar(channel.name, "已从网页打开资源 · 按返回键回网页");
         startResolvedPlayer(channel, resource.url);
     }
 
@@ -2084,6 +2147,10 @@ public final class MainActivity extends Activity {
             return;
         }
         try {
+            if (isReceiverTakeoverActive()
+                    && ManagementActivity.showTakeoverControls(controlServer.getLoopbackUrl())) {
+                return;
+            }
             Intent intent = new Intent(this, ManagementActivity.class)
                     .putExtra(ManagementActivity.EXTRA_URL, controlServer.getLoopbackUrl())
                     .putExtra(ManagementActivity.EXTRA_TAKEOVER,
@@ -2098,9 +2165,117 @@ public final class MainActivity extends Activity {
         }
     }
 
+    void checkMultimediaStart() throws java.io.IOException {
+        if (!hasLocalNetworkAccess()) {
+            requestLocalNetworkPermission(false, true);
+            throw new java.io.IOException("请授权局域网访问后重新选择文件");
+        }
+        if (isReceiverTakeoverActive() || remoteCatalogUrl.length() > 0
+                || webViewCastManager != null && webViewCastManager.isRunning())
+            throw new java.io.IOException("请先结束当前接管或网页投屏，再投送多媒体");
+    }
+
+    CastConfig multimediaConfig() { return buildRemoteReceiverCastConfig(); }
+
+    void suspendForMultimedia(boolean receiving) {
+        clearLocalMultimedia();
+        multimediaSuspended = true;
+        playRequestId++;
+        cancelPendingRelativeSwitch();
+        resetPlaybackRecoveryState();
+        closeWebSource();
+        releasePlayer();
+        hideLoading();
+        if (receiving) { closeManagementPanel(); ManagementActivity.closeAll(); }
+        updateCastKeepAlive();
+    }
+
+    void startMultimediaReceiver(String url, String transport, String title) {
+        multimediaReceiverChannel = new Channel("", title, "multimedia", url, null, null);
+        videoView.setVisibility(View.VISIBLE);
+        startResolvedPlayer(multimediaReceiverChannel, url, false, transport);
+    }
+
+    void restoreAfterMultimedia() {
+        if (!multimediaSuspended) return;
+        multimediaSuspended = false;
+        multimediaReceiverChannel = null;
+        updateCastKeepAlive();
+        startChannel(currentChannelIndex);
+    }
+
+    void resumeSentMultimedia(final File file, String title, boolean image, long positionMs) {
+        if (isFinishing() || !multimediaSuspended) { file.delete(); return; }
+        multimediaSuspended = false;
+        ManagementActivity.closeAll();
+        closeManagementPanel();
+        clearLocalMultimedia();
+        localMultimediaFile = file;
+        multimediaReceiverChannel = new Channel("", title, "local-multimedia", file.toURI().toString(), null, null);
+        updateCastKeepAlive();
+        if (!image) {
+            localMultimediaPosition = Math.max(0L, positionMs);
+            videoView.setVisibility(View.VISIBLE);
+            startResolvedPlayer(multimediaReceiverChannel, file.toURI().toString(), true);
+            return;
+        }
+        releasePlayer();
+        hideLoading();
+        videoView.setVisibility(View.INVISIBLE);
+        final ImageView preview = new ImageView(this);
+        preview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        localMultimediaImage = preview;
+        ((android.view.ViewGroup) root).addView(preview, 1, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        final int maxDimension = Math.max(root.getWidth(), root.getHeight());
+        new Thread(() -> {
+            Bitmap bitmap = null;
+            try {
+                android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(file.getPath(), options);
+                options.inSampleSize = 1;
+                while (Math.max(options.outWidth, options.outHeight) / options.inSampleSize > Math.max(720, Math.min(2048, maxDimension)))
+                    options.inSampleSize *= 2;
+                options.inJustDecodeBounds = false;
+                bitmap = android.graphics.BitmapFactory.decodeFile(file.getPath(), options);
+            } catch (RuntimeException | OutOfMemoryError ignored) { }
+            final Bitmap decoded = bitmap;
+            runOnUiThread(() -> {
+                if (localMultimediaImage != preview) { if (decoded != null) decoded.recycle(); return; }
+                preview.setImageBitmap(decoded);
+                if (decoded == null) showChannelBar(title, "无法读取图片");
+            });
+        }, "resume-local-image").start();
+    }
+
+    private void clearLocalMultimedia() {
+        if (localMultimediaImage != null) {
+            ((android.view.ViewGroup) root).removeView(localMultimediaImage);
+            localMultimediaImage.setImageDrawable(null);
+            localMultimediaImage = null;
+        }
+        if (localMultimediaFile != null) {
+            localMultimediaFile.delete();
+            localMultimediaFile = null;
+            multimediaReceiverChannel = null;
+        }
+        localMultimediaPosition = 0;
+    }
+
     private void startManagementServer() {
+        multimedia = new MultimediaCastManager(this);
         try {
             controlServer = new LocalControlServer(new LocalControlServer.Listener() {
+                @Override
+                public String multimediaControl(JSONObject request) throws Exception {
+                    return multimedia.control(request);
+                }
+
+                @Override public String uploadMultimedia(String url, String name,
+                        java.io.InputStream input, int length, boolean preserveAudio) throws Exception {
+                    return multimedia.upload(url, name, input, length, preserveAudio);
+                }
+
                 @Override
                 public String stateJson(String view) {
                     return buildControlState(view);
@@ -2151,6 +2326,7 @@ public final class MainActivity extends Activity {
                     try {
                         return handleWebTakeover(request);
                     } catch (Exception error) {
+                        claimingReceiverUrl = "";
                         setTakeoverProgress(false, "接管失败", safeMessage(error), 100);
                         throw error;
                     }
@@ -2180,6 +2356,12 @@ public final class MainActivity extends Activity {
                 @Override
                 public String settings(JSONObject request) throws Exception {
                     return handleWebSettings(request);
+                }
+
+                @Override
+                public String installUpdate() throws Exception {
+                    if (autoUpdater == null) throw new JSONException("更新服务尚未就绪");
+                    return autoUpdater.installLiteUpdate();
                 }
 
                 @Override
@@ -2421,6 +2603,7 @@ public final class MainActivity extends Activity {
                             .put("number", channel.number)
                             .put("name", channel.name)
                             .put("epgId", channel.epgId == null ? "" : channel.epgId)
+                            .put("logoUrl", channel.logoUrl)
                             .put("sourceCount", Math.max(1, channel.sourceCount())));
                 }
                 jsonGroup.put("channels", channels);
@@ -2485,6 +2668,7 @@ public final class MainActivity extends Activity {
                     .put("sourceIndex", remoteWebViewCastSourceIndex)
                     .put("sourceMode", "cast")
                     .put("sourceUrl", webViewCastManager.rtspUrl())
+                    .put("castTransport", webViewCastManager.transport())
                     .put("playlistPath", "");
         }
         String remoteStreamUrl = remotePlaybackStreamUrl(channel);
@@ -2582,7 +2766,11 @@ public final class MainActivity extends Activity {
             root.put("networkTransport", SystemInfoProvider.activeNetworkTransport(this));
             root.put("wifiDirect", wifiDirectCoordinator == null ? new JSONObject()
                     : wifiDirectCoordinator.stateJson());
-            root.getJSONObject("wifiDirect").put("active", wifiDirectActive);
+            root.getJSONObject("wifiDirect").put("active", wifiDirectActive)
+                    .put("upgrading", directUpgradeRunning)
+                    .put("upgradeMs", directUpgradeRunning
+                            ? SystemClock.elapsedRealtime() - directUpgradeStartedAt
+                            : directUpgradeDurationMs);
             if (full) {
                 root.put("castBackground", CastKeepAliveService.stateJson());
                 root.put("takeoverSessionConnected",
@@ -2666,6 +2854,7 @@ public final class MainActivity extends Activity {
                         channels.put(new JSONObject().put("number", item.number)
                                 .put("name", item.name)
                                 .put("epgId", item.epgId == null ? "" : item.epgId)
+                                .put("logoUrl", item.logoUrl)
                                 .put("sourceCount", Math.max(1, item.sourceCount())));
                     }
                     jsonGroup.put("channels", channels);
@@ -2682,6 +2871,9 @@ public final class MainActivity extends Activity {
 
     private JSONObject buildControlSettings(String view, boolean full) throws JSONException {
         JSONObject settings = new JSONObject();
+        if (full || "advanced".equals(view) || "channels".equals(view)) {
+            settings.put("githubProxyBaseUrl", GithubProxy.baseUrl());
+        }
         if (full || "advanced".equals(view)) {
             settings.put("reverseKeys", reverseUpDown)
                     .put("dnsMode", NetworkClient.getDnsMode())
@@ -2722,6 +2914,8 @@ public final class MainActivity extends Activity {
             settings.put("webCastResolution", webCastResolution)
                     .put("webCastFps", webCastFps)
                     .put("webCastCodec", webCastCodec)
+                    .put("webCastTransport", webCastTransport)
+                    .put("wifiDirectExperimental", wifiDirectExperimental)
                     .put("webCastBitrateMbps", webCastBitrateMbps)
                     .put("webCastAudio", webCastAudio);
         }
@@ -2760,6 +2954,18 @@ public final class MainActivity extends Activity {
 
     private String handleWebControl(JSONObject request) throws JSONException {
         final String action = request.optString("action", "");
+        if ("volume".equals(action)) {
+            final int direction = request.optInt("direction", 0);
+            if (direction != -1 && direction != 1) throw new JSONException("音量方向无效");
+            runOnUiThread(new Runnable() { @Override public void run() {
+                adjustRemoteVolume(direction > 0 ? KeyEvent.KEYCODE_VOLUME_UP
+                        : KeyEvent.KEYCODE_VOLUME_DOWN);
+            }});
+            return new JSONObject().put("ok", true).toString();
+        }
+        if ("play".equals(action) && request.has("controllerCatalogGeneration")) {
+            awaitControllerCatalog(request);
+        }
         final int requestedGroup = request.optInt("group", -1);
         final int requestedChannel = request.optInt("channel", -1);
         final int requestedSource = request.optInt("source", 0);
@@ -2774,6 +2980,10 @@ public final class MainActivity extends Activity {
             }
         }
         final String requestedReceiverUrl = receiverUrl;
+        if (requestedByReceiver && "play".equals(action)
+                && !acceptsReceiverPlayback(requestedReceiverUrl)) {
+            throw new JSONException("接管会话已结束，请重新接管电视");
+        }
         final CastConfig requestedReceiverCast = requestedByReceiver
                 ? buildRemoteReceiverCastConfig(request) : null;
         final String requestedUrl = request.optString("url", "");
@@ -2784,6 +2994,7 @@ public final class MainActivity extends Activity {
                 && !"sourcePrevious".equals(action) && !"sourceNext".equals(action)
                 && !"playSniffed".equals(action)
                 && !"detachRemote".equals(action)
+                && !"endTakeover".equals(action)
                 && !"releaseReceiver".equals(action)) {
             throw new JSONException("未知的控制指令");
         }
@@ -2805,6 +3016,10 @@ public final class MainActivity extends Activity {
                 && remoteReceiverControlUrl.length() > 0
                 && isTakeoverRelayAction(action)) {
             try {
+                if ("play".equals(action)) {
+                    request.put("controllerCatalogGeneration", catalogGeneration)
+                            .put("controllerSessionId", remoteCatalogClient.activeTakeoverSessionId());
+                }
                 return remoteCatalogClient.controlReceiver(
                         remoteReceiverControlUrl, request).toString();
             } catch (Exception error) {
@@ -2834,9 +3049,21 @@ public final class MainActivity extends Activity {
                     // A delayed release from a previous lease must not kill a
                     // newly established connection to the same receiver.
                     if (remoteCatalogClient.acceptsRelease(request.optString("sessionId", ""))) {
-                        releaseReceiverPlayback();
+                        if (isReceiverTakeoverActive()) finishReceiverDisconnection();
+                    }
+                } else if ("endTakeover".equals(action)) {
+                    synchronized (receiverRouteLock) {
+                        if (CastRouteHandover.canEnd(remoteTakeoverSessionId,
+                                request.optString("sessionId", ""))) {
+                            exitRemoteCatalogTakeover("已结束接管");
+                        }
                     }
                 } else {
+                    // Recheck on the UI thread: the lease may expire while this
+                    // request is queued behind WebView/decoder cleanup.
+                    if (requestedByReceiver && !acceptsReceiverPlayback(requestedReceiverUrl)) {
+                        return;
+                    }
                     ChannelCatalog.Group[] groups = ChannelCatalog.GROUPS;
                     if (requestedGroup < 0 || requestedGroup >= groups.length
                             || requestedChannel < 0
@@ -2845,6 +3072,15 @@ public final class MainActivity extends Activity {
                             || requestedSource >= Math.max(1,
                                     groups[requestedGroup].channels[requestedChannel]
                                             .sourceCount())) {
+                        return;
+                    }
+                    // Decide before replacing the selection: the visible document
+                    // may have navigated away from the channel's original URL.
+                    if (requestedByReceiver && castCurrentWebPage(requestedGroup,
+                            requestedChannel, requestedSource, requestedReceiverUrl,
+                            requestedReceiverCast)) {
+                        acceptedRequestId[0] = playRequestId;
+                        closeChannelList();
                         return;
                     }
                     currentGroupIndex = requestedGroup;
@@ -2913,6 +3149,9 @@ public final class MainActivity extends Activity {
                     coordinator.removeGroup();
                 }
             }, 500L);
+        } else if ("release".equals(action)) {
+            if (remoteCatalogUrl.length() == 0 && remoteReceiverControlUrl.length() == 0)
+                wifiDirectCoordinator.releaseGroupForReuse();
         } else if (!"status".equals(action)) {
             throw new IOException("不支持的 Wi-Fi Direct 操作");
         }
@@ -2923,7 +3162,83 @@ public final class MainActivity extends Activity {
 
     /** Try P2P only when both endpoints use Wi-Fi. Ethernet and phone hotspot paths
      * already have a direct, stable local route and should keep it. */
-    private WifiDirectCoordinator.Route tryWifiDirectRoute(String receiverUrl) {
+    /** Runs after the LAN claim has completed; never holds up the casting page. */
+    private void startDirectUpgrade(final String lanReceiverUrl) {
+        if (isFinishing() || directUpgradeRunning || wifiDirectActive || wifiDirectPermissionDenied
+                || !lanReceiverUrl.equals(remoteReceiverControlUrl) || !shouldTryWifiDirect()
+                || !SystemInfoProvider.isPeerOnActiveWifi(this, lanReceiverUrl)) return;
+        if (!wifiDirectCoordinator.hasPermission()) {
+            if (!wifiDirectPermissionDenied) requestWifiDirectPermission();
+            return;
+        }
+        if (!wifiDirectCoordinator.locationEnabled()) {
+            Toast.makeText(this, "已通过局域网投屏；开启系统位置服务后可尝试直连", Toast.LENGTH_LONG).show();
+            return;
+        }
+        final int generation = ++directUpgradeGeneration;
+        final String sessionId = remoteCatalogClient.activeTakeoverSessionId();
+        final String lanHostUrl = controlServer.getLanUrlForPeer(lanReceiverUrl);
+        directUpgradeStartedAt = SystemClock.elapsedRealtime();
+        directUpgradeDurationMs = 0L;
+        directUpgradeRunning = true;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                WifiDirectCoordinator.Route route = null;
+                boolean switched = false;
+                try {
+                    route = tryWifiDirectRoute(lanReceiverUrl, generation);
+                    Log.i(TAG, "Direct timing routeReadyMs="
+                            + (SystemClock.elapsedRealtime() - directUpgradeStartedAt)
+                            + " ready=" + (route != null));
+                    if (route == null || generation != directUpgradeGeneration
+                            || !lanReceiverUrl.equals(remoteReceiverControlUrl)) return;
+                    final WifiDirectCoordinator.Route candidate = route;
+                    if (webViewCastManager != null) {
+                        webViewCastManager.setAdvertisedAddress(new URL(route.controllerUrl).getHost());
+                    }
+                    claimingReceiverUrl = route.receiverUrl;
+                    switched = remoteCatalogClient.switchReceiverRoute(route.receiverUrl,
+                            lanHostUrl, route.controllerUrl, sessionId, takeoverStateProvider());
+                    if (!switched) return;
+                    runOnMainThreadAndWait(new Runnable() {
+                        @Override public void run() {
+                            if (generation != directUpgradeGeneration
+                                    || !lanReceiverUrl.equals(remoteReceiverControlUrl)
+                                        && !candidate.receiverUrl.equals(remoteReceiverControlUrl)) return;
+                            remoteReceiverControlUrl = candidate.receiverUrl;
+                            castEdgeReceiverUrl = candidate.receiverUrl;
+                            wifiDirectActive = true;
+                            takeoverNetworkDelayMs = -1L;
+                            if (webViewCastManager != null) webViewCastManager.resetDelayStatistics();
+                            updateCastAudioRoute();
+                            updateCastEdgeState();
+                            Log.i(TAG, "Cast route upgraded to Direct: " + candidate.receiverUrl);
+                        }
+                    });
+                } catch (Exception error) {
+                    Log.i(TAG, "Background Direct upgrade kept LAN: " + safeMessage(error));
+                } finally {
+                    if (!switched && route != null && generation == directUpgradeGeneration) {
+                        try {
+                            if (webViewCastManager != null)
+                                webViewCastManager.setAdvertisedAddress(new URL(lanHostUrl).getHost());
+                            if (route != null) remoteCatalogClient.wifiDirect(route.receiverUrl, "stop");
+                        } catch (Exception ignored) { }
+                        wifiDirectCoordinator.removeGroup();
+                    }
+                    if (route != null && route.receiverUrl.equals(claimingReceiverUrl)) claimingReceiverUrl = "";
+                    if (generation == directUpgradeGeneration) {
+                        directUpgradeDurationMs = SystemClock.elapsedRealtime() - directUpgradeStartedAt;
+                        directUpgradeRunning = false;
+                        Log.i(TAG, "Direct timing totalMs=" + directUpgradeDurationMs
+                                + " switched=" + switched);
+                    }
+                }
+            }
+        }, "cast-direct-upgrade").start();
+    }
+
+    private WifiDirectCoordinator.Route tryWifiDirectRoute(String receiverUrl, int generation) {
         if (!shouldTryWifiDirect() || wifiDirectPermissionDenied
                 || !SystemInfoProvider.isPeerOnActiveWifi(this, receiverUrl)
                 || !wifiDirectCoordinator.hasPermission() || controlServer == null) {
@@ -2933,8 +3248,12 @@ public final class MainActivity extends Activity {
         boolean controllerStarted = false;
         boolean routeAccepted = false;
         try {
-            setTakeoverProgress(true, "正在连接电视", "检查电视网络", 18);
             JSONObject receiverState = remoteCatalogClient.receiverState(receiverUrl);
+            if (generation != directUpgradeGeneration) return null;
+            JSONObject capability = receiverState.optJSONObject("wifiDirect");
+            if (capability == null || capability.optInt("handoverProtocol", 0) < 1
+                    || !capability.optBoolean("supported", false)
+                    || !capability.optBoolean("locationEnabled", false)) return null;
             String transport = receiverState.optString("networkTransport", "");
             if (transport.length() == 0) {
                 JSONObject system = receiverState.optJSONObject("system");
@@ -2947,15 +3266,58 @@ public final class MainActivity extends Activity {
             URL parsed = new URL(receiverUrl);
             int receiverPort = parsed.getPort() > 0
                     ? parsed.getPort() : parsed.getDefaultPort();
+            WifiDirectCoordinator.Route existing = wifiDirectCoordinator.reuseRoute(
+                    capability.optString("deviceAddress", ""), capability.optString("localAddress", ""),
+                    receiverPort, controlServer.getPort());
+            if (existing != null) {
+                JSONObject ready = waitForWifiDirectReceiver(existing.receiverUrl, 1500L);
+                if (ready.optInt("takeoverProtocol", 0) >= RemoteCatalogClient.TAKEOVER_PROTOCOL) {
+                    wifiDirectCoordinator.useGroup();
+                    routeAccepted = true;
+                    Log.i(TAG, "Direct reuse: authenticated peer group is still connected");
+                    return existing;
+                }
+            }
+            if (capability.optInt("androidApi", 99) <= 19) {
+                prepared = true;
+                wifiDirectCoordinator.warmPeerDiscovery();
+                JSONObject peer = remoteCatalogClient.wifiDirect(receiverUrl, "prepare", false);
+                // Start joining only once the selected owner is on-air. Racing
+                // negotiation against createGroup caused BUSY, invites and role changes.
+                long ownerDeadline = SystemClock.elapsedRealtime() + 5000L;
+                while (!peer.optBoolean("groupFormed", false)
+                        || !peer.optBoolean("groupOwner", false)) {
+                    if (generation != directUpgradeGeneration || !receiverUrl.equals(remoteReceiverControlUrl)
+                            || SystemClock.elapsedRealtime() >= ownerDeadline) return null;
+                    Thread.sleep(80L);
+                    try {
+                        peer = remoteCatalogClient.wifiDirectStatus(receiverUrl);
+                    } catch (IOException transientRouteChange) {
+                        // A scan/group channel change can briefly block a new STA
+                        // socket while the established takeover connection is alive.
+                        // Keep the bounded owner wait, not tear down a ready group.
+                        Log.d(TAG, "Direct owner probe retry: " + safeMessage(transientRouteChange));
+                    }
+                }
+                Log.i(TAG, "Direct timing ownerReadyMs="
+                        + (SystemClock.elapsedRealtime() - directUpgradeStartedAt));
+                controllerStarted = true;
+                WifiDirectCoordinator.Route legacy = wifiDirectCoordinator.connectToOwner(
+                        peer.optString("deviceAddress", ""), peer.optString("deviceName", ""),
+                        receiverPort, controlServer.getPort(), 20000L);
+                if (legacy == null) return null;
+                JSONObject reachable = waitForWifiDirectReceiver(legacy.receiverUrl, 2000L);
+                if (reachable.optInt("takeoverProtocol", 0) < RemoteCatalogClient.TAKEOVER_PROTOCOL) return null;
+                routeAccepted = true;
+                return legacy;
+            }
             // Put the phone's owner group on-air before restarting the old
             // receiver's discovery. Otherwise Android 7 can spend a full scan
             // cycle looking for a group that did not exist when scanning began.
-            setTakeoverProgress(true, "正在建立 Wi-Fi Direct", "手机创建直连组", 26);
             controllerStarted = true;
             WifiDirectCoordinator.Route route = wifiDirectCoordinator.connect(
                     "", receiverPort, controlServer.getPort(), 6000L);
             if (route == null) return null;
-            setTakeoverProgress(true, "正在建立 Wi-Fi Direct", "通知电视加入直连组", 42);
             String controllerDeviceAddress = wifiDirectCoordinator.controllerDeviceAddress(0L);
             String controllerDeviceName = wifiDirectCoordinator.controllerDeviceName();
             JSONObject direct = remoteCatalogClient.wifiDirect(receiverUrl, "prepare",
@@ -2963,13 +3325,11 @@ public final class MainActivity extends Activity {
             prepared = direct.optBoolean("ok", false);
             if (!prepared) return null;
             if (route.receiverUrl.length() == 0) {
-                setTakeoverProgress(true, "正在建立 Wi-Fi Direct", "等待电视加入并获取地址", 50);
-                route = waitForWifiDirectClientAddress(receiverUrl, route.controllerUrl,
+                    route = waitForWifiDirectClientAddress(receiverUrl, route.controllerUrl,
                         receiverPort, 9000L);
             }
             // Android may publish the P2P connection before DHCP has installed the
             // route. Give the new 192.168.49.x path a moment to become usable.
-            setTakeoverProgress(true, "正在建立 Wi-Fi Direct", "验证电视管理通道", 62);
             JSONObject p2pState = waitForWifiDirectReceiver(route.receiverUrl, 3000L);
             // The receiver may be an Android phone used as a TV endpoint. The
             // takeover protocol identifies nTv more reliably than form factor.
@@ -2982,10 +3342,10 @@ public final class MainActivity extends Activity {
         } catch (Exception error) {
             Log.i(TAG, "Wi-Fi Direct unavailable; keeping LAN route: "
                     + safeMessage(error));
-            setTakeoverProgress(true, "正在连接电视", "Direct 未连接，改用局域网", 66);
             return null;
         } finally {
-            if ((prepared || controllerStarted) && !routeAccepted) {
+            if (generation == directUpgradeGeneration
+                    && (prepared || controllerStarted) && !routeAccepted) {
                 if (prepared) {
                     try {
                         remoteCatalogClient.wifiDirect(receiverUrl, "stop");
@@ -3046,6 +3406,49 @@ public final class MainActivity extends Activity {
     }
 
     private String handleWebTakeover(JSONObject request) throws Exception {
+        if (!takeoverCommandRunning.compareAndSet(false, true)) {
+            return new JSONObject().put("ok", false)
+                    .put("message", "接管操作正在进行，请稍后重试").toString();
+        }
+        try {
+            return performWebTakeover(request);
+        } finally {
+            takeoverCommandRunning.set(false);
+        }
+    }
+
+    private void awaitControllerCatalog(JSONObject request) throws JSONException {
+        final int expected = request.optInt("controllerCatalogGeneration", -1);
+        final String session = request.optString("controllerSessionId", "");
+        if (expected < 0 || session.length() == 0
+                || !session.equals(remoteTakeoverSessionId) || remoteCatalogUrl.length() == 0) {
+            throw new JSONException("接管会话已失效，请重新连接电视");
+        }
+        if (expected == appliedRemoteCatalogGeneration) return;
+        if (expected != remoteCatalogGeneration) {
+            remoteCatalogGeneration = expected;
+            loadCompleteCatalogInBackground();
+        }
+        // HTTP worker only: the UI must stay free to apply the downloaded catalog.
+        long deadline = SystemClock.elapsedRealtime() + 5000L;
+        while (expected != appliedRemoteCatalogGeneration
+                && session.equals(remoteTakeoverSessionId)
+                && SystemClock.elapsedRealtime() < deadline) {
+            try {
+                Thread.sleep(25L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new JSONException("频道同步已取消");
+            }
+        }
+        if (expected != appliedRemoteCatalogGeneration || !session.equals(remoteTakeoverSessionId)) {
+            throw new JSONException("电视正在同步新频道，请稍后重试");
+        }
+    }
+
+    private String performWebTakeover(JSONObject request) throws Exception {
+        if (multimedia != null && multimedia.active())
+            throw new java.io.IOException("请先结束多媒体投屏");
         if (!canInitiateTakeover()) {
             throw new IOException("当前设备只可接受控制，不能接管其他设备");
         }
@@ -3055,33 +3458,34 @@ public final class MainActivity extends Activity {
         if (receiverUrl.length() == 0) {
             setTakeoverProgress(true, "正在退出接管", "恢复手机和电视原有内容", 30);
             final String activeReceiver = remoteReceiverControlUrl;
-            if (activeReceiver.length() > 0) {
-                remoteCatalogClient.disconnectReceiver(activeReceiver);
-            }
-            if (wifiDirectActive && activeReceiver.length() > 0) {
-                try {
-                    remoteCatalogClient.wifiDirect(activeReceiver, "stop");
-                } catch (Exception ignored) {
-                }
-            }
+            directUpgradeGeneration++;
+            directUpgradeRunning = false;
+            final String stoppedSession = remoteCatalogClient.detachTakeoverSession();
             wifiDirectActive = false;
             takeoverNetworkDelayMs = -1L;
-            if (wifiDirectCoordinator != null) wifiDirectCoordinator.removeGroup();
             if (webViewCastManager != null) webViewCastManager.setAdvertisedAddress("");
             runOnMainThreadAndWait(new Runnable() {
                 @Override
                 public void run() {
-                    releaseReceiverPlayback();
-                    // Recreate the same local channel after its decoder/WebView was
-                    // detached for the receiver. This covers native and web sources.
-                    startChannel(currentChannelIndex);
+                    String lastPage = webSourceView == null ? "" : webSourceView.currentPageUrl();
+                    if (!releaseReceiverPlayback(true, true)) resumeControllerContent(lastPage);
                     updateCastEdgeState();
                 }
             });
+            remoteCatalogClient.disconnectReceiver(activeReceiver, stoppedSession);
             setTakeoverProgress(false, "已退出接管", "电视已恢复原有频道", 100);
             return new JSONObject().put("ok", true)
                     .put("receiverUrl", "")
                     .put("rememberedReceiverUrl", lastTakeoverReceiverUrl).toString();
+        }
+        if (remoteReceiverControlUrl.length() > 0) {
+            if (receiverUrl.equals(remoteReceiverControlUrl)
+                    || receiverUrl.equals(lastTakeoverReceiverUrl)) {
+                return new JSONObject().put("ok", true)
+                        .put("receiverUrl", remoteReceiverControlUrl)
+                        .put("wifiDirect", wifiDirectActive).toString();
+            }
+            throw new IOException("请先结束当前接管，再连接其他电视");
         }
         setTakeoverProgress(true, "正在连接电视", "检查权限和设备状态", 8);
         if (queueTakeoverForPermissions(receiverUrl, stayOnContent)) {
@@ -3104,20 +3508,50 @@ public final class MainActivity extends Activity {
         if (hostUrl.length() == 0) {
             throw new IOException("无法识别手机局域网地址");
         }
-        WifiDirectCoordinator.Route directRoute = tryWifiDirectRoute(receiverUrl);
         takeoverNetworkDelayMs = -1L;
-        final String effectiveReceiverUrl = directRoute == null
-                ? receiverUrl : directRoute.receiverUrl;
-        final String effectiveHostUrl = directRoute == null
-                ? hostUrl : directRoute.controllerUrl;
+        final String effectiveReceiverUrl = receiverUrl;
         if (webViewCastManager != null) {
-            webViewCastManager.setAdvertisedAddress(new URL(effectiveHostUrl).getHost());
+            webViewCastManager.setAdvertisedAddress(new URL(hostUrl).getHost());
         }
-        try {
-            setTakeoverProgress(true, "正在接管电视", directRoute == null
-                    ? "建立局域网控制通道" : "建立 Direct 控制通道", 74);
-            remoteCatalogClient.claimReceiver(effectiveReceiverUrl, effectiveHostUrl,
-                new RemoteCatalogClient.TakeoverStateProvider() {
+        setTakeoverProgress(true, "正在接管电视", "建立局域网控制通道", 74);
+        final int claimGeneration = directUpgradeGeneration;
+        final boolean[] claimApplied = {false};
+        claimingReceiverUrl = receiverUrl;
+        remoteCatalogClient.claimReceiver(receiverUrl, hostUrl, takeoverStateProvider());
+        wifiDirectActive = wifiDirectCoordinator != null && wifiDirectCoordinator.isDirectPeer(receiverUrl);
+        if (wifiDirectActive) wifiDirectCoordinator.useGroup();
+        rememberTakeoverReceiver(receiverUrl);
+        castEdgeReceiverUrl = wifiDirectActive ? effectiveReceiverUrl : receiverUrl;
+        runOnMainThreadAndWait(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || claimGeneration != directUpgradeGeneration) return;
+                claimApplied[0] = true;
+                enterReceiverTakeoverMode(wifiDirectActive
+                        ? effectiveReceiverUrl : receiverUrl, !stayOnContent);
+                claimingReceiverUrl = "";
+                controllerTakeoverStartedAt = SystemClock.elapsedRealtime();
+                root.removeCallbacks(controllerTakeoverWatchdog);
+                root.postDelayed(controllerTakeoverWatchdog, TAKEOVER_SESSION_TIMEOUT_MS);
+                updateCastEdgeState();
+                root.post(new Runnable() {
+                    @Override public void run() { startDirectUpgrade(receiverUrl); }
+                });
+            }
+        });
+        if (!claimApplied[0]) {
+            throw new IOException("接管操作已取消");
+        }
+        setTakeoverProgress(false, "接管完成", wifiDirectActive
+                ? "已通过 Wi-Fi Direct 连接" : "已通过局域网连接", 100);
+        return new JSONObject().put("ok", true)
+                .put("receiverUrl", wifiDirectActive ? effectiveReceiverUrl : receiverUrl)
+                .put("wifiDirect", wifiDirectActive)
+                .put("rememberedReceiverUrl", lastTakeoverReceiverUrl).toString();
+    }
+
+    private RemoteCatalogClient.TakeoverStateProvider takeoverStateProvider() {
+        return new RemoteCatalogClient.TakeoverStateProvider() {
                     @Override
                     public JSONObject snapshot() throws JSONException {
                         return buildTakeoverSessionState();
@@ -3135,6 +3569,17 @@ public final class MainActivity extends Activity {
                     @Override public long encodeDelayMs() {
                         return webViewCastManager == null
                                 ? -1L : webViewCastManager.encodeDelayMs();
+                    }
+
+                    @Override public long videoBitrate() {
+                        return webViewCastManager == null ? -1L : webViewCastManager.videoBitrate();
+                    }
+                    @Override public long audioBitrate() {
+                        return webViewCastManager == null ? -1L : webViewCastManager.audioBitrate();
+                    }
+
+                    @Override public String encodeDetail() {
+                        return webViewCastManager == null ? "" : webViewCastManager.encodeDetail();
                     }
 
                     @Override public long videoQueueDelayMs() {
@@ -3157,77 +3602,7 @@ public final class MainActivity extends Activity {
                     public void onMessage(JSONObject message) throws Exception {
                         handleControllerSessionMessage(message);
                     }
-                });
-            wifiDirectActive = directRoute != null;
-        } catch (Exception directFailure) {
-            if (directRoute == null) throw directFailure;
-            Log.w(TAG, "P2P takeover failed; retrying the LAN route", directFailure);
-            try {
-                remoteCatalogClient.wifiDirect(effectiveReceiverUrl, "stop");
-            } catch (Exception ignored) {
-            }
-            wifiDirectCoordinator.removeGroup();
-            wifiDirectActive = false;
-            setTakeoverProgress(true, "正在接管电视", "Direct 通道失败，切换局域网", 78);
-            if (webViewCastManager != null) {
-                webViewCastManager.setAdvertisedAddress(new URL(hostUrl).getHost());
-            }
-            remoteCatalogClient.claimReceiver(receiverUrl, hostUrl,
-                    new RemoteCatalogClient.TakeoverStateProvider() {
-                        @Override public JSONObject snapshot() throws JSONException {
-                            return buildTakeoverSessionState();
-                        }
-
-                        @Override public int catalogGeneration() {
-                            return MainActivity.this.catalogGeneration;
-                        }
-
-                        @Override public long networkDelayMs() {
-                            return takeoverNetworkDelayMs;
-                        }
-
-                        @Override public long encodeDelayMs() {
-                            return webViewCastManager == null
-                                    ? -1L : webViewCastManager.encodeDelayMs();
-                        }
-
-                        @Override public long videoQueueDelayMs() {
-                            return webViewCastManager == null
-                                    ? -1L : webViewCastManager.videoQueueDelayMs();
-                        }
-
-                        @Override public long videoSendDelayMs() {
-                            return webViewCastManager == null
-                                    ? -1L : webViewCastManager.videoSendDelayMs();
-                        }
-
-                        @Override public void onRoundTrip(long delayMs) {
-                            takeoverNetworkDelayMs = takeoverNetworkDelayMs < 0L ? delayMs
-                                    : Math.round(takeoverNetworkDelayMs * 0.75d
-                                            + delayMs * 0.25d);
-                        }
-
-                        @Override public void onMessage(JSONObject message) throws Exception {
-                            handleControllerSessionMessage(message);
-                        }
-                    });
-        }
-        rememberTakeoverReceiver(receiverUrl);
-        castEdgeReceiverUrl = wifiDirectActive ? effectiveReceiverUrl : receiverUrl;
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                enterReceiverTakeoverMode(wifiDirectActive
-                        ? effectiveReceiverUrl : receiverUrl, !stayOnContent);
-                updateCastEdgeState();
-            }
-        });
-        setTakeoverProgress(false, "接管完成", wifiDirectActive
-                ? "已通过 Wi-Fi Direct 连接" : "已通过局域网连接", 100);
-        return new JSONObject().put("ok", true)
-                .put("receiverUrl", wifiDirectActive ? effectiveReceiverUrl : receiverUrl)
-                .put("wifiDirect", wifiDirectActive)
-                .put("rememberedReceiverUrl", lastTakeoverReceiverUrl).toString();
+                };
     }
 
     private String handleApkPush(String requestedReceiverUrl, String fileName, byte[] body)
@@ -3278,7 +3653,7 @@ public final class MainActivity extends Activity {
                 .put("label", received.label)
                 .put("versionName", received.versionName)
                 .put("versionCode", received.versionCode)
-                .put("message", "APK 已发送，电视正在打开安装界面")
+                .put("message", "APK 已发送，设备正在打开安装界面")
                 .toString();
     }
 
@@ -3302,9 +3677,13 @@ public final class MainActivity extends Activity {
     private JSONObject buildTakeoverSessionState() throws JSONException {
         JSONObject state = new JSONObject()
                 .put("catalogGeneration", catalogGeneration)
+                .put("castVideoBitrate", webViewCastManager == null ? -1L : webViewCastManager.videoBitrate())
+                .put("castAudioBitrate", webViewCastManager == null ? -1L : webViewCastManager.audioBitrate())
                 .put("networkDelayMs", takeoverNetworkDelayMs)
                 .put("encodeDelayMs", webViewCastManager == null
                         ? -1L : webViewCastManager.encodeDelayMs())
+                .put("encodeDetail", webViewCastManager == null
+                        ? "" : webViewCastManager.encodeDetail())
                 .put("videoQueueDelayMs", webViewCastManager == null
                         ? -1L : webViewCastManager.videoQueueDelayMs())
                 .put("videoSendDelayMs", webViewCastManager == null
@@ -3343,8 +3722,11 @@ public final class MainActivity extends Activity {
 
     private String buildMediaStateJson(final boolean detailed) throws Exception {
         if (isReceiverTakeoverActive() && remoteReceiverControlUrl.length() > 0) {
-            return remoteCatalogClient.mediaState(
-                    remoteReceiverControlUrl, detailed).toString();
+            JSONObject media = remoteCatalogClient.mediaState(remoteReceiverControlUrl, detailed);
+            // The cast webpage and its resources belong to the controller phone.
+            media.put("sniffedResources", sniffedResourcesJson());
+            media.put("webPage", isMediaWebPage());
+            return media.toString();
         }
         final AtomicReference<String> result = new AtomicReference<String>();
         final AtomicReference<Exception> failure = new AtomicReference<Exception>();
@@ -3369,12 +3751,27 @@ public final class MainActivity extends Activity {
         return buildLocalMediaState(true);
     }
 
+    private boolean isMediaWebPage() {
+        Channel channel = currentChannel();
+        return channel != null && isWebViewSource(channel.sourceUrl(currentSourceIndex));
+    }
+
+    private String mediaSourceKey() {
+        // Compact session identity prevents a stale sheet from switching another channel.
+        return playRequestId + ":" + currentGroupIndex + ":" + currentChannelIndex;
+    }
+
     private JSONObject buildLocalMediaState(boolean detailed) throws JSONException {
         JSONObject result = new JSONObject().put("ok", true);
+        result.put("sniffedResources", sniffedResourcesJson());
         result.put("lowResource", Runtime.getRuntime().availableProcessors() <= 2);
         ChannelCatalog.Group group = currentGroup();
         Channel channel = currentChannel();
         IjkMediaPlayer activePlayer = player;
+        result.put("webPage", isMediaWebPage())
+                .put("sourceCount", channel == null ? 0 : channel.sourceCount())
+                .put("sourceIndex", currentSourceIndex)
+                .put("sourceKey", mediaSourceKey());
         long duration = 0L;
         long position = 0L;
         boolean playing = false;
@@ -3397,7 +3794,7 @@ public final class MainActivity extends Activity {
                 .put("playing", playing)
                 .put("name", channel == null ? "" : channel.name)
                 .put("group", group == null ? "" : group.title)
-                .put("favoriteAvailable", group != null && channel != null)
+                .put("favoriteAvailable", group != null && channel != null && localMultimediaFile == null)
                 .put("favorite", group != null && channel != null
                         && favoriteChannelKeys.contains(favoriteKey(group, channel)))
                 .put("positionMs", position)
@@ -3557,7 +3954,7 @@ public final class MainActivity extends Activity {
                 && !"audioTrack".equals(action) && !"subtitleTrack".equals(action) && !"videoTrack".equals(action)
                 && !"subtitleStyle".equals(action) && !"subtitleEnabled".equals(action) && !"previous".equals(action)
                 && !"next".equals(action) && !"toggle".equals(action)
-                && !"favorite".equals(action)) {
+                && !"favorite".equals(action) && !"source".equals(action)) {
             throw new JSONException("未知的媒体控制指令");
         }
         final AtomicReference<Exception> failure = new AtomicReference<Exception>();
@@ -3578,6 +3975,18 @@ public final class MainActivity extends Activity {
     }
 
     private void applyMediaControl(String action, JSONObject request) throws Exception {
+        if ("source".equals(action)) {
+            Channel channel = currentChannel();
+            int index = request.optInt("index", -1);
+            if (!mediaSourceKey().equals(request.optString("sourceKey", ""))) {
+                throw new JSONException("频道已变化，请重新选择线路");
+            }
+            if (channel == null || index < 0 || index >= channel.sourceCount()) {
+                throw new JSONException("该线路已不存在，请刷新后重试");
+            }
+            if (index != currentSourceIndex) switchCustomSource(index - currentSourceIndex, false, "");
+            return;
+        }
         if ("subtitleEnabled".equals(action)) {
             setSubtitlesEnabled(request.optBoolean("enabled", true));
             return;
@@ -3685,22 +4094,63 @@ public final class MainActivity extends Activity {
         final String hostUrl = RemoteCatalogClient.normalizeServerUrl(
                 request.optString("hostUrl", ""));
         final String sessionId = request.optString("sessionId", "").trim();
-        if (hostUrl.length() == 0 || !hostUrl.equalsIgnoreCase(remoteCatalogUrl)
-                || sessionId.length() == 0) {
-            throw new IOException("接管会话与当前控制端不匹配");
+        if (hostUrl.length() == 0 || sessionId.length() == 0) throw new IOException("接管会话缺少地址或标识");
+        final boolean changingRoute;
+        final boolean preservePlayback;
+        synchronized (receiverRouteLock) {
+            String activeSession = remoteTakeoverSessionId;
+            changingRoute = !hostUrl.equalsIgnoreCase(remoteCatalogUrl);
+            boolean sameSelection = false;
+            if (changingRoute) {
+                JSONObject playingSelection = buildTakeoverSessionState();
+                sameSelection = request.optString("channelName", "").length() > 0
+                        && request.optString("channelName", "").equals(playingSelection.optString("channelName", ""))
+                        && request.optString("groupName", "").equals(playingSelection.optString("groupName", ""))
+                        && request.optInt("source", -1) == playingSelection.optInt("source", -2);
+            }
+            preservePlayback = CastRouteHandover.preservePlayback(changingRoute,
+                    request.optInt("catalogGeneration", -1), appliedRemoteCatalogGeneration, sameSelection);
+            if (changingRoute) {
+                String previousHost = RemoteCatalogClient.normalizeServerUrl(request.optString("previousHostUrl", ""));
+                if (!CastRouteHandover.accepts(opened, remoteCatalogUrl, activeSession,
+                        previousHost, request.optString("previousSessionId", ""), sessionId,
+                        SystemClock.elapsedRealtime() - lastRemoteTakeoverMessageAt, TAKEOVER_SESSION_TIMEOUT_MS)) {
+                    throw new IOException("直连切换会话已失效");
+                }
+                // Same controller and live lease: keep the TV's original channel snapshot.
+                remoteCatalogUrl = hostUrl;
+                remoteCatalogClient.changePlaybackRoute(previousHost, hostUrl);
+                wifiDirectCoordinator.useGroup();
+                // Same authenticated controller: an IP change does not invalidate
+                // its catalog. Existing media sockets remain alive; new requests
+                // use the Direct address. Do not restart playback just to change IP.
+                if (request.optInt("catalogGeneration", -1) != appliedRemoteCatalogGeneration) {
+                    // A previous LAN catalog download can still be in flight.
+                    // Fetch that generation from the new endpoint before selecting.
+                    remoteCatalogGeneration = -1;
+                }
+                remoteNetworkDelayMs = remoteEncodeDelayMs = -1L;
+                remoteVideoQueueDelayMs = remoteVideoSendDelayMs = -1L;
+                request.put("networkDelayMs", -1L).put("encodeDelayMs", -1L)
+                        .put("videoQueueDelayMs", -1L).put("videoSendDelayMs", -1L);
+                Log.i(TAG, "Receiver route changed to " + hostUrl);
+            }
+            if (hostUrl.length() == 0 || sessionId.length() == 0
+                    || !changingRoute && !sessionId.equals(activeSession)) {
+                throw new IOException("接管会话与当前控制端不匹配");
+            }
+            remoteTakeoverSessionId = sessionId;
         }
-        String activeSession = remoteTakeoverSessionId;
-        if (!opened && activeSession.length() > 0 && !sessionId.equals(activeSession)) {
-            throw new IOException("接管会话已被替换");
-        }
-        remoteTakeoverSessionId = sessionId;
         lastRemoteTakeoverMessageAt = SystemClock.elapsedRealtime();
         if (request.has("networkDelayMs")) {
             remoteNetworkDelayMs = request.optLong("networkDelayMs", -1L);
         }
+        remoteCastVideoBitrate = request.optLong("castVideoBitrate", -1L);
+        remoteCastAudioBitrate = request.optLong("castAudioBitrate", -1L);
         if (request.has("encodeDelayMs")) {
             remoteEncodeDelayMs = request.optLong("encodeDelayMs", -1L);
         }
+        remoteEncodeDetail = request.optString("encodeDetail", "");
         if (request.has("videoQueueDelayMs")) {
             remoteVideoQueueDelayMs = request.optLong("videoQueueDelayMs", -1L);
         }
@@ -3708,7 +4158,7 @@ public final class MainActivity extends Activity {
             remoteVideoSendDelayMs = request.optLong("videoSendDelayMs", -1L);
         }
         final int generation = request.optInt("catalogGeneration", -1);
-        if (opened && request.optInt("group", -1) >= 0
+        if (opened && !preservePlayback && request.optInt("group", -1) >= 0
                 && request.optInt("channel", -1) >= 0) {
             pendingTakeoverChannelSelection =
                     new TakeoverChannelSelection(sessionId, request);
@@ -3716,7 +4166,7 @@ public final class MainActivity extends Activity {
         if (generation >= 0 && generation != remoteCatalogGeneration) {
             remoteCatalogGeneration = generation;
             loadCompleteCatalogInBackground();
-        } else if (opened && generation >= 0
+        } else if (opened && !preservePlayback && generation >= 0
                 && generation == appliedRemoteCatalogGeneration) {
             runOnMainThreadAndWait(new Runnable() {
                 @Override
@@ -3775,7 +4225,7 @@ public final class MainActivity extends Activity {
                         receiverRequest.optInt("castBitrate", 2_500_000)));
             }
         }
-        return new CastConfig("", width, height, fps, bitrate, webCastAudio, codec);
+        return new CastConfig("", width, height, fps, bitrate, webCastAudio, codec, webCastTransport);
     }
 
     private static int[][] receiverCastProfiles(JSONObject request, String codec) {
@@ -3797,6 +4247,8 @@ public final class MainActivity extends Activity {
 
     @SuppressLint("NewApi")
     private String handleWebCastStart(JSONObject request) throws Exception {
+        if (multimedia != null && multimedia.active())
+            throw new java.io.IOException("请先结束多媒体投屏");
         final CastConfig requested = CastConfig.fromJson(request);
         if (!hasLocalNetworkAccess()) {
             pendingCastConfig = requested;
@@ -3893,7 +4345,7 @@ public final class MainActivity extends Activity {
     }
 
     private void beginCastUiDrawing() {
-        if (root == null || castRootBackground != null) {
+        if (root == null) {
             return;
         }
         float castVisualScale = 1f;
@@ -3906,8 +4358,10 @@ public final class MainActivity extends Activity {
                 flyMouseCursor.setCastVisualScale(castVisualScale);
             }
         }
-        castRootBackground = root.getBackground();
-        root.setBackgroundDrawable(null);
+        if (castRootBackground == null) {
+            castRootBackground = root.getBackground();
+            root.setBackgroundDrawable(null);
+        }
         if (webSourceView != null) {
             // Capture belongs to the session, including web channels opened later.
             webSourceView.setCastVisualScale(castVisualScale);
@@ -3925,11 +4379,13 @@ public final class MainActivity extends Activity {
             webSourceView.setCastVisualScale(1f);
             webSourceView.setCastCaptureActive(false, 0);
         }
-        if (root == null || castRootBackground == null) {
+        if (root == null) {
             return;
         }
-        root.setBackgroundDrawable(castRootBackground);
-        castRootBackground = null;
+        if (castRootBackground != null) {
+            root.setBackgroundDrawable(castRootBackground);
+            castRootBackground = null;
+        }
         if (root instanceof CastRootLayout) {
             ((CastRootLayout) root).setCastViewport(0, 0);
         }
@@ -3977,6 +4433,31 @@ public final class MainActivity extends Activity {
         canvas.scale(scale, scale);
         root.draw(canvas);
         canvas.restoreToCount(save);
+    }
+
+    private boolean castCurrentWebPage(int group, int channel, int source,
+            String receiverUrl, CastConfig config) {
+        if (group != currentGroupIndex || channel != currentChannelIndex
+                || source != currentSourceIndex || webSourceView == null
+                || !webSourceView.hasRetainedPage(playRequestId)
+                || !webSourceView.isPageVisible()) return false;
+        cancelPendingRelativeSwitch();
+        clearNumericChannelInput();
+        clearPendingPlayer();
+        castSurfaceRestartPending = false;
+        nextPlaybackRequestedByReceiver = false;
+        remoteReceiverRequestId = playRequestId;
+        remoteReceiverCastConfig = config;
+        enterReceiverTakeoverMode(receiverUrl);
+        Channel current = currentChannel();
+        if (!isRemoteWebViewCastReady(current)) {
+            // Capture the current View tree. No navigation, new request id or
+            // WebView recreation: DOM, history and HTML media remain in place.
+            startRemoteWebViewCast(current, playRequestId);
+        }
+        ensureFlyMouseOnTop();
+        Log.i(TAG, "Cast started: retained current WebView document");
+        return true;
     }
 
     private void startRemoteWebViewCast(Channel channel, int requestId) {
@@ -4044,42 +4525,95 @@ public final class MainActivity extends Activity {
     }
 
     private void releaseReceiverPlayback() {
+        releaseReceiverPlayback(false);
+    }
+
+    private void releaseReceiverPlayback(boolean keepDirectWarm) {
+        releaseReceiverPlayback(keepDirectWarm, false);
+    }
+
+    private boolean canResumeControllerWebPage() {
+        return !isFinishing() && webSourceView != null
+                && webSourceView.hasRetainedPage() && webSourceView.isPageVisible();
+    }
+
+    /** End only the remote output when the currently visible document can stay alive. */
+    private boolean releaseReceiverPlayback(boolean keepDirectWarm, boolean resumeWebPage) {
+        boolean retainPage = resumeWebPage && canResumeControllerWebPage();
+        // Reset session-only state even when a failed/partial claim never created
+        // a player. Otherwise the early return below leaves the next claim dirty.
+        castSurfaceRestartPending = false;
+        nextPlaybackRequestedByReceiver = false;
+        remoteReceiverCastConfig = null;
+        takeoverNetworkDelayMs = -1L;
+        remoteCatalogClient.clearPlaybackRoutes();
+        if (webViewCastManager != null) webViewCastManager.setAdvertisedAddress("");
+        dispatchFlyMouseButtonUp(true);
+        setTakeoverProgress(false, "", "", 0);
+        if (retainPage) {
+            cancelPendingRelativeSwitch();
+            clearPendingPlayer();
+        }
+        directUpgradeGeneration++;
+        directUpgradeRunning = false;
+        if (wifiDirectCoordinator != null) {
+            if (keepDirectWarm) wifiDirectCoordinator.releaseGroupForReuse();
+            else wifiDirectCoordinator.removeGroup();
+        }
+        wifiDirectActive = false;
+        claimingReceiverUrl = "";
+        if (root != null) root.removeCallbacks(controllerTakeoverWatchdog);
+        controllerTakeoverStartedAt = 0L;
         remoteCatalogClient.stopTakeoverSession();
         releaseCastAudioProjection();
         if (remoteReceiverRequestId < 0 && !remoteWebViewCastActive
                 && remoteGatewayChannel == null
                 && remoteReceiverControlUrl.length() == 0) {
-            return;
+            clearRemoteWebViewCastState();
+            finishReceiverPlaybackUi();
+            return retainPage;
         }
         stopRemoteWebViewCast();
-        closeWebSource();
+        if (!retainPage) closeWebSource();
         releasePlayer();
         clearRemotePlaybackGateway();
         remoteReceiverRequestId = -1;
         remoteReceiverControlUrl = "";
-        updateCastKeepAlive();
-        updateCastEdgeState();
-        hideLoading();
-        setReceiverTakeoverOverlayVisible(false);
+        finishReceiverPlaybackUi();
+        if (retainPage) {
+            // Do not loadUrl, clear history, reset zoom or recreate Chromium here.
+            // endCastUiDrawing restores the physical viewport and WebView frame policy.
+            clearWebCloseConfirmation();
+            videoView.setVisibility(View.INVISIBLE);
+            webSourceView.restoreAfterStreamPlayback();
+            ensureFlyMouseOnTop();
+            applyFlyMouseVisibility();
+            root.requestLayout();
+            root.invalidate();
+            Log.i(TAG, "Cast ended: retained current WebView document on phone");
+        }
+        return retainPage;
     }
 
     private void enterReceiverTakeoverMode(String receiverUrl) {
-        enterReceiverTakeoverMode(receiverUrl, true);
+        // A receiver's play request may arrive before claimReceiver returns.
+        // Only the successful claim opens controls, after clearing the old page.
+        enterReceiverTakeoverMode(receiverUrl, false);
     }
 
     private void enterReceiverTakeoverMode(String receiverUrl, boolean openManagementPage) {
-        boolean wasActive = isReceiverTakeoverActive();
         String activeReceiverUrl = wifiDirectActive && castEdgeReceiverUrl.length() > 0
                 ? castEdgeReceiverUrl : receiverUrl;
         if (activeReceiverUrl != null && activeReceiverUrl.length() > 0) {
             remoteReceiverControlUrl = activeReceiverUrl;
         }
+        updateCastAudioRoute();
         updateCastKeepAlive();
         closeChannelList();
         closeManagementPanel();
         clearWebCloseConfirmation();
         setReceiverTakeoverOverlayVisible(true);
-        if (openManagementPage && !wasActive && !remoteInputMode) {
+        if (openManagementPage && !remoteInputMode) {
             root.post(new Runnable() {
                 @Override
                 public void run() {
@@ -4096,15 +4630,25 @@ public final class MainActivity extends Activity {
                 || remoteGatewayChannel != null;
     }
 
+    void updateCastAudioRoute() {
+        if (castAudioRoute != null) castAudioRoute.update(remoteReceiverControlUrl,
+                webViewCastManager != null && webViewCastManager.isAudioActive());
+    }
+
+    boolean dispatchCastVolumeKey(KeyEvent event) {
+        return castAudioRoute != null && castAudioRoute.dispatch(event);
+    }
+
     private void updateCastKeepAlive() {
         if (!stoppingBackgroundCast) {
-            CastKeepAliveService.setActive(this, isReceiverTakeoverActive()
+            CastKeepAliveService.setActive(this, multimediaSuspended || isReceiverTakeoverActive()
                     || webViewCastManager != null && webViewCastManager.isRunning());
         }
     }
 
     /** Called on the UI thread; do not restart local playback after a background timeout. */
     void stopBackgroundCast(String reason) {
+        if (multimedia != null) multimedia.stop();
         if (stoppingBackgroundCast) return;
         stoppingBackgroundCast = true;
         try {
@@ -4147,15 +4691,17 @@ public final class MainActivity extends Activity {
     private void exitReceiverTakeover(boolean openManagementAfterExit,
             boolean resumeLocalContent) {
         final String receiverUrl = remoteReceiverControlUrl;
-        releaseReceiverPlayback();
-        if (resumeLocalContent && !isFinishing()) {
-            startChannel(currentChannelIndex);
+        final String stoppedSession = remoteCatalogClient.detachTakeoverSession();
+        String lastPage = webSourceView == null ? "" : webSourceView.currentPageUrl();
+        boolean retainedPage = releaseReceiverPlayback(resumeLocalContent, resumeLocalContent);
+        if (resumeLocalContent && !retainedPage && !isFinishing()) {
+            resumeControllerContent(lastPage);
         }
         if (receiverUrl.length() > 0) {
             new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    remoteCatalogClient.disconnectReceiver(receiverUrl);
+                    remoteCatalogClient.disconnectReceiver(receiverUrl, stoppedSession);
                 }
             }, "remote-receiver-disconnect").start();
         }
@@ -4165,6 +4711,25 @@ public final class MainActivity extends Activity {
             } else {
                 openManagementPage();
             }
+        }
+    }
+
+    private void finishReceiverPlaybackUi() {
+        updateCastAudioRoute();
+        updateCastKeepAlive();
+        updateCastEdgeState();
+        hideLoading();
+        setReceiverTakeoverOverlayVisible(false);
+    }
+
+    private void resumeControllerContent(String pageUrl) {
+        // Channel indices already follow the receiver's latest selection. Preserve
+        // in-page navigation too, instead of reopening the channel's original URL.
+        if (pageUrl != null && !pageUrl.isEmpty()) {
+            nextPlaybackRequestedByReceiver = false;
+            openWebSource(currentChannel(), "webview://" + pageUrl, ++playRequestId);
+        } else {
+            switchChannel(currentChannelIndex, currentSourceIndex);
         }
     }
 
@@ -4490,12 +5055,15 @@ public final class MainActivity extends Activity {
             return;
         }
         restoreReceiverChannelPending = receiverChannelBeforeTakeover != null;
+        final String endedSession = remoteTakeoverSessionId;
         remoteCatalogUrl = "";
+        remoteCatalogClient.clearPlaybackRoutes();
+        if (wifiDirectCoordinator != null) wifiDirectCoordinator.releaseGroupForReuse();
         remoteTakeoverSessionId = "";
-        remoteNetworkDelayMs = -1L;
-        remoteEncodeDelayMs = -1L;
-        remoteVideoQueueDelayMs = -1L;
-        remoteVideoSendDelayMs = -1L;
+        if (controlServer != null) controlServer.closeTakeoverSession(endedSession);
+        root.removeCallbacks(receiverTakeoverWatchdog);
+        dispatchFlyMouseButtonUp(true);
+        resetReceiverTelemetry();
         lastRemoteTakeoverMessageAt = 0L;
         remoteCatalogGeneration = -1;
         appliedRemoteCatalogGeneration = -1;
@@ -4513,6 +5081,14 @@ public final class MainActivity extends Activity {
         Log.w(TAG, message);
     }
 
+    private void resetReceiverTelemetry() {
+        remoteNetworkDelayMs = -1L;
+        remoteEncodeDelayMs = -1L;
+        remoteCastVideoBitrate = -1L;
+        remoteCastAudioBitrate = -1L;
+        remoteVideoQueueDelayMs = -1L;
+        remoteVideoSendDelayMs = -1L;
+    }
     private void adjustRemoteVolume(int keyCode) {
         AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         if (audioManager == null) {
@@ -4654,6 +5230,28 @@ public final class MainActivity extends Activity {
     }
 
     private String handleWebSettings(JSONObject request) throws Exception {
+        if (request.has("githubProxyBaseUrl")) {
+            GithubProxy.setBaseUrl(request.optString("githubProxyBaseUrl", ""));
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(GithubProxy.PREFERENCE, GithubProxy.baseUrl()).apply();
+        }
+        if (request.has("wifiDirectExperimental")) {
+            boolean enabled = request.optBoolean("wifiDirectExperimental", false);
+            if (enabled != wifiDirectExperimental) {
+                if (takeoverCommandRunning.get() || remoteReceiverControlUrl.length() > 0
+                        || claimingReceiverUrl.length() > 0 || directUpgradeRunning
+                        || hasPendingTakeover()) {
+                    throw new IOException("请先结束接管，再更改 Wi-Fi Direct 开关");
+                }
+                wifiDirectExperimental = enabled;
+                getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                        .putBoolean(WIFI_DIRECT_EXPERIMENTAL, enabled).apply();
+                if (!enabled && remoteCatalogUrl.length() == 0 && wifiDirectCoordinator != null) {
+                    directUpgradeGeneration++;
+                    wifiDirectCoordinator.removeGroup();
+                }
+            }
+        }
         boolean restartPlayback = false;
         boolean recreateSurface = false;
         boolean applyWebViewSettings = false;
@@ -4904,6 +5502,14 @@ public final class MainActivity extends Activity {
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putInt(WEB_CAST_FPS, webCastFps).apply();
         }
+        if (request.has("webCastTransport")) {
+            String requested = request.optString("webCastTransport", RTSP_TRANSPORT_TCP);
+            if (!RTSP_TRANSPORT_TCP.equals(requested) && !RTSP_TRANSPORT_UDP.equals(requested))
+                throw new JSONException("投屏传输协议仅支持 TCP 或 UDP");
+            webCastTransport = requested;
+            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                    .putString(WEB_CAST_TRANSPORT, requested).apply();
+        }
         if (request.has("webCastCodec")) {
             String rawCodec = request.optString("webCastCodec", CastConfig.CODEC_H264);
             String requestedCodec = sanitizeWebCastCodec(rawCodec);
@@ -5032,19 +5638,26 @@ public final class MainActivity extends Activity {
                     @Override
                     public void run() {
                         rememberReceiverChannelBeforeTakeover();
+                        closeManagementPanel();
+                        ManagementActivity.closeAll();
                     }
                 });
             }
             if (endingTakeover) {
                 restoreReceiverChannelPending = receiverChannelBeforeTakeover != null;
             }
+            if (controlServer != null && !previousRemoteSessionId.equals(
+                    request.optString("claimSessionId", ""))) {
+                controlServer.closeTakeoverSession(previousRemoteSessionId);
+            }
             boolean changed = !requestedRemoteUrl.equals(remoteCatalogUrl);
+            if (changed) remoteCatalogClient.clearPlaybackRoutes();
             remoteCatalogUrl = requestedRemoteUrl;
-            remoteTakeoverSessionId = "";
-            remoteNetworkDelayMs = -1L;
-            remoteEncodeDelayMs = -1L;
-            remoteVideoQueueDelayMs = -1L;
-            remoteVideoSendDelayMs = -1L;
+            if (enteringTakeover && wifiDirectCoordinator != null) wifiDirectCoordinator.useGroup();
+            if (endingTakeover && wifiDirectCoordinator != null) wifiDirectCoordinator.releaseGroupForReuse();
+            remoteTakeoverSessionId = requestedRemoteUrl.length() == 0 ? ""
+                    : request.optString("claimSessionId", "");
+            resetReceiverTelemetry();
             remoteCatalogGeneration = -1;
             appliedRemoteCatalogGeneration = -1;
             pendingTakeoverChannelSelection = null;
@@ -5208,6 +5821,8 @@ public final class MainActivity extends Activity {
             if (hasPendingTakeover()) {
                 // P2P is an optimization. A denial must still allow the LAN route.
                 requestNextTakeoverPermission();
+            } else if (granted && remoteReceiverControlUrl.length() > 0) {
+                startDirectUpgrade(remoteReceiverControlUrl);
             } else if (!granted) {
                 Toast.makeText(this, "未允许附近设备发现，将继续使用局域网连接",
                         Toast.LENGTH_LONG).show();
@@ -5290,9 +5905,7 @@ public final class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == TAKEOVER_MANAGEMENT_REQUEST) {
-            if (resultCode == RESULT_OK) {
-                exitReceiverTakeover(false);
-            } else if (isReceiverTakeoverActive()) {
+            if (isReceiverTakeoverActive()) {
                 setReceiverTakeoverOverlayVisible(true);
             }
             return;
@@ -5447,6 +6060,7 @@ public final class MainActivity extends Activity {
 
     private void loadCompleteCatalogInBackground() {
         final int loadGeneration = catalogLoadGeneration.incrementAndGet();
+        final int requestedRemoteGeneration = remoteCatalogGeneration;
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -5500,7 +6114,7 @@ public final class MainActivity extends Activity {
                         applyPlaylistGroups(groups, false, remoteUrl.length() > 0
                                 && remoteCatalogLoaded);
                         if (remoteUrl.length() > 0 && remoteCatalogLoaded) {
-                            appliedRemoteCatalogGeneration = remoteCatalogGeneration;
+                            appliedRemoteCatalogGeneration = requestedRemoteGeneration;
                         }
                     }
                     int channelCount = 0;
@@ -5585,11 +6199,23 @@ public final class MainActivity extends Activity {
 
     private boolean restoreReceiverChannelAfterTakeover() {
         LastChannelSnapshot snapshot = receiverChannelBeforeTakeover;
+        restoreReceiverChannelPending = false;
+        receiverChannelBeforeTakeover = null;
+        return restoreChannelSelection(snapshot);
+    }
+
+    private boolean acceptsReceiverPlayback(String receiverUrl) {
+        String active = remoteReceiverControlUrl;
+        String pending = claimingReceiverUrl;
+        if (active.length() == 0 && pending.length() == 0) return false;
+        return receiverUrl.length() == 0 || receiverUrl.equalsIgnoreCase(active)
+                || receiverUrl.equalsIgnoreCase(pending);
+    }
+
+    private boolean restoreChannelSelection(LastChannelSnapshot snapshot) {
         if (snapshot == null || snapshot.group == null
                 || snapshot.group.channels == null
                 || snapshot.group.channels.length == 0) {
-            restoreReceiverChannelPending = false;
-            receiverChannelBeforeTakeover = null;
             return false;
         }
         Channel wanted = snapshot.group.channels[0];
@@ -5610,8 +6236,6 @@ public final class MainActivity extends Activity {
                 }
             }
         }
-        restoreReceiverChannelPending = false;
-        receiverChannelBeforeTakeover = null;
         if (matchedGroup < 0 || matchedChannel < 0) {
             Log.w(TAG, "Unable to restore receiver channel after takeover: "
                     + wanted.name);
@@ -5779,7 +6403,7 @@ public final class MainActivity extends Activity {
                     emptyToNull(value.optString("yangshipinPid", "")),
                     emptyToNull(value.optString("yangshipinStreamId", "")),
                     emptyToNull(value.optString("yangshipinMaxDefinition", "")),
-                    emptyToNull(value.optString("epgId", "")));
+                    emptyToNull(value.optString("epgId", ""))).withLogo(value.optString("logoUrl", ""));
             int source = value.optInt("catalogSource", ChannelCatalog.SOURCE_CUSTOM);
             channel = channel.withCatalogSource(source);
             if (channel.sourceCount() == 0
@@ -5830,9 +6454,13 @@ public final class MainActivity extends Activity {
                     .put("yangshipinMaxDefinition", channel.yangshipinMaxDefinition == null
                             ? "" : channel.yangshipinMaxDefinition)
                     .put("epgId", channel.epgId == null ? "" : channel.epgId)
+                    .put("logoUrl", channel.logoUrl)
                     .put("sourceIndex", currentSourceIndex);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putString(LAST_CHANNEL_SNAPSHOT, value.toString())
+                    .putString("last_channel_favorite_key",
+                            group.source == ChannelCatalog.SOURCE_FAVORITES
+                                    && channel.favoriteKey != null ? channel.favoriteKey : "")
                     .putInt(LAST_GROUP_INDEX, currentGroupIndex)
                     .putInt(LAST_CHANNEL_INDEX, currentChannelIndex)
                     .apply();
@@ -5883,6 +6511,7 @@ public final class MainActivity extends Activity {
     }
 
     private Channel currentChannel() {
+        if (multimediaReceiverChannel != null) return multimediaReceiverChannel;
         ChannelCatalog.Group group = currentGroup();
         if (group.channels == null || group.channels.length == 0) {
             throw new IllegalStateException("当前分组没有频道");
@@ -5925,6 +6554,8 @@ public final class MainActivity extends Activity {
     }
 
     private void startChannel(int index) {
+        if (multimediaSuspended) return;
+        clearLocalMultimedia();
         pendingCjsChannelIndex = -1;
         armCrashRecovery();
         if (navigateExistingCastPage(index)) return;
@@ -6703,35 +7334,6 @@ public final class MainActivity extends Activity {
         return 0;
     }
 
-    private static void waitForCmgUpdateTag(int currentTag, int targetTag) {
-        if (targetTag == 0 || currentTag == targetTag) {
-            return;
-        }
-        long deadline = android.os.SystemClock.elapsedRealtime() + 1500L;
-        int lastTag = currentTag;
-        int attempts = 0;
-        while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            attempts++;
-            lastTag = NativeCmgDecryptor.updateSessionForProbe();
-            if (lastTag == targetTag) {
-                Log.i(TAG, "CMG native reached official updateTag="
-                        + String.format(Locale.US, "%08x", targetTag)
-                        + " attempts=" + attempts);
-                return;
-            }
-            try {
-                Thread.sleep(10L);
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        Log.w(TAG, "CMG native did not reach official updateTag target="
-                + String.format(Locale.US, "%08x", targetTag)
-                + " last=" + String.format(Locale.US, "%08x", lastTag)
-                + " attempts=" + attempts);
-    }
-
     private static long parsePositiveLong(String text) {
         if (text == null || text.length() == 0) {
             return 0L;
@@ -6774,9 +7376,9 @@ public final class MainActivity extends Activity {
                 resolveCjsSite(channel, cjsSitePage, requestId);
                 return;
             }
-            if (rejectUnsupportedWebViewSource(channel, configuredUrl)) {
-                return;
-            }
+            // Resolve supported providers before applying the visible-browser device gate.
+            // Their internal authorization page feeds native playback; openWebSource
+            // applies the gate only when we actually display an ordinary webpage.
             String yangshipinPid = extractYangshipinPid(configuredUrl);
             if (yangshipinPid != null) {
                 Channel resolverChannel = ChannelCatalog.findYangshipinChannelByPid(
@@ -6868,13 +7470,13 @@ public final class MainActivity extends Activity {
                                     getResources().getDisplayMetrics().heightPixels,
                                     lowResourceDevice,
                                     controlServer == null ? ""
-                                            : controlServer.getLanUrl());
+                                            : controlServer.getLanUrlForPeer(remoteCatalogUrl));
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             if (requestId == playRequestId) {
                                 startResolvedPlayer(channel, result.url,
-                                        result.directDataSource);
+                                        result.directDataSource, result.castTransport);
                             }
                         }
                     });
@@ -6971,6 +7573,12 @@ public final class MainActivity extends Activity {
 
     private void startResolvedPlayer(Channel channel, String streamUrl,
             boolean directHttpMedia) {
+        startResolvedPlayer(channel, streamUrl, directHttpMedia, RTSP_TRANSPORT_TCP);
+    }
+
+    private void startResolvedPlayer(Channel channel, String streamUrl,
+            boolean directHttpMedia, String castTransport) {
+        receiverCastTransport = sanitizeRtspTransport(castTransport);
         if (prepareRemoteReceiverGateway(channel, streamUrl)) {
             return;
         }
@@ -7227,17 +7835,11 @@ public final class MainActivity extends Activity {
                     "multiple_requests", 1);
         }
         if (isRtspSource(streamUrl)) {
-            // TCP is substantially more tolerant of congested Wi-Fi and is the default.
-            // Keep UDP available for low-latency LAN cameras and multicast gateways.
-            // Old receivers can stop reading the interleaved TCP socket while their
-            // MediaCodec is busy. That back-pressures the phone for 1-2 seconds and
-            // makes the cursor lag even though encode/decode queues stay short.
-            // nTv casting is local and event-driven, so use UDP on legacy/low-resource
-            // receivers; leave ordinary RTSP sources and modern devices configurable.
+            // Casting follows the sender's explicit choice for both codecs and
+            // every receiver version. Missing protocol fields default to TCP.
             String effectiveRtspTransport = realtimeCastSource
-                    && (Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1
-                            || lowResourceDevice)
-                    ? "udp" : rtspTransport;
+                    ? receiverCastTransport : rtspTransport;
+            if (realtimeCastSource) Log.i(TAG, "Cast RTSP transport=" + effectiveRtspTransport);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
                     "rtsp_transport", effectiveRtspTransport);
         }
@@ -7342,6 +7944,12 @@ public final class MainActivity extends Activity {
                 updateVideoLayout(mediaPlayer);
                 nextPlayer.setSpeed(playbackSpeed);
                 mediaPlayer.start();
+                if (localMultimediaFile != null && channel == multimediaReceiverChannel && localMultimediaPosition > 0) {
+                    long duration = mediaPlayer.getDuration();
+                    long position = duration > 0 ? Math.min(localMultimediaPosition, Math.max(0, duration - 500)) : localMultimediaPosition;
+                    localMultimediaPosition = 0;
+                    mediaPlayer.seekTo(position);
+                }
                 mediaTrackManifest = proxy == null ? null : proxy.mediaTracks(streamUrl);
                 restoreRememberedTracks(nextPlayer, channel);
                 if (trackResumePlayer == nextPlayer) {
@@ -7454,6 +8062,11 @@ public final class MainActivity extends Activity {
             @Override
             public boolean onError(IMediaPlayer mediaPlayer, int what, int extra) {
                 if (player == mediaPlayer) {
+                    if (localMultimediaFile != null && channel == multimediaReceiverChannel) {
+                        hideLoading();
+                        showChannelBar(channel.name, "本机无法播放此视频：" + what + "/" + extra);
+                        return true;
+                    }
                     if (what == -20001 || extra == -20001) {
                         abortChannelSwitchAnimation();
                         hideLoading();
@@ -7554,16 +8167,6 @@ public final class MainActivity extends Activity {
                 && !activeEmbeddedCjsResolver
                 && webStreamHeaders == null && isHttpHlsSource(streamUrl)
                 && !HlsProxyServer.needsSpecialDecrypt(streamUrl);
-    }
-
-    private static boolean requiresParallelHlsPrefetch(String streamUrl) {
-        if (streamUrl == null) {
-            return false;
-        }
-        String value = streamUrl.toLowerCase(Locale.US);
-        // This IPTV server family publishes ~5 MB/5 s segments but throttles each
-        // connection. Two bounded Java downloads keep one upcoming segment ready.
-        return value.contains(":9901/tsfile/live/") || value.contains("key=txiptv");
     }
 
     private static boolean isHttpHlsSource(String sourceUrl) {
@@ -8827,6 +9430,10 @@ public final class MainActivity extends Activity {
         int normalizedChannel = group.channels.length == 0 ? 0
                 : ChannelCatalog.wrapIndex(group.channels, channelIndex);
         int candidate = normalizedChannel + direction;
+        if (group.source == ChannelCatalog.SOURCE_FAVORITES && group.channels.length > 0) {
+            return new int[] { normalizedGroup,
+                    ChannelCatalog.wrapIndex(group.channels, candidate) };
+        }
         if (candidate >= 0 && candidate < group.channels.length) {
             return new int[] { normalizedGroup, candidate };
         }
@@ -8918,8 +9525,8 @@ public final class MainActivity extends Activity {
 
     private void switchBrowsingChannel(int position) {
         currentGroupIndex = browsingGroupIndex;
-        switchChannel(position);
         closeChannelList();
+        switchChannel(position);
     }
 
     private void loadFavoriteChannels(SharedPreferences preferences) {
@@ -9092,13 +9699,15 @@ public final class MainActivity extends Activity {
                 : R.drawable.channel_item_background);
         channelList.invalidate();
         ChannelCatalog.Group group = ChannelCatalog.GROUPS[browsingGroupIndex];
-        int position = channelList.getSelectedItemPosition();
+        int position = browsingChannelPosition();
         if (group.channels.length == 0 || position == AdapterView.INVALID_POSITION
                 || position >= group.channels.length) {
             favoriteActionFocused = false;
             channelAdapter.setFavoriteFocusIndex(-1);
             return;
         }
+        epgFavorite.setText(isBrowsingChannelFavorite(position) ? "★ 已收藏" : "☆ 收藏");
+        epgFavorite.setSelected(false);
         channelAdapter.setFavoriteFocusIndex(favoriteActionFocused ? position : -1);
     }
 
@@ -9114,13 +9723,27 @@ public final class MainActivity extends Activity {
     private void setFavoriteActionFocused(boolean focused) {
         favoriteActionFocused = focused;
         updateFavoriteButton();
-        if (focused) {
+        if (focused || epgFavorite.hasFocus() || epgList.hasFocus()) {
             channelList.requestFocus();
         }
     }
 
     private void toggleSelectedChannelFavorite() {
-        toggleBrowsingChannelFavorite(channelList.getSelectedItemPosition());
+        toggleBrowsingChannelFavorite(browsingChannelPosition());
+    }
+
+    private int browsingChannelPosition() {
+        if (browsingGroupIndex < 0 || browsingGroupIndex >= ChannelCatalog.GROUPS.length)
+            return AdapterView.INVALID_POSITION;
+        Channel[] channels = ChannelCatalog.GROUPS[browsingGroupIndex].channels;
+        if (channels == null || channels.length == 0) return AdapterView.INVALID_POSITION;
+        // Keyboard selection and pointer hover both update checked state. Hover
+        // deliberately leaves native selection unchanged to avoid moving the list.
+        int position = channelList.getCheckedItemPosition();
+        if (position < 0 || position >= channels.length) position = channelList.getSelectedItemPosition();
+        if (position < 0 || position >= channels.length)
+            position = browsingGroupIndex == currentGroupIndex ? currentChannelIndex : 0;
+        return Math.max(0, Math.min(position, channels.length - 1));
     }
 
     private void toggleBrowsingChannelFavorite(int position) {
@@ -9166,6 +9789,8 @@ public final class MainActivity extends Activity {
 
     private void openChannelList(boolean keepVisibleOnBlackScreen) {
         ensureChannelPanelInitialized();
+        epgExpanded = false;
+        setEpgColumnVisible(false);
         keepChannelListVisibleOnWebExit = keepVisibleOnBlackScreen;
         cancelPendingRelativeSwitch();
         clearNumericChannelInput();
@@ -9174,6 +9799,8 @@ public final class MainActivity extends Activity {
         backPrompt.setVisibility(View.GONE);
         closeManagementPanel();
         channelListPanel.setVisibility(View.VISIBLE);
+        channelBar.animate().cancel();
+        channelBar.setVisibility(View.GONE);
         // WebSourceView raises itself while a page is active. Raise the channel menu again
         // so the remote OK key remains usable on both video and WebView channels.
         channelListPanel.bringToFront();
@@ -9185,11 +9812,11 @@ public final class MainActivity extends Activity {
             @Override
             public void run() {
                 setFavoriteActionFocused(false);
-                channelList.setSelection(currentChannelIndex);
                 channelList.setItemChecked(currentChannelIndex, true);
                 restoreGroupListPosition(false);
                 channelList.requestFocusFromTouch();
                 channelList.requestFocus();
+                centerCurrentChannel();
             }
         });
         scheduleChannelListDismiss();
@@ -9228,6 +9855,17 @@ public final class MainActivity extends Activity {
         showEpgForBrowsingChannel(selectedIndex);
         updateFavoriteButton();
         scheduleChannelListDismiss();
+    }
+
+    private void centerCurrentChannel() {
+        if (channelListPanel.getVisibility() != View.VISIBLE
+                || browsingGroupIndex != currentGroupIndex) return;
+        int rowHeight = Math.round(46f * effectiveUiDensity()) + channelList.getDividerHeight();
+        int centerOffset = Math.max(0, (channelList.getHeight() - rowHeight) / 2);
+        // Keep context where there are preceding rows, but never manufacture empty
+        // space above the first channel. ListView also clamps naturally at the end.
+        int offset = Math.min(centerOffset, currentChannelIndex * rowHeight);
+        channelList.setSelectionFromTop(currentChannelIndex, offset);
     }
 
     private void restoreGroupListPosition(final boolean requestFocus) {
@@ -9305,6 +9943,8 @@ public final class MainActivity extends Activity {
         groupList.setOnTouchListener(touchListener);
         channelList.setOnTouchListener(touchListener);
         epgList.setOnTouchListener(touchListener);
+        epgToggle.setOnTouchListener(touchListener);
+        epgFavorite.setOnTouchListener(touchListener);
         channelListPanel.setOnHoverListener(panelHoverListener);
         epgList.setOnHoverListener(panelHoverListener);
         groupList.setOnHoverListener(new View.OnHoverListener() {
@@ -9329,12 +9969,17 @@ public final class MainActivity extends Activity {
                 if (event.getActionMasked() == MotionEvent.ACTION_HOVER_MOVE) {
                     int position = channelList.pointToPosition(
                             (int) event.getX(), (int) event.getY());
-                    if (position != AdapterView.INVALID_POSITION) {
-                        channelList.setSelection(position);
+                    if (position != AdapterView.INVALID_POSITION
+                            && position != channelList.getCheckedItemPosition()) {
+                        // setSelection() repositions ListView on every hover event.
+                        // Keep the viewport fixed; only update the hovered row.
+                        channelList.setItemChecked(position, true);
                         showEpgForBrowsingChannel(position);
+                        updateFavoriteButton();
                     }
                 }
-                return false;
+                // Do not let ListView's native hover handler move selection either.
+                return true;
             }
         });
     }
@@ -9357,8 +10002,8 @@ public final class MainActivity extends Activity {
         int channelDesired = desiredChannelColumnWidth(density);
         boolean showEpg = epgColumn != null && epgColumn.getVisibility() == View.VISIBLE;
         if (!showEpg) {
-            // Panel padding is 28dp and only the group/channel separator remains (17dp).
-            int fixedWidth = Math.round(45f * density);
+            // Padding 28dp, separator 17dp, and the side EPG handle 28dp.
+            int fixedWidth = Math.round(73f * density);
             int panelWidth = Math.min(maximumPanelWidth,
                     groupDesired + channelDesired + fixedWidth);
             int[] widths = fitTwoColumns(Math.max(2, panelWidth - fixedWidth),
@@ -9370,8 +10015,8 @@ public final class MainActivity extends Activity {
             return;
         }
         int epgDesired = desiredEpgColumnWidth(density);
-        // Panel horizontal padding is 28dp. The two separators each occupy 17dp.
-        int fixedWidth = Math.round(62f * density);
+        // Padding 28dp, two 17dp separators, and the 28dp EPG handle.
+        int fixedWidth = Math.round(90f * density);
         int desiredPanelWidth = groupDesired + channelDesired + epgDesired + fixedWidth;
         int panelWidth = Math.min(maximumPanelWidth, desiredPanelWidth);
         int availableColumns = Math.max(3, panelWidth - fixedWidth);
@@ -9409,7 +10054,7 @@ public final class MainActivity extends Activity {
     private int desiredChannelColumnWidth(float density) {
         // Keep the channel column steady while browsing. The title area is sized for
         // roughly eight CJK characters; longer names are intentionally ellipsized.
-        return Math.round(240f * density);
+        return Math.round(280f * density);
     }
 
     private int desiredEpgColumnWidth(float density) {
@@ -9566,19 +10211,16 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshEpg() {
+        if (root == null) return;
+        root.removeCallbacks(deferredEpgRefresh);
+        epgIdleSince = 0L;
+        root.postDelayed(deferredEpgRefresh, 1500L);
+    }
+
+    private void refreshEpgNow() {
         if (epgManager == null) {
             return;
         }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                epgAdapter.showPrograms(null);
-                setEpgColumnVisible(false);
-                if (epgStatus != null) {
-                    epgStatus.setText("正在加载节目单…");
-                }
-            }
-        });
         epgManager.refresh(effectiveEpgUrl(), new EpgManager.Listener() {
             @Override
             public void onUpdated() {
@@ -9592,6 +10234,9 @@ public final class MainActivity extends Activity {
                                     ? currentChannelIndex : 0;
                         }
                         showEpgForBrowsingChannel(position);
+                        if (channelListPanel.getVisibility() == View.VISIBLE) {
+                            channelAdapter.notifyDataSetChanged();
+                        }
                         if (channelBar.getVisibility() == View.VISIBLE) {
                             updateChannelCardEpg(channelName.getText().toString());
                         }
@@ -9606,15 +10251,22 @@ public final class MainActivity extends Activity {
                 || browsingGroupIndex < 0 || browsingGroupIndex >= ChannelCatalog.GROUPS.length) {
             return;
         }
+        epgToggle.setText(epgExpanded ? "节\n目\n单\n‹" : "节\n目\n单\n›");
+        epgToggle.setContentDescription(epgExpanded ? "收起节目单" : "展开节目单");
+        setEpgColumnVisible(epgExpanded);
+        if (!epgExpanded || channelListPanel.getVisibility() != View.VISIBLE) return;
         Channel[] channels = ChannelCatalog.GROUPS[browsingGroupIndex].channels;
         if (channels == null || channels.length == 0) {
             epgAdapter.showPrograms(null);
             epgStatus.setText("暂无频道");
-            setEpgColumnVisible(false);
+            epgFavorite.setEnabled(false);
             return;
         }
-        int safePosition = ChannelCatalog.wrapIndex(channels, position);
+        int safePosition = position >= 0 && position < channels.length
+                ? position : browsingChannelPosition();
         Channel channel = channels[safePosition];
+        epgFavorite.setEnabled(true);
+        epgFavorite.setText(isBrowsingChannelFavorite(safePosition) ? "★ 已收藏" : "☆ 收藏");
         java.util.List<EpgManager.Program> programs = epgManager.programsFor(channel);
         epgAdapter.showPrograms(programs);
         if (programs.isEmpty()) {
@@ -9622,7 +10274,6 @@ public final class MainActivity extends Activity {
             epgStatus.setText(epgManager.isLoading() ? channel.name + " · 正在加载节目单"
                     : error.length() > 0 ? channel.name + " · 加载失败"
                     : channel.name + " · 暂无节目单");
-            setEpgColumnVisible(false);
         } else {
             setEpgColumnVisible(true);
             epgStatus.setText(channel.name + " · 今日节目");
@@ -9643,8 +10294,9 @@ public final class MainActivity extends Activity {
         if (epgDivider != null) {
             epgDivider.setVisibility(visibility);
         }
-        if (!visible && epgList.hasFocus()) {
-            setFavoriteActionFocused(true);
+        if (!visible && (epgList.hasFocus() || epgFavorite.hasFocus())) {
+            setFavoriteActionFocused(false);
+            channelList.requestFocus();
         }
         if (changed && channelListPanel != null
                 && channelListPanel.getVisibility() == View.VISIBLE) {
@@ -9670,6 +10322,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showChannelCard() {
+        if (channelListPanel.getVisibility() == View.VISIBLE) return;
         updateChannelBarWidth();
         if (channelBar.getVisibility() == View.VISIBLE) {
             return;
@@ -9685,19 +10338,34 @@ public final class MainActivity extends Activity {
             return;
         }
         Channel channel = currentChannel();
+        TextView number = (TextView) findViewById(R.id.channel_card_number);
+        number.setText(channel != null && displayedChannel.equals(channel.name)
+                ? ChannelCatalog.displayNumber(currentGroupIndex, currentChannelIndex) + " |" : "");
+        statusText.setVisibility(View.VISIBLE);
         if (channel == null || !displayedChannel.equals(channel.name)) {
             channelEpg.setVisibility(View.GONE);
             return;
         }
         long now = System.currentTimeMillis();
         java.util.List<EpgManager.Program> programs = epgManager.programsFor(channel);
-        for (EpgManager.Program program : programs) {
+        for (int index = 0; index < programs.size(); index++) {
+            EpgManager.Program program = programs.get(index);
             if (!program.isPlaying(now)) {
                 continue;
             }
-            channelEpg.setText(channelEpgTimeFormat.format(new Date(program.startMillis))
+            String text = channelEpgTimeFormat.format(new Date(program.startMillis))
                     + "–" + channelEpgTimeFormat.format(new Date(program.stopMillis))
-                    + "  " + program.title);
+                    + "  " + program.title;
+            if (index + 1 < programs.size()) {
+                EpgManager.Program next = programs.get(index + 1);
+                text += "\n" + channelEpgTimeFormat.format(new Date(next.startMillis))
+                        + "–" + channelEpgTimeFormat.format(new Date(next.stopMillis))
+                        + "  " + next.title;
+            }
+            channelEpg.setText(text);
+            if (!loadingActive && statusText.getText().toString().contains("播放中")) {
+                statusText.setVisibility(View.GONE);
+            }
             channelEpg.setVisibility(View.VISIBLE);
             return;
         }
@@ -10037,6 +10705,7 @@ public final class MainActivity extends Activity {
                         + gap + "tx" + formatDelayValue(stats.videoSendDelayMs)
                         + gap + "decq" + formatDelayValue(stats.decodeDelayMs)
                         + gap + "sum~" + formatDelayValue(estimatedCastDelayMs(stats));
+                if (stats.encodeDetail.length() > 0) details += gap + stats.encodeDetail;
             }
             FrameLayout.LayoutParams debugParams =
                     (FrameLayout.LayoutParams) debugInfoOverlay.getLayoutParams();
@@ -10140,8 +10809,16 @@ public final class MainActivity extends Activity {
             applyIjkMetadata(stats);
             applyIjkRuntimeBitrates(stats);
             if (isNtVCastSource(activePlayerStreamUrl)) {
+                // Empty decode queues are normal here. The sender counts actual RTP
+                // bytes for both TCP and UDP; never substitute configured bitrate.
+                if (remoteCatalogUrl.length() > 0 && SystemClock.elapsedRealtime()
+                        - lastRemoteTakeoverMessageAt < TAKEOVER_SESSION_TIMEOUT_MS) {
+                    if (remoteCastVideoBitrate >= 0L) stats.videoBitrate = remoteCastVideoBitrate;
+                    if (remoteCastAudioBitrate >= 0L) stats.audioBitrate = remoteCastAudioBitrate;
+                }
                 stats.networkDelayMs = remoteNetworkDelayMs;
                 stats.encodeDelayMs = remoteEncodeDelayMs;
+                stats.encodeDetail = remoteEncodeDetail;
                 stats.videoQueueDelayMs = remoteVideoQueueDelayMs;
                 stats.videoSendDelayMs = remoteVideoSendDelayMs;
                 try {
@@ -10157,6 +10834,7 @@ public final class MainActivity extends Activity {
         if (webViewCastManager != null && webViewCastManager.isRunning()) {
             stats.networkDelayMs = takeoverNetworkDelayMs;
             stats.encodeDelayMs = webViewCastManager.encodeDelayMs();
+            stats.encodeDetail = webViewCastManager.encodeDetail();
             stats.videoQueueDelayMs = webViewCastManager.videoQueueDelayMs();
             stats.videoSendDelayMs = webViewCastManager.videoSendDelayMs();
         }
@@ -10580,6 +11258,14 @@ public final class MainActivity extends Activity {
             if (estimatedAudioBitrate > 0L) {
                 stats.audioBitrate = estimatedAudioBitrate;
             }
+            // Complete HLS segments measure media time, unlike the decoder's shrinking
+            // packet queue or burst downloads. Prefer elementary payload measurements.
+            if (!realtimeTransport && proxy != null) {
+                long video = proxy.measuredMediaBitrate(true);
+                long audio = proxy.measuredMediaBitrate(false);
+                if (video > 0L) stats.videoBitrate = video;
+                if (audio > 0L) stats.audioBitrate = audio;
+            }
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to estimate IJK stream bitrates", error);
         }
@@ -10672,6 +11358,7 @@ public final class MainActivity extends Activity {
         long networkDelayMs = -1L;
         long decodeDelayMs = -1L;
         long encodeDelayMs = -1L;
+        String encodeDetail = "";
         long videoQueueDelayMs = -1L;
         long videoSendDelayMs = -1L;
     }
@@ -10812,6 +11499,10 @@ public final class MainActivity extends Activity {
      */
     private static int normalizeRemoteKeyCode(int keyCode) {
         switch (keyCode) {
+            case KeyEvent.KEYCODE_CHANNEL_UP:
+                return KeyEvent.KEYCODE_DPAD_UP;
+            case KeyEvent.KEYCODE_CHANNEL_DOWN:
+                return KeyEvent.KEYCODE_DPAD_DOWN;
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
             case KeyEvent.KEYCODE_BUTTON_A:
             case KeyEvent.KEYCODE_BUTTON_SELECT:
@@ -10907,8 +11598,6 @@ public final class MainActivity extends Activity {
             playbackGestureStartVolume = audio == null ? 0
                     : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
             playbackGestureLastVolume = playbackGestureStartVolume;
-        } else {
-            prepareChannelSwipeSnapshot();
         }
     }
 
@@ -10922,11 +11611,13 @@ public final class MainActivity extends Activity {
         if (!playbackGestureVertical && !playbackGestureHorizontal
                 && absoluteY > playbackGestureTouchSlop
                 && absoluteY > absoluteX * 1.25f) {
+            if (!playbackGestureLeftSide) prepareChannelSwipeSnapshot();
             playbackGestureVertical = true;
         } else if (!playbackGestureVertical && !playbackGestureHorizontal
                 && !playbackGestureLeftSide
                 && absoluteX > playbackGestureTouchSlop
                 && absoluteX > absoluteY * 1.25f) {
+            prepareChannelSwipeSnapshot();
             playbackGestureHorizontal = true;
         }
 
@@ -11118,13 +11809,17 @@ public final class MainActivity extends Activity {
     }
 
     private void resetPlaybackGesture() {
+        boolean movedPlayback = (playbackGestureVertical && !playbackGestureLeftSide)
+                || playbackGestureHorizontal;
         playbackGestureTracking = false;
         playbackGestureVertical = false;
         playbackGestureHorizontal = false;
         playbackGestureLastVolume = -1;
         if (!channelSwitchAnimating && !gestureReboundAnimating) {
-            clearChannelSwitchVisuals();
-            restorePlaybackLayer();
+            if (movedPlayback) {
+                clearChannelSwitchVisuals();
+                restorePlaybackLayer();
+            }
         }
     }
 
@@ -11286,7 +11981,8 @@ public final class MainActivity extends Activity {
 
     private static void animatePlaybackLayer(View view, float translationX,
             float translationY, long duration, TimeInterpolator interpolator) {
-        if (view != null) {
+        if (view != null && (view.getTranslationX() != translationX
+                || view.getTranslationY() != translationY || view.getAlpha() != 1f)) {
             view.animate().translationX(translationX).translationY(translationY)
                     .alpha(1f).setInterpolator(interpolator).setDuration(duration).start();
         }
@@ -11364,9 +12060,14 @@ public final class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (dispatchCastVolumeKey(event)) return true;
         int rawKeyCode = event.getKeyCode();
         int keyCode = normalizeRemoteKeyCode(rawKeyCode);
         if (remoteCatalogUrl.length() > 0) {
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) adjustRemoteVolume(keyCode);
+                return true;
+            }
             if (event.getAction() == KeyEvent.ACTION_DOWN
                     && (event.getRepeatCount() == 0
                             || keyCode == KeyEvent.KEYCODE_DPAD_UP
@@ -11429,10 +12130,14 @@ public final class MainActivity extends Activity {
                     closeChannelList();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
-                    if (epgList.hasFocus()) {
+                    if (epgExpanded && (epgList.hasFocus() || favoriteActionFocused)) {
+                        epgExpanded = false;
+                        showEpgForBrowsingChannel(channelList.getSelectedItemPosition());
                         setFavoriteActionFocused(true);
                     } else if (favoriteActionFocused) {
                         setFavoriteActionFocused(false);
+                        epgExpanded = false;
+                        showEpgForBrowsingChannel(channelList.getSelectedItemPosition());
                     } else if (channelList.hasFocus()) {
                         setFavoriteActionFocused(false);
                         restoreGroupListPosition(true);
@@ -11444,7 +12149,10 @@ public final class MainActivity extends Activity {
                             setFavoriteActionFocused(false);
                             channelList.requestFocus();
                         }
-                    } else if (favoriteActionFocused && epgAdapter.getCount() > 0) {
+                    } else if (favoriteActionFocused) {
+                        epgExpanded = true;
+                        showEpgForBrowsingChannel(channelList.getSelectedItemPosition());
+                        if (epgAdapter.getCount() == 0) return true;
                         setFavoriteActionFocused(false);
                         epgList.requestFocus();
                         int currentProgram = epgAdapter.currentProgramIndex();
@@ -11488,6 +12196,11 @@ public final class MainActivity extends Activity {
         int digit = digitForKeyCode(keyCode);
         if (digit >= 0) {
             enterNumericChannel(digit);
+            return true;
+        }
+        if (numericChannelInput.length() > 0 && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_ENTER)) {
+            commitNumericChannel();
             return true;
         }
         switch (keyCode) {
@@ -11536,12 +12249,12 @@ public final class MainActivity extends Activity {
                 try {
                     JSONObject command = new JSONObject();
                     if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        command.put("action", "previous").put("type", "control");
+                        command.put("action", reverseUpDown ? "next" : "previous").put("type", "control");
                         if (controlServer != null
                                 && controlServer.sendTakeoverSessionMessage(command)) return;
                         remoteCatalogClient.controlReceiver(hostUrl, command);
                     } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                        command.put("action", "next").put("type", "control");
+                        command.put("action", reverseUpDown ? "previous" : "next").put("type", "control");
                         if (controlServer != null
                                 && controlServer.sendTakeoverSessionMessage(command)) return;
                         remoteCatalogClient.controlReceiver(hostUrl, command);
@@ -11575,6 +12288,7 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (multimediaReceiverChannel != null) { multimedia.stop(); return; }
         cancelPendingRelativeSwitch();
         clearNumericChannelInput();
         if (isReceiverTakeoverActive()) {
@@ -11696,6 +12410,9 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        clearLocalMultimedia();
+        if (multimedia != null) multimedia.close();
+        if (root != null) root.removeCallbacks(deferredEpgRefresh);
         releaseCastAudioProjection();
         CastKeepAliveService.detach(this);
         dispatchFlyMouseButtonUp(true);
@@ -11706,6 +12423,7 @@ public final class MainActivity extends Activity {
             root.removeCallbacks(applyPendingFlyMouseMove);
             root.removeCallbacks(updateClock);
             root.removeCallbacks(receiverTakeoverWatchdog);
+            root.removeCallbacks(controllerTakeoverWatchdog);
         }
         if (backPrompt != null) {
             backPrompt.removeCallbacks(hideBackPrompt);

@@ -29,6 +29,8 @@ import java.util.concurrent.TimeUnit;
 
 final class LocalControlServer implements Closeable {
     interface Listener {
+        String multimediaControl(JSONObject request) throws Exception;
+        String uploadMultimedia(String url, String name, InputStream input, int length, boolean preserveAudio) throws Exception;
         String stateJson(String view);
         String catalogJson();
         String playbackJson();
@@ -45,6 +47,7 @@ final class LocalControlServer implements Closeable {
         void takeoverSessionClosed(String sessionId);
         String settings(JSONObject request) throws Exception;
         String checkUpdate() throws Exception;
+        String installUpdate() throws Exception;
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
         String uploadKu9Script(String fileName, byte[] body) throws Exception;
         String pushApk(String receiverUrl, String fileName, byte[] body) throws Exception;
@@ -86,6 +89,19 @@ final class LocalControlServer implements Closeable {
     private final Object takeoverOutputLock = new Object();
     private BufferedOutputStream takeoverOutput;
     private String takeoverSessionId = "";
+    private Socket takeoverSocket;
+
+    void closeTakeoverSession(String expectedSession) {
+        Socket socket;
+        synchronized (takeoverOutputLock) {
+            if (!expectedSession.equals(takeoverSessionId)) return;
+            socket = takeoverSocket;
+            takeoverSocket = null;
+            takeoverOutput = null;
+            takeoverSessionId = "";
+        }
+        if (socket != null) try { socket.close(); } catch (IOException ignored) { }
+    }
 
     LocalControlServer(Listener listener) {
         this.listener = listener;
@@ -260,6 +276,14 @@ final class LocalControlServer implements Closeable {
                         jsonError("请求长度无效"));
                 return;
             }
+            if ("POST".equals(method) && path.split("\\?", 2)[0].equals("/api/multimedia/upload")) {
+                if (chunkedBody || contentLength <= 0) throw new IOException("上传文件需要明确长度");
+                socket.setSoTimeout(30000);
+                send(socket, 200, "application/json; charset=utf-8", listener.uploadMultimedia(
+                        queryParameter(path, "receiverUrl"), queryParameter(path, "name"),
+                        input, contentLength, "1".equals(queryParameter(path, "preserveAudio"))).getBytes("UTF-8"));
+                return;
+            }
             int bodyLimit = path.startsWith("/api/ku9/script/upload")
                     ? MAX_KU9_SCRIPT_BYTES : requestBodyLimit();
             if (contentLength > bodyLimit) {
@@ -314,8 +338,13 @@ final class LocalControlServer implements Closeable {
             listener.takeoverSessionOpened(hello);
             opened = true;
             synchronized (takeoverOutputLock) {
+                Socket previous = takeoverSocket;
+                takeoverSocket = socket;
                 takeoverOutput = output;
                 takeoverSessionId = sessionId;
+                if (previous != null && previous != socket) {
+                    try { previous.close(); } catch (IOException ignored) { }
+                }
             }
             writeTakeoverLine(output, new JSONObject().put("ok", true)
                     .put("protocol", 1));
@@ -337,7 +366,8 @@ final class LocalControlServer implements Closeable {
             }
         } finally {
             synchronized (takeoverOutputLock) {
-                if (sessionId.equals(takeoverSessionId)) {
+                if (takeoverSocket == socket) {
+                    takeoverSocket = null;
                     takeoverOutput = null;
                     takeoverSessionId = "";
                 }
@@ -404,6 +434,9 @@ final class LocalControlServer implements Closeable {
         } else if ("GET".equals(method) && "/api/playback".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.playbackJson().getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/multimedia/control".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.multimediaControl(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/media".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.mediaJson(!"0".equals(queryParameter(
@@ -436,6 +469,9 @@ final class LocalControlServer implements Closeable {
         } else if ("POST".equals(method) && "/api/settings".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.settings(new JSONObject(new String(body, "UTF-8"))).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/update/install".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.installUpdate().getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/update/check".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.checkUpdate().getBytes("UTF-8"));

@@ -72,6 +72,10 @@ function renderHardwareDecoders() {
 }
 function renderPageState() {
   var s = state.settings;
+  var proxy = document.getElementById("githubProxyUrl");
+  if (document.activeElement !== proxy && !proxy._dirty) {
+    proxy.value = s.githubProxyBaseUrl || "https://gh-proxy.com/";
+  }
   document.getElementById("dnsMode").value = s.dnsMode || "ali";
   document.getElementById("reverse").checked = s.reverseKeys === true;
   document.getElementById("autoStart").checked = s.autoStart === true;
@@ -82,4 +86,15 @@ function renderPageState() {
   renderHardwareDecoders();
 }
 function saveDns(){var dns=document.getElementById('dnsMode');toast('正在切换 DNS…');api('/api/settings',{dnsMode:dns.value},function(error){if(error){toast(error.message,true);refresh();return}toast('DNS 配置已保存')})}
+function saveGithubProxy() {
+  var input = document.getElementById("githubProxyUrl");
+  var value = input.value.replace(/^\s+|\s+$/g, "");
+  api("/api/settings", { githubProxyBaseUrl: value }, function (error) {
+    if (error) { toast(error.message, true); return; }
+    input._dirty = false;
+    toast("GitHub 加速已保存，新请求生效");
+    refresh();
+  });
+}
+document.getElementById("githubProxyUrl").oninput = function () { this._dirty = true; };
 startPage();

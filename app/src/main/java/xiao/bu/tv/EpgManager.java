@@ -20,6 +20,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Calendar;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
@@ -30,15 +31,14 @@ import java.util.TimeZone;
 import java.util.zip.GZIPInputStream;
 
 final class EpgManager {
-    static final String DEFAULT_URL = "https://epg.pw/xmltv/epg_CN.xml.gz";
+    static final String DEFAULT_URL = "https://github.com/TvWasm/autoEPG/releases/latest/download/epg.xml";
     private static final String FALLBACK_URL = "http://epg.51zmt.top:8000/e.xml.gz";
     private static final String TAG = "EpgManager";
     private static final String CACHE_FILE = "epg-guide-cache.xml";
     private static final String CACHE_PREFS = "epg_cache";
     private static final String CACHE_SOURCE_URL = "source_url";
-    private static final long CACHE_VALID_MS = 10L * 60L * 1000L;
+    private static final String CACHE_RESOLVED_URL = "resolved_url";
     private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
-    private static final long KEEP_PAST_MS = 6L * 60L * 60L * 1000L;
     private static final long KEEP_FUTURE_MS = 36L * 60L * 60L * 1000L;
 
     interface Listener {
@@ -63,6 +63,7 @@ final class EpgManager {
 
     private static final class Guide {
         final Map<String, String> channelByAlias = new HashMap<String, String>();
+        final Map<String, String> logosByChannel = new HashMap<String, String>();
         final Map<String, List<Program>> programsByChannel =
                 new HashMap<String, List<Program>>();
     }
@@ -73,6 +74,9 @@ final class EpgManager {
     private volatile int refreshGeneration;
     private volatile String lastError = "";
     private volatile String loadedUrl = "";
+    private volatile String cachedGuideSource;
+    private String attemptedSource;
+    private long attemptedDay;
 
     EpgManager(Context context) {
         this.context = context.getApplicationContext();
@@ -95,6 +99,22 @@ final class EpgManager {
             return Collections.emptyList();
         }
         Guide snapshot = guide;
+        String channelId = channelIdFor(snapshot, channel);
+        List<Program> result = channelId == null
+                ? null : snapshot.programsByChannel.get(channelId);
+        return result == null ? Collections.<Program>emptyList() : result;
+    }
+
+    String logoFor(Channel channel) {
+        if (channel == null) return "";
+        if (channel.logoUrl.length() > 0) return channel.logoUrl;
+        Guide snapshot = guide;
+        String id = channelIdFor(snapshot, channel);
+        String logo = id == null ? null : snapshot.logosByChannel.get(id);
+        return logo == null ? "" : logo;
+    }
+
+    private static String channelIdFor(Guide snapshot, Channel channel) {
         String requested = normalize(channel.epgId == null ? channel.name : channel.epgId);
         String channelId = snapshot.channelByAlias.get(requested);
         if (channelId == null) {
@@ -103,14 +123,17 @@ final class EpgManager {
         if (channelId == null && snapshot.programsByChannel.containsKey(requested)) {
             channelId = requested;
         }
-        List<Program> result = channelId == null
-                ? null : snapshot.programsByChannel.get(channelId);
-        return result == null ? Collections.<Program>emptyList() : result;
+        return channelId;
     }
 
     void refresh(final String sourceUrl, final Listener listener) {
         final int requestId;
         synchronized (this) {
+            String source = sourceUrl == null ? "" : sourceUrl.trim();
+            long day = dayStart(System.currentTimeMillis());
+            if (source.equals(attemptedSource) && attemptedDay == day) return;
+            attemptedSource = source;
+            attemptedDay = day;
             requestId = ++refreshGeneration;
             loading = true;
         }
@@ -118,8 +141,11 @@ final class EpgManager {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
                 try {
                     String normalizedUrl = sourceUrl == null ? "" : sourceUrl.trim();
+                    // Reuse the parsed guide too, not just the XML download cache.
+                    if (normalizedUrl.equals(cachedGuideSource) && isCacheFresh()) return;
                     byte[] cached = readCache();
                     boolean cacheMatches = normalizedUrl.equals(context
                             .getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
@@ -127,7 +153,10 @@ final class EpgManager {
                     if (cached.length > 0 && cacheMatches
                             && requestId == refreshGeneration) {
                         try {
-                            publish(parse(cached), normalizedUrl);
+                            String cachedUrl = context.getSharedPreferences(CACHE_PREFS,
+                                    Context.MODE_PRIVATE).getString(CACHE_RESOLVED_URL, normalizedUrl);
+                            publish(parse(cached), cachedUrl);
+                            cachedGuideSource = normalizedUrl;
                             if (isCacheFresh()) {
                                 return;
                             }
@@ -139,24 +168,27 @@ final class EpgManager {
                             Log.w(TAG, "Ignoring invalid EPG cache", cacheError);
                         }
                     }
-                    byte[] downloaded;
+                    Download downloaded;
                     Guide parsed;
                     String loadedSource = normalizedUrl;
                     try {
                         downloaded = download(normalizedUrl);
-                        parsed = parse(downloaded);
+                        parsed = parse(downloaded.bytes);
                     } catch (Exception primaryError) {
                         if (!DEFAULT_URL.equals(normalizedUrl)) {
                             throw primaryError;
                         }
                         Log.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
                         downloaded = download(FALLBACK_URL);
-                        parsed = parse(downloaded);
-                        loadedSource = FALLBACK_URL;
+                        parsed = parse(downloaded.bytes);
                     }
-                    writeCache(downloaded, normalizedUrl);
-                    if (requestId == refreshGeneration) {
-                        publish(parsed, loadedSource);
+                    loadedSource = downloaded.url;
+                    synchronized (EpgManager.this) {
+                        if (requestId == refreshGeneration) {
+                            writeCache(downloaded.bytes, normalizedUrl, loadedSource);
+                            publish(parsed, loadedSource);
+                            cachedGuideSource = normalizedUrl;
+                        }
                     }
                 } catch (Exception error) {
                     if (requestId == refreshGeneration) {
@@ -175,6 +207,12 @@ final class EpgManager {
     }
 
     private void publish(Guide next, String sourceUrl) {
+        // Resolve once per guide, not during each information-card refresh.
+        for (Map.Entry<String, String> icon : next.logosByChannel.entrySet()) {
+            try {
+                icon.setValue(checkedHttpUrl(new URL(new URL(sourceUrl), icon.getValue())).toString());
+            } catch (Exception ignored) { icon.setValue(""); }
+        }
         guide = next;
         loadedUrl = sourceUrl == null ? "" : sourceUrl;
         lastError = "";
@@ -204,11 +242,22 @@ final class EpgManager {
 
     private boolean isCacheFresh() {
         File cache = context.getFileStreamPath(CACHE_FILE);
-        long age = System.currentTimeMillis() - cache.lastModified();
-        return cache.isFile() && age >= 0L && age < CACHE_VALID_MS;
+        long now = System.currentTimeMillis();
+        return cache.isFile() && cache.lastModified() <= now
+                && dayStart(cache.lastModified()) == dayStart(now);
     }
 
-    private void writeCache(byte[] bytes, String sourceUrl) throws IOException {
+    static long dayStart(long millis) {
+        Calendar day = Calendar.getInstance();
+        day.setTimeInMillis(millis);
+        day.set(Calendar.HOUR_OF_DAY, 0);
+        day.set(Calendar.MINUTE, 0);
+        day.set(Calendar.SECOND, 0);
+        day.set(Calendar.MILLISECOND, 0);
+        return day.getTimeInMillis();
+    }
+
+    private void writeCache(byte[] bytes, String sourceUrl, String resolvedUrl) throws IOException {
         FileOutputStream output = context.openFileOutput(CACHE_FILE, Context.MODE_PRIVATE);
         try {
             output.write(bytes);
@@ -219,16 +268,26 @@ final class EpgManager {
                 CACHE_PREFS, Context.MODE_PRIVATE);
         // Keep the cache file and its source identity in sync across cold starts.
         //noinspection ApplySharedPref
-        preferences.edit().putString(CACHE_SOURCE_URL, sourceUrl).commit();
+        preferences.edit().putString(CACHE_SOURCE_URL, sourceUrl)
+                .putString(CACHE_RESOLVED_URL, resolvedUrl).commit();
     }
 
-    private static byte[] download(String sourceUrl) throws IOException {
+    private static final class Download {
+        final byte[] bytes;
+        final String url;
+        Download(byte[] bytes, String url) { this.bytes = bytes; this.url = url; }
+    }
+
+    private static Download download(String sourceUrl) throws IOException {
         if (sourceUrl == null || sourceUrl.trim().length() == 0) {
             throw new IOException("未配置节目单地址");
         }
         URL current = checkedHttpUrl(new URL(sourceUrl.trim()));
         for (int redirects = 0; redirects <= 5; redirects++) {
-            HttpURLConnection connection = NetworkClient.open(current);
+            // Apply the shared accelerator to GitHub EPGs and release redirects.
+            // Keep the logical source URL for cache identity and relative icons.
+            URL requestUrl = checkedHttpUrl(new URL(GithubProxy.apply(null, current.toString())));
+            HttpURLConnection connection = NetworkClient.open(requestUrl);
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(25000);
             // Android 7 does not reliably follow an HTTP -> HTTPS redirect. Handle
@@ -249,7 +308,7 @@ final class EpgManager {
                     if (location == null || location.trim().length() == 0) {
                         throw new IOException("节目单重定向地址为空");
                     }
-                    current = checkedHttpUrl(new URL(current, location.trim()));
+                    current = checkedHttpUrl(new URL(requestUrl, location.trim()));
                     continue;
                 }
                 if (status < 200 || status >= 300) {
@@ -258,7 +317,7 @@ final class EpgManager {
                 if (connection.getContentLength() > MAX_DOWNLOAD_BYTES) {
                     throw new IOException("节目单文件超过 8 MB");
                 }
-                return readAll(connection.getInputStream());
+                return new Download(readAll(connection.getInputStream()), GithubProxy.unwrap(current.toString()));
             } finally {
                 connection.disconnect();
             }
@@ -300,6 +359,7 @@ final class EpgManager {
             Guide result = new Guide();
             String currentChannelId = null;
             long now = System.currentTimeMillis();
+            long today = dayStart(now);
             int event;
             while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
                 if (event == XmlPullParser.START_TAG && "channel".equals(parser.getName())) {
@@ -318,8 +378,15 @@ final class EpgManager {
                         result.channelByAlias.put(alias, currentChannelId);
                     }
                 } else if (event == XmlPullParser.START_TAG
+                        && "icon".equals(parser.getName()) && currentChannelId != null) {
+                    String icon = parser.getAttributeValue(null, "src");
+                    if (icon != null && icon.trim().length() > 0
+                            && !result.logosByChannel.containsKey(currentChannelId)) {
+                        result.logosByChannel.put(currentChannelId, icon.trim());
+                    }
+                } else if (event == XmlPullParser.START_TAG
                         && "programme".equals(parser.getName())) {
-                    parseProgramme(parser, result, now);
+                    parseProgramme(parser, result, now, today);
                 }
             }
             for (List<Program> programs : result.programsByChannel.values()) {
@@ -337,7 +404,7 @@ final class EpgManager {
         }
     }
 
-    private static void parseProgramme(XmlPullParser parser, Guide result, long now)
+    private static void parseProgramme(XmlPullParser parser, Guide result, long now, long today)
             throws Exception {
         String channelId = normalize(parser.getAttributeValue(null, "channel"));
         long start = parseXmlTvTime(parser.getAttributeValue(null, "start"));
@@ -357,7 +424,7 @@ final class EpgManager {
             }
         }
         if (channelId.length() == 0 || start <= 0L || stop <= start
-                || stop < now - KEEP_PAST_MS || start > now + KEEP_FUTURE_MS) {
+                || stop <= today || start > now + KEEP_FUTURE_MS) {
             return;
         }
         List<Program> programs = result.programsByChannel.get(channelId);

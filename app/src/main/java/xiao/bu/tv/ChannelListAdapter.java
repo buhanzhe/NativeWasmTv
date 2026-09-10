@@ -27,6 +27,9 @@ final class ChannelListAdapter extends BaseAdapter {
     private int playingIndex = -1;
     private int playingSourceIndex;
     private FavoriteListener favoriteListener;
+    private EpgManager epgManager;
+
+    void setEpgManager(EpgManager manager) { epgManager = manager; }
     private final View.OnClickListener favoriteClickListener =
             new View.OnClickListener() {
         @Override
@@ -166,6 +169,7 @@ final class ChannelListAdapter extends BaseAdapter {
                     R.id.channel_group_favorite_icon);
             holder.favorite = (ImageView) convertView.findViewById(
                     R.id.channel_item_favorite);
+            holder.program = (TextView) convertView.findViewById(R.id.channel_item_program);
             convertView.setTag(holder);
         } else {
             holder = (ViewHolder) convertView.getTag();
@@ -188,7 +192,18 @@ final class ChannelListAdapter extends BaseAdapter {
             holder.number.setText(ChannelCatalog.displayNumber(
                     channelGroupIndex, position));
             holder.name.setText(channel.name);
+            String title = "";
+            if (epgManager != null) {
+                long now = System.currentTimeMillis();
+                for (EpgManager.Program program : epgManager.programsFor(channel)) {
+                    if (program.startMillis > now) break;
+                    if (program.isPlaying(now)) { title = program.title; break; }
+                }
+            }
+            holder.program.setText(title);
+            holder.program.setVisibility(title.length() == 0 ? View.GONE : View.VISIBLE);
             int sourceCount = Math.max(1, channel.sourceCount());
+            holder.count.setVisibility(sourceCount > 1 ? View.VISIBLE : View.GONE);
             if (position == playingIndex) {
                 int sourceNumber = (playingSourceIndex % sourceCount + sourceCount)
                         % sourceCount + 1;
@@ -218,5 +233,6 @@ final class ChannelListAdapter extends BaseAdapter {
         TextView count;
         ImageView groupFavorite;
         ImageView favorite;
+        TextView program;
     }
 }

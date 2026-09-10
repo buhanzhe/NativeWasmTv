@@ -63,7 +63,13 @@ final class WebViewCastManager implements Closeable {
     private volatile long encodedVideoFrames;
     private volatile long renderedUiFrames;
     private volatile long lastVideoPresentationTimeUs;
-    private CastConfig config;
+    private volatile CastConfig config;
+    private volatile CastFrameTiming frameTiming = new CastFrameTiming();
+    private volatile CastFrameTiming.Snapshot timingStats = frameTiming.snapshot(0);
+    private boolean includeVideoLayer;
+    private volatile boolean resizing;
+    private volatile long nextResolutionChangeNs;
+    private volatile String adaptationStatus = "";
     private RtspCastServer rtspServer;
     private volatile MediaCodec videoEncoder;
     private Surface encoderSurface;
@@ -88,6 +94,7 @@ final class WebViewCastManager implements Closeable {
     private final MediaBitrateEstimator rtspAudioBitrate = new MediaBitrateEstimator();
     private volatile long measuredRtspVideoBitrate = -1L;
     private volatile long measuredRtspAudioBitrate = -1L;
+    private long bitrateSampleAt;
     private AudioCapture audioCapture;
     private MediaProjection mediaProjection;
     private MediaProjection.Callback projectionCallback;
@@ -107,6 +114,12 @@ final class WebViewCastManager implements Closeable {
         }
         stop();
         config = requested;
+        this.includeVideoLayer = includeVideoLayer;
+        frameTiming = new CastFrameTiming();
+        timingStats = frameTiming.snapshot(0);
+        nextResolutionChangeNs = System.nanoTime() + 10_000_000_000L;
+        resizing = false;
+        adaptationStatus = "";
         error = "";
         compatibilityNote = "";
         status = "正在启动";
@@ -120,6 +133,7 @@ final class WebViewCastManager implements Closeable {
         keyFrameSending = false;
         encodedVideoBytes = 0L;
         encodeDelayMs = -1d;
+        bitrateSampleAt = 0L;
         rtspVideoBitrate.reset();
         rtspAudioBitrate.reset();
         measuredRtspVideoBitrate = -1L;
@@ -264,10 +278,17 @@ final class WebViewCastManager implements Closeable {
         return false;
     }
 
+    private CastConfig captureConfig;
+
     private void createGlCompositor(final CastConfig value, boolean includeVideoLayer)
             throws IOException {
+        captureConfig = value;
         compositor = new CastGlCompositor(encoderSurface, value.width, value.height,
-                value.fps, includeVideoLayer);
+                value.fps, includeVideoLayer, frameTiming);
+        startUiRendering(value);
+    }
+
+    private void startUiRendering(final CastConfig value) {
         final long intervalNs = 1000000000L / Math.max(1, value.fps);
         final PowerManager power = (PowerManager) activity.getSystemService(
                 Activity.POWER_SERVICE);
@@ -435,7 +456,8 @@ final class WebViewCastManager implements Closeable {
                         }
                         if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                             Log.i("NtvCastLatency", "SEND pts=" + frame.ptsUs
-                                    + " begin=" + begin / 1000L + " end=" + System.nanoTime() / 1000L);
+                                    + " begin=" + begin / 1000L + " end=" + System.nanoTime() / 1000L
+                                    + " bytes=" + frame.data.length + " key=" + (frame.key ? 1 : 0));
                     }
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
@@ -455,20 +477,35 @@ final class WebViewCastManager implements Closeable {
 
     private void drainVideo(MediaCodec encoder, RtspCastServer server, CastVideoQueue queue,
             CastBitrateController bitrate) {
+        final CastFrameTiming timing = frameTiming;
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         long lastSyncRequestNs = 0;
+        long lastTimingNs = 0;
         while (running && videoEncoder == encoder && !queue.isClosed()) {
             try {
                 long now = System.nanoTime();
+                if (now - lastTimingNs >= 500_000_000L) {
+                    timingStats = timing.snapshot(now);
+                    encodeDelayMs = timingStats.meanNs < 0 ? -1 : timingStats.meanNs / 1_000_000d;
+                    lastTimingNs = now;
+                }
+                CastFrameTiming.Snapshot measured = timingStats;
+                long frameNs = 1_000_000_000L / Math.max(1, config.fps);
+                boolean encoderPressure = measured.samples >= 8
+                        && measured.p95Ns > Math.max(60_000_000L, frameNs * 2)
+                        || measured.unmatched == 0 && measured.pending > 0
+                        && measured.oldestNs > Math.max(150_000_000L, frameNs * 4);
                 int previous = bitrate.bitrate();
                 int target = bitrate.update(now, queue.droppedFrames(),
                         server.slowWriteDisconnects(), server.hasVideoClient(),
-                        keyFrameSending ? 0L : server.pendingVideoWriteNs());
+                        keyFrameSending ? 0L : server.pendingVideoWriteNs(), encoderPressure);
                 if (target != 0) {
                     android.os.Bundle parameters = new android.os.Bundle();
                     parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, target);
                     try {
                         encoder.setParameters(parameters);
+                        adaptationStatus = bitrate.reason() + "，码率 "
+                                + String.format(Locale.US, "%.1f Mbps", target / 1_000_000d);
                         Log.i(TAG, "Cast bitrate target " + previous + " -> " + target);
                     } catch (IllegalArgumentException unsupported) {
                         bitrate.reject(previous);
@@ -477,6 +514,9 @@ final class WebViewCastManager implements Closeable {
                         bitrate.reject(previous);
                         Log.w(TAG, "Encoder rejected adaptive bitrate", unsupported);
                     }
+                }
+                if (bitrate.needsLowerResolution() && now >= nextResolutionChangeNs) {
+                    requestLowerResolution(encoder, bitrate);
                 }
                 if ((queue.needsSyncFrame() || server.needsSyncFrame())
                         && now - lastSyncRequestNs > 250_000_000L) {
@@ -499,12 +539,7 @@ final class WebViewCastManager implements Closeable {
                         ByteBuffer output = encoder.getOutputBuffer(index);
                         if (output != null && info.size > 0
                             && (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
-                            double sampleDelayMs = (System.nanoTime() / 1000L
-                                    - info.presentationTimeUs) / 1000d;
-                            if (sampleDelayMs >= 0d && sampleDelayMs < 5000d) {
-                                encodeDelayMs = encodeDelayMs < 0d ? sampleDelayMs
-                                        : encodeDelayMs * 0.8d + sampleDelayMs * 0.2d;
-                            }
+                            timing.encoded(info.presentationTimeUs, System.nanoTime());
                             if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                                 Log.i("NtvCastLatency", "ENCODE pts=" + info.presentationTimeUs
                                         + " end=" + System.nanoTime() / 1000L);
@@ -532,6 +567,71 @@ final class WebViewCastManager implements Closeable {
         }
     }
 
+    private void requestLowerResolution(final MediaCodec expected,
+            final CastBitrateController controller) {
+        if (resizing) return;
+        controller.resolutionHandled();
+        final CastConfig previous = config;
+        final CastConfig lower = previous.lowerResolution(controller.bitrate());
+        if (lower == null) { nextResolutionChangeNs = Long.MAX_VALUE; return; }
+        resizing = true;
+        uiHandler.post(new Runnable() {
+            @Override public void run() {
+                if (!running || videoEncoder != expected) { resizing = false; return; }
+                try {
+                    replaceVideoPipeline(lower);
+                    adaptationStatus = "编码持续积压，已降至 " + config.width + "×" + config.height;
+                    nextResolutionChangeNs = System.nanoTime() + 15_000_000_000L;
+                    Log.i(TAG, adaptationStatus);
+                } catch (Exception failed) {
+                    // Keep the working profile if a vendor rejects the smaller size.
+                    try {
+                        replaceVideoPipeline(previous);
+                        adaptationStatus = "设备不支持动态降低分辨率，保留原分辨率";
+                        nextResolutionChangeNs = Long.MAX_VALUE;
+                    } catch (Exception restoreFailed) {
+                        failAsync("调整投屏分辨率失败", restoreFailed);
+                    }
+                    Log.w(TAG, "Adaptive resolution rejected", failed);
+                } finally {
+                    resizing = false;
+                }
+            }
+        });
+    }
+
+    /** Video only: preserve the control lease, RTSP connection and audio capture. */
+    private void replaceVideoPipeline(CastConfig target) throws IOException {
+        stopUiRendering();
+        compositor.detachEncoder();
+        MediaCodec oldEncoder = videoEncoder;
+        videoEncoder = null;
+        if (videoQueue != null) videoQueue.close();
+        joinWorker(videoDrainThread);
+        joinWorker(videoSendThread);
+        videoDrainThread = videoSendThread = null;
+        if (oldEncoder != null) {
+            try { oldEncoder.stop(); } catch (RuntimeException ignored) { }
+            oldEncoder.release();
+        }
+        if (encoderSurface != null) { encoderSurface.release(); encoderSurface = null; }
+        config = configureVideoEncoder(target);
+        frameTiming = new CastFrameTiming();
+        timingStats = frameTiming.snapshot(0);
+        bitrateController = new CastBitrateController(config.bitrate, config.fps);
+        startVideoDrain();
+        compositor.attachEncoder(encoderSurface, config.width, config.height, frameTiming);
+        startUiRendering(captureConfig);
+    }
+
+    private void stopUiRendering() {
+        if (uiRenderTick != null) { uiHandler.removeCallbacks(uiRenderTick); uiRenderTick = null; }
+        if (uiFrameCallback != null) {
+            Choreographer.getInstance().removeFrameCallback(uiFrameCallback);
+            uiFrameCallback = null;
+        }
+    }
+
     @SuppressLint("NewApi")
     private void startAudio(MediaProjection projection) throws IOException {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -540,12 +640,22 @@ final class WebViewCastManager implements Closeable {
         audioCapture = new AudioCapture(projection);
         audioCapture.start();
         audioActive = true;
+        if (activity instanceof MainActivity) ((MainActivity) activity).updateCastAudioRoute();
     }
 
     JSONObject stateJson() {
         JSONObject value = new JSONObject();
         try {
             value.put("running", running)
+                    .put("adaptationStatus", adaptationStatus)
+                    .put("encodeTimingMethod", "pts-matched-surface-to-output")
+                    .put("encodeSamples", timingStats.samples)
+                    .put("encodeP95Ms", nanosToMillis(timingStats.p95Ns))
+                    .put("surfaceSubmitMs", nanosToMillis(timingStats.submitNs))
+                    .put("afterSubmitMs", nanosToMillis(timingStats.afterSubmitNs))
+                    .put("encoderPendingFrames", timingStats.pending)
+                    .put("encoderOldestPendingMs", nanosToMillis(timingStats.oldestNs))
+                    .put("encodeUnmatchedFrames", timingStats.unmatched)
                     .put("status", status)
                     .put("error", error)
                     .put("audioActive", audioActive)
@@ -572,15 +682,7 @@ final class WebViewCastManager implements Closeable {
                     .put("rtspUrl", rtspUrl());
             CastBitrateController bitrate = bitrateController;
             RtspCastServer server = rtspServer;
-            if (server != null) {
-                long now = SystemClock.elapsedRealtime();
-                long videoSample = rtspVideoBitrate.sampleCumulativeBytes(
-                        server.sentVideoBytes(), now);
-                long audioSample = rtspAudioBitrate.sampleCumulativeBytes(
-                        server.sentAudioBytes(), now);
-                if (videoSample >= 0L) measuredRtspVideoBitrate = videoSample;
-                if (audioSample >= 0L) measuredRtspAudioBitrate = audioSample;
-            }
+            sampleTransportBitrates();
             value.put("encoderTargetBitrateMbps", bitrate == null ? 0 : bitrate.bitrate() / 1000000d)
                     .put("socketSendBufferBytes", server == null ? 0 : server.socketSendBufferBytes())
                     .put("rtspTransport", server == null ? "" : server.activeTransport())
@@ -593,12 +695,42 @@ final class WebViewCastManager implements Closeable {
                         .put("height", current.height)
                         .put("fps", current.fps)
                         .put("codec", current.codec)
+                        .put("requestedTransport", current.transport)
                         .put("bitrateMbps", current.bitrate / 1000000)
                         .put("audioRequested", current.audio);
             }
         } catch (JSONException ignored) {
         }
         return value;
+    }
+
+    boolean isAudioActive() { return running && audioActive; }
+
+    private synchronized void sampleTransportBitrates() {
+        RtspCastServer server = rtspServer;
+        if (!running || server == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (bitrateSampleAt > 0L && now - bitrateSampleAt < 500L) return;
+        bitrateSampleAt = now;
+        long video = rtspVideoBitrate.sampleCumulativeBytes(server.sentVideoBytes(), now);
+        long audio = rtspAudioBitrate.sampleCumulativeBytes(server.sentAudioBytes(), now);
+        if (video >= 0L) measuredRtspVideoBitrate = video;
+        if (audio >= 0L) measuredRtspAudioBitrate = audio;
+    }
+
+    long videoBitrate() {
+        sampleTransportBitrates();
+        return running ? measuredRtspVideoBitrate : -1L;
+    }
+
+    long audioBitrate() {
+        sampleTransportBitrates();
+        return running ? measuredRtspAudioBitrate : -1L;
+    }
+
+    String transport() {
+        CastConfig current = config;
+        return current == null ? "tcp" : current.transport;
     }
 
     String rtspUrl() {
@@ -613,9 +745,25 @@ final class WebViewCastManager implements Closeable {
         advertisedAddress = address == null ? "" : address.trim();
     }
 
+    void resetDelayStatistics() {
+        encodeDelayMs = videoQueueDelayMs = videoSendDelayMs = -1d;
+        lastVideoSendUs = peakVideoSendUs = 0L;
+        frameTiming.reset();
+        timingStats = frameTiming.snapshot(0);
+    }
+
     long encodeDelayMs() {
         return encodeDelayMs < 0d ? -1L : Math.round(encodeDelayMs);
     }
+
+    String encodeDetail() {
+        CastFrameTiming.Snapshot s = timingStats;
+        if (s.samples == 0) return "";
+        return "p95:" + nanosToMillis(s.p95Ns) + " sub:" + nanosToMillis(s.submitNs)
+                + " in:" + s.pending;
+    }
+
+    private static long nanosToMillis(long ns) { return ns < 0 ? -1 : Math.round(ns / 1_000_000d); }
 
     long videoQueueDelayMs() {
         return videoQueueDelayMs < 0d ? -1L : Math.round(videoQueueDelayMs);
@@ -685,6 +833,7 @@ final class WebViewCastManager implements Closeable {
             running = false;
             networkLease.release();
             audioActive = false;
+            if (activity instanceof MainActivity) ((MainActivity) activity).updateCastAudioRoute();
             // Unblock writers before waiting for producers or releasing their codecs.
             if (videoQueue != null) videoQueue.close();
             if (rtspServer != null) rtspServer.close();
@@ -790,7 +939,14 @@ final class WebViewCastManager implements Closeable {
 
     private final class AudioCapture implements Closeable {
         private final RtspCastServer server = rtspServer;
-        private final MediaCodec sessionVideoEncoder = videoEncoder;
+        private void failAudioAsync(final String prefix, final Throwable failure) {
+            activity.runOnUiThread(new Runnable() { @Override public void run() {
+                // Audio outlives video encoder switches, but never its own session.
+                if (audioCapture == AudioCapture.this && active)
+                    failAsync(prefix, failure);
+            }});
+        }
+
         private final MediaCodec encoder;
         private final AudioRecord record;
         private volatile boolean active = true;
@@ -924,7 +1080,7 @@ final class WebViewCastManager implements Closeable {
                 } catch (RuntimeException failure) {
                     pcmQueue.recycle(pcm);
                     if (active && running) {
-                        failAsync("声音捕获异常", failure, sessionVideoEncoder);
+                        failAudioAsync("声音捕获异常", failure);
                     }
                     break;
                 }
@@ -961,7 +1117,7 @@ final class WebViewCastManager implements Closeable {
                     break;
                 } catch (RuntimeException failure) {
                     if (active && running) {
-                        failAsync("声音编码输入异常", failure, sessionVideoEncoder);
+                        failAudioAsync("声音编码输入异常", failure);
                     }
                     break;
                 } finally {
@@ -996,7 +1152,7 @@ final class WebViewCastManager implements Closeable {
                     }
                 } catch (RuntimeException failure) {
                     if (active && running) {
-                        failAsync("声音编码异常", failure, sessionVideoEncoder);
+                        failAudioAsync("声音编码异常", failure);
                     }
                     break;
                 }

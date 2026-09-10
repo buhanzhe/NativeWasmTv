@@ -9,9 +9,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 
 import okhttp3.Dns;
@@ -21,18 +19,9 @@ final class PublicDns implements Dns {
     private static final int DNS_PORT = 53;
     private static final int TIMEOUT_MS = 1200;
     private static final int MAX_PACKET = 1500;
-    private static final long CACHE_MS = 120000L;
-    private static final int MAX_CACHE = 128;
 
     private final String[] servers;
     private final Random random = new Random();
-    private final Map<String, CacheEntry> cache =
-            new LinkedHashMap<String, CacheEntry>(32, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, CacheEntry> eldest) {
-                    return size() > MAX_CACHE;
-                }
-            };
 
     PublicDns(String mode) {
         if (NetworkClient.DNS_TENCENT.equals(mode)) {
@@ -56,19 +45,14 @@ final class PublicDns implements Dns {
         if (hostname.indexOf(':') >= 0 || hostname.matches("[0-9.]+")) {
             return Collections.singletonList(InetAddress.getByName(hostname));
         }
-        long now = System.currentTimeMillis();
-        synchronized (cache) {
-            CacheEntry hit = cache.get(hostname);
-            if (hit != null && hit.expiresAt > now) {
-                return hit.addresses;
-            }
-        }
         List<InetAddress> addresses = new ArrayList<InetAddress>();
         IOException lastError = null;
         for (String server : servers) {
             try {
                 addresses.addAll(query(server, hostname, 1));
-                addresses.addAll(query(server, hostname, 28));
+                // A usable IPv4 result must not wait for an unsupported/filtered
+                // AAAA query. IPv6-only hosts still fall back to AAAA below.
+                if (addresses.isEmpty()) addresses.addAll(query(server, hostname, 28));
                 if (!addresses.isEmpty()) {
                     break;
                 }
@@ -86,11 +70,7 @@ final class PublicDns implements Dns {
                 throw result;
             }
         }
-        List<InetAddress> immutable = Collections.unmodifiableList(addresses);
-        synchronized (cache) {
-            cache.put(hostname, new CacheEntry(immutable, now + CACHE_MS));
-        }
-        return immutable;
+        return Collections.unmodifiableList(addresses);
     }
 
     private List<InetAddress> query(String server, String hostname, int type)
@@ -187,13 +167,4 @@ final class PublicDns implements Dns {
         output.write(value & 0xff);
     }
 
-    private static final class CacheEntry {
-        final List<InetAddress> addresses;
-        final long expiresAt;
-
-        CacheEntry(List<InetAddress> addresses, long expiresAt) {
-            this.addresses = addresses;
-            this.expiresAt = expiresAt;
-        }
-    }
 }

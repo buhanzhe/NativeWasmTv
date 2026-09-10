@@ -11,7 +11,7 @@ function updateStatusText(update) {
   if (!update || !update.state || update.state === "idle") return "点击检查更新";
   if (update.state === "checking") return "正在检查最新 Release…";
   if (update.state === "available" && update.architectureUpgrade)
-    return "可升级 64 位版本 · 点击再次检查";
+    return "可升级 64 位版本 · 提升编码性能，但可能会占用更多内存";
   return update.message || "点击检查更新";
 }
 
@@ -19,15 +19,37 @@ function renderAppUpdate() {
   var update = (state && state.update) || {},
     button = document.getElementById("appUpdateButton"),
     status = document.getElementById("sysUpdateStatus");
-  button.disabled = update.state === "checking";
+  button.disabled = update.state === "checking" || update.state === "downloading" || appUpdateInstalling;
+  document.getElementById("appUpdateAction").textContent = update.state === "downloading" ? "下载中…"
+    : update.state === "checking" ? "检查中…" : update.state === "ready" ? "安装更新"
+    : update.state === "available" ? (update.architectureUpgrade ? "升级到 64 位" : "立即升级") : "检查更新";
   status.textContent = updateStatusText(update);
   if (updatePollTimer) {
     clearTimeout(updatePollTimer);
     updatePollTimer = null;
   }
-  if (update.state === "checking") {
+  if (update.state === "checking" || update.state === "downloading") {
     updatePollTimer = setTimeout(refresh, 700);
   }
+}
+
+var appUpdateInstalling = false;
+function appUpdateClick() {
+  var update = (state && state.update) || {};
+  if (appUpdateInstalling || update.state === "checking" || update.state === "downloading") return;
+  if (update.state !== "available" && update.state !== "ready") { checkAppUpdate(false); return; }
+  var message = "下载并安装更新到当前网页所在的设备？";
+  if (update.architectureUpgrade) message += "\n\n64 位版本可提升编码性能，但可能会占用更多内存。";
+  if (!window.confirm(message)) return;
+  appUpdateInstalling = true;
+  renderAppUpdate();
+  api("/api/update/install", {}, function (error, result) {
+    appUpdateInstalling = false;
+    if (error) { toast(error.message, true); renderAppUpdate(); return; }
+    if (state) state.update = result.update || {};
+    renderAppUpdate();
+    refresh();
+  });
 }
 
 function checkAppUpdate(automatic) {
@@ -48,78 +70,16 @@ function checkAppUpdate(automatic) {
   });
 }
 
-function apkLanPrefix() {
-  var hosts = [], management = (state && state.managementUrl) || "";
-  if (management) {
-    var link = document.createElement("a");
-    link.href = management;
-    hosts.push(link.hostname);
-  }
-  hosts.push(location.hostname);
-  for (var i = 0; i < hosts.length; i++) {
-    var match = String(hosts[i] || "").match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)\d{1,3}$/);
-    if (match) return match[1];
-  }
-  return "";
-}
-
-function normalizeApkReceiverAddress(value) {
-  value = String(value || "").replace(/^\s+|\s+$/g, "");
-  if (/^\d{1,3}$/.test(value)) {
-    var part = Number(value), prefix = apkLanPrefix();
-    if (part < 1 || part > 254) throw new Error("请输入 1 到 254 的 IP 最后一段");
-    if (!prefix) throw new Error("无法识别手机网段，请输入完整 IPv4 地址");
-    return "http://" + prefix + part + ":9966";
-  }
-  var match = value.match(/^(?:(https?):\/\/)?(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?(?:\/(?:index\.html)?)?$/i);
-  if (!match) throw new Error("请输入电视的完整 IPv4 地址，或 IP 最后一段");
-  var parts = match[2].split(".");
-  for (var i = 0; i < parts.length; i++) {
-    var octet = Number(parts[i]);
-    if (octet > 255) throw new Error("IPv4 地址每一段应为 0 到 255");
-    parts[i] = String(octet);
-  }
-  var port = match[3] ? Number(match[3]) : 9966;
-  if (port < 1 || port > 65535) throw new Error("端口应为 1 到 65535");
-  return (match[1] || "http").toLowerCase() + "://" + parts.join(".") + ":" + port;
-}
-
-function apkReceiverUrl() {
-  if (state && state.isTelevision === true) return "";
-  if (state && state.takeoverReceiverUrl) return state.takeoverReceiverUrl;
-  return normalizeApkReceiverAddress(document.getElementById("apkReceiverUrl").value);
-}
-
 function renderApkTransfer() {
-  if (!state) return;
-  var television = state.isTelevision === true,
-    input = document.getElementById("apkReceiverUrl"),
-    target = state.takeoverReceiverUrl || state.lastTakeoverReceiverUrl || "";
-  document.getElementById("apkReceiverField").style.display = television ? "none" : "";
   document.getElementById("apkTransferButton").disabled = apkUploadActive;
-  if (!television && !input.value && target) input.value = target;
   if (!apkUploadActive) {
-    document.getElementById("apkTransferHint").textContent = television
-      ? "从手机打开本页即可上传；接收完成后直接跳转系统安装界面。"
-      : "填写电视 IP 即可发送，无需接管；接收完成后直接跳转安装。";
+    document.getElementById("apkTransferHint").textContent =
+      "发送到当前网页所在的设备；安装成功后自动清理 APK。";
   }
 }
 
 function chooseApk() {
-  if (!state) {
-    toast("正在读取设备状态，请稍候", true);
-    return;
-  }
-  if (state.isTelevision !== true) {
-    try {
-      apkReceiverUrl();
-    } catch (error) {
-      toast(error.message, true);
-      document.getElementById("apkReceiverUrl").focus();
-      return;
-    }
-  }
-  document.getElementById("apkFile").click();
+  if (!apkUploadActive) document.getElementById("apkFile").click();
 }
 
 function sendSelectedApk() {
@@ -140,26 +100,14 @@ function sendSelectedApk() {
 }
 
 function uploadApk(file) {
-  var direct = state && state.isTelevision === true,
-    path = direct ? "/api/apk/upload" : "/api/apk/push",
+  if (apkUploadActive) return;
+  var path = "/api/apk/upload?name=" + encodeURIComponent(file.name),
     request = new XMLHttpRequest(),
     progress = document.getElementById("apkTransferProgress"),
     bar = document.getElementById("apkTransferProgressBar"),
     hint = document.getElementById("apkTransferHint"),
     input = document.getElementById("apkFile"),
     finished = false;
-  if (!direct) {
-    try {
-      path += "?receiverUrl=" + encodeURIComponent(apkReceiverUrl())
-        + "&name=" + encodeURIComponent(file.name);
-    } catch (error) {
-      input.value = "";
-      toast(error.message, true);
-      return;
-    }
-  } else {
-    path += "?name=" + encodeURIComponent(file.name);
-  }
   apkUploadActive = true;
   progress.className = "upload-progress active";
   progress.setAttribute("aria-hidden", "false");
@@ -177,7 +125,7 @@ function uploadApk(file) {
   };
   request.upload.onload = function () {
     bar.style.width = "100%";
-    hint.textContent = direct ? "电视正在校验 APK…" : "手机已接收，正在转发给电视…";
+    hint.textContent = "设备正在校验 APK…";
   };
   function finish(error, result) {
     if (finished) return;
@@ -193,10 +141,9 @@ function uploadApk(file) {
       return;
     }
     bar.style.width = "100%";
-    hint.textContent = (result.label || result.name || "APK") + " 已发送，电视正在打开安装界面。";
+    hint.textContent = (result.label || result.name || "APK") + " 已发送，设备正在打开安装界面；安装成功后自动清理。";
     document.getElementById("apkTransferButton").disabled = false;
-    if (state && result.receiverUrl) state.lastTakeoverReceiverUrl = result.receiverUrl;
-    toast("APK 已发送到电视");
+    toast("APK 已发送到当前设备");
   }
   request.onreadystatechange = function () {
     if (request.readyState !== 4) return;
@@ -270,16 +217,5 @@ function renderSystemInfo() {
 function renderPageState() {
   renderSystemInfo();
   renderApkTransfer();
-  renderCjsPlugin();
 }
-function renderCjsPlugin() {
-  var plugin = state.cjsPlugin || {}, input = document.getElementById("cjsPluginUrl");
-  if (document.activeElement !== input) input.value = plugin.manifestUrl || "";
-  document.getElementById("cjsPluginStatus").textContent = plugin.pendingVersion
-    ? "已下载 " + plugin.pendingVersion + "，重启后启用"
-    : plugin.installed ? "已安装 " + plugin.version + " · " + plugin.abi : "未安装";
-  renderCjsSites(plugin.sites || []);
-}
-function renderCjsSites(sites){var list=document.getElementById('cjsSiteList');list.innerHTML='';for(var i=0;i<sites.length;i++){var site=sites[i],row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');row.className='system-info-row';label.textContent=site.id+' · '+(site.installed?'v'+site.version:'未安装')+(site.pendingVersion?' · v'+site.pendingVersion+' 重启后启用':'');button.textContent=site.installed?'检查更新':'下载';button.onclick=(function(id){return function(){api('/api/settings',{updateCjsPlugin:true,cjsSiteId:id},function(e,v){toast(e?e.message:v.message,!!e);refresh()})}})(site.id);row.appendChild(label);row.appendChild(button);list.appendChild(row)}}
-function updateCjsPlugin(){var input=document.getElementById('cjsPluginUrl'),status=document.getElementById('cjsPluginStatus'),value=input.value.replace(/^\s+|\s+$/g,'');status.textContent='正在下载并校验…';api('/api/settings',{cjsPluginManifestUrl:value,updateCjsPlugin:true},function(error,result){if(error){status.textContent='更新失败';toast(error.message,true);return}toast(result.message||'兼容插件已更新');refresh()})}
 startPage();

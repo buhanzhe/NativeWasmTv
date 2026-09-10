@@ -7,7 +7,9 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>投屏与互联 · nTv</title>
+    <script src="/js/theme.js"></script>
     <link rel="stylesheet" href="/css/common.css" />
+    <link rel="stylesheet" href="/css/night.css" />
   </head>
   <body data-parent="/index.html">
     <main id="webViewCastPage" class="secondary-page channel-config-page">
@@ -25,6 +27,13 @@
         </div>
         <div class="actions">
           <button id="remoteCatalogButton" class="primary wide" onclick="saveRemoteCatalogUrl()">开始接管</button>
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>Wi-Fi Direct（实验性）</b>
+            <div id="wifiDirectHint" class="hint">默认关闭，使用路由器 IP。开启后尝试直连，部分设备可能频繁断开。</div>
+          </div>
+          <input id="wifiDirectExperimental" class="source-toggle" type="checkbox"
+            aria-label="Wi-Fi Direct（实验性）" onchange="saveWifiDirectSetting()" />
         </div>
       </section>
       <section id="castVideoSection">
@@ -53,6 +62,14 @@
               <option value="h264" selected="">H.264 · 兼容优先</option>
               <option value="h265">H.265 / HEVC · 节省带宽</option>
             </select>
+          </div>
+          <div class="field">
+            <label for="castTransport">传输协议</label>
+            <select id="castTransport" onchange="saveWebCastSettings()">
+              <option value="tcp" selected>TCP · 稳定优先（默认）</option>
+              <option value="udp">UDP · 低延迟</option>
+            </select>
+            <p class="hint">UDP 丢包可能造成花屏；更改后下次投屏生效，手机与电视需更新。</p>
           </div>
           <div class="field">
             <label for="castBitrate">视频码率上限</label
@@ -88,6 +105,16 @@
           />
         </div>
       </section>
+      <section id="multimediaSection">
+        <h2>多媒体投屏</h2>
+        <p class="hint">使用上方电视地址。图片和视频由手机转为 H.264，经 RTSP 投送；视频同时投送声音，无需录音或录屏权限。</p>
+        <div class="switch-row"><div class="switch-copy"><b>保留源音频编码发送</b><div class="hint">保留 AAC 或杜比 AC-3 原音轨；其他编码请关闭后转为 AAC。</div></div><input id="multimediaPreserveAudio" type="checkbox" class="source-toggle" aria-label="保留源音频编码发送" /></div>
+        <label id="multimediaChoose" class="primary wide multimedia-file-choose">选择图片或视频
+          <input id="multimediaFile" type="file" accept="image/*,video/*" aria-label="选择图片或视频" onclick="return beginMultimediaChoice()" onchange="sendMultimediaFile(this)" />
+        </label>
+        <button id="multimediaStop" class="wide" style="display:none" onclick="stopMultimedia()">结束多媒体投屏</button>
+        <p id="multimediaStatus" class="hint">文件不超过 1 GB；手机需支持该文件的解码。</p>
+      </section>
     </main>
     <div id="takeoverProgressDialog" class="takeover-progress-dialog" aria-hidden="true">
       <div class="takeover-progress-card" role="dialog" aria-modal="true"
@@ -102,5 +129,6 @@
     <div id="message" class="message"></div>
     <script src="/js/common.js"></script>
     <script src="/js/pages/cast.js"></script>
+    <script src="/js/pages/multimedia.js"></script>
   </body>
 </html>

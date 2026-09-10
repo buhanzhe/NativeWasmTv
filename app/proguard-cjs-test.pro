@@ -1,0 +1,3 @@
+-keepclassmembers class xiao.bu.tv.HlsProxyServer { private static byte[] decryptYangshipinTransportStream(byte[]); }
+-keepclassmembers class xiao.bu.tv.CjsPluginRuntime { private static java.util.Map states; }
+-keepclassmembers class xiao.bu.tv.CjsPluginRuntime$State { java.io.File directory; }

@@ -12,6 +12,7 @@ if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
             + '.signing/keystore-info.properties are required for release signing.')
 }
 def releaseSigningProperties = new Properties()
+def configuredTargetSdk = 25
 def configuredVersionCode = project.hasProperty('versionCodeOverride')
         ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 6
 if (releaseSigningAvailable) {
@@ -25,6 +26,9 @@ if (releaseSigningAvailable) {
 }
 
 android {
+    if (project.hasProperty('cjsV5Assets')) {
+        sourceSets.androidTest.assets.srcDir project.property('cjsV5Assets')
+    }
     compileSdkVersion 30
     buildToolsVersion '27.0.3'
     testBuildType project.findProperty('testBuildType') ?: 'debug'
@@ -46,7 +50,8 @@ android {
         minSdkVersion 14
         // API 25 keeps the legacy package-installer flow without declaring
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
-        targetSdkVersion 25
+        targetSdkVersion configuredTargetSdk
+        manifestPlaceholders = [localNetworkPermissionMaxSdk: configuredTargetSdk >= 37 ? "2147483647" : "1"]
         versionCode configuredVersionCode
         versionName '1.6.0'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',
@@ -111,10 +116,14 @@ android {
                     '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/mp4-finalizer.js"'
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             testProguardFile 'proguard-test-rules.pro'
+            if (project.findProperty('testRunner') == 'xiao.bu.tv.CjsV5Instrumentation') {
+                proguardFile 'proguard-cjs-test.pro'
+            }
         }
     }
 
     sourceSets {
+        main.java.srcDirs += [rootProject.file("third_party/android-transcoder/src")]
         main {
             jni.srcDirs = []
             jniLibs.srcDirs = ['src/main/libs']

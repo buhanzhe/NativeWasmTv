@@ -301,7 +301,24 @@ final class YangshipinWebResolver {
         values.put("ERROR_PREFIX", JSONObject.quote(API_ERROR_PREFIX));
         values.put("AUTH_PREFIX", JSONObject.quote(API_AUTH_PREFIX));
         values.put("AUTH_BODY", JSONObject.quote(payload.authBody));
-        return pluginScript("api-page.html.tpl", values);
+        String html = pluginScript("api-page.html.tpl", values);
+        if (Build.VERSION.SDK_INT < 21) {
+            // Keep plugin API/signing logic unchanged; old Chromium's HTTPS XHR
+            // uses a different TLS stack from the app's compatible HTTP client.
+            String shim = "<script>(function(){"
+                    + "window.XMLHttpRequest=function(){this.headers={};this.readyState=0;this.status=0;};"
+                    + "var p=XMLHttpRequest.prototype;"
+                    + "p.open=function(m,u){this.method=m;this.url=u;this.readyState=1;};"
+                    + "p.setRequestHeader=function(k,v){this.headers[k]=v;};"
+                    + "p.abort=function(){this.aborted=true;};"
+                    + "p.send=function(b){var x=this;setTimeout(function(){if(x.aborted)return;"
+                    + "try{var r=JSON.parse(NtvYspSigner.request(x.method,x.url,JSON.stringify(x.headers),b==null?'':String(b)));"
+                    + "x.status=r.code||0;x.responseText=r.body||'';x.readyState=4;"
+                    + "if(x.onreadystatechange)x.onreadystatechange();}catch(e){if(x.onerror)x.onerror();}},0);};"
+                    + "})();</script>";
+            html = shim + html;
+        }
+        return html;
     }
 
     private boolean maybeResolveApiAuth(String message) {
@@ -386,6 +403,35 @@ final class YangshipinWebResolver {
     }
 
     final class SignerBridge {
+        @JavascriptInterface
+        public String request(String method, String url, String headersJson, String body) {
+            try {
+                URI uri = URI.create(url);
+                String host = uri.getHost(), path = uri.getPath();
+                boolean auth = "player-api.yangshipin.cn".equals(host)
+                        && ("/v1/player/auth".equals(path) || "/v1/player/get_live_info".equals(path));
+                boolean token = "h5access.yangshipin.cn".equals(host) && "/web/open/token".equals(path);
+                if (Build.VERSION.SDK_INT >= 21 || pendingRequest == null
+                        || !"https".equals(uri.getScheme()) || uri.getUserInfo() != null
+                        || uri.getPort() != -1 && uri.getPort() != 443
+                        || !(auth && "POST".equals(method) || token && "GET".equals(method)))
+                    return "{\"code\":0,\"error\":\"unsupported request\"}";
+                JSONObject headers = new JSONObject(headersJson);
+                headers.put("User-Agent", DESKTOP_USER_AGENT);
+                headers.put("Origin", "https://www.yangshipin.cn");
+                headers.put("Referer", "https://www.yangshipin.cn/");
+                String cookie = CookieManager.getInstance().getCookie(url);
+                if (cookie != null) headers.put("Cookie", cookie);
+                String result = Ku9HttpClient.requestJson(url, method, headers.toString(), body, false, 1024 * 1024);
+                JSONObject response = new JSONObject(result);
+                Log.i(TAG, "Legacy native API path=" + path + " code=" + response.optInt("code")
+                        + " error=" + response.optString("error"));
+                return result;
+            } catch (Exception error) {
+                Log.w(TAG, "Legacy native API request failed", error);
+                return "{\"code\":0}";
+            }
+        }
         @JavascriptInterface
         public String tokenRnd(String guid, String timestampMs) {
             try {

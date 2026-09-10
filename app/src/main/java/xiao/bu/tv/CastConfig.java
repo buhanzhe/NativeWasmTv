@@ -20,6 +20,7 @@ final class CastConfig {
     final int bitrate;
     final boolean audio;
     final String codec;
+    final String transport;
 
     CastConfig(String url, int width, int height, int fps, int bitrate, boolean audio) {
         this(url, width, height, fps, bitrate, audio, CODEC_H264);
@@ -27,6 +28,12 @@ final class CastConfig {
 
     CastConfig(String url, int width, int height, int fps, int bitrate, boolean audio,
             String codec) {
+        this(url, width, height, fps, bitrate, audio, codec, "tcp");
+    }
+
+    CastConfig(String url, int width, int height, int fps, int bitrate, boolean audio,
+            String codec, String transport) {
+        this.transport = "udp".equals(transport) ? "udp" : "tcp";
         this.url = url;
         this.width = width;
         this.height = height;
@@ -37,7 +44,17 @@ final class CastConfig {
     }
 
     CastConfig withVideo(String codec, int fps) {
-        return new CastConfig(url, width, height, fps, bitrate, audio, codec);
+        return new CastConfig(url, width, height, fps, bitrate, audio, codec, transport);
+    }
+
+    CastConfig lowerResolution(int activeBitrate) {
+        if (height <= 360 || width <= 640) return null;
+        int nextHeight = height > 1080 ? 1080 : height > 720 ? 720 : height > 540 ? 540 : 360;
+        int nextWidth = Math.max(2, ((int) ((long) width * nextHeight / height)) & ~1);
+        double ratio = (double) nextWidth * nextHeight / ((double) width * height);
+        int nextBitrate = Math.min(activeBitrate,
+                Math.max(1_000_000, (int) (activeBitrate * Math.sqrt(ratio))));
+        return new CastConfig(url, nextWidth, nextHeight, fps, nextBitrate, audio, codec, transport);
     }
 
     String videoMimeType() {
@@ -61,7 +78,8 @@ final class CastConfig {
         int bitrateMbps = clamp(value.optInt("bitrateMbps", DEFAULT_BITRATE / 1_000_000),
                 2, 40);
         return new CastConfig(url, width, height, fps, bitrateMbps * 1_000_000,
-                value.optBoolean("audio", true), value.optString("codec", CODEC_H264));
+                value.optBoolean("audio", true), value.optString("codec", CODEC_H264),
+                value.optString("transport", "tcp"));
     }
 
     private static int clamp(int value, int minimum, int maximum) {

@@ -68,6 +68,7 @@ final class RtspCastServer implements Closeable {
     private byte[] sps;
     private byte[] pps;
     private byte[] vps;
+    private volatile int audioSampleRate = 48000, audioChannels = 2;
     private byte[] audioConfig = new byte[] { 0x11, (byte) 0x90 };
     private volatile boolean syncFrameRequested;
     private volatile int startupSyncFramesRemaining;
@@ -190,6 +191,14 @@ final class RtspCastServer implements Closeable {
         }
     }
 
+    private boolean ac3Audio;
+    void setAc3Audio(boolean ac3) { ac3Audio = ac3; }
+
+    void setAudioFormat(int sampleRate, int channels) {
+        audioSampleRate = Math.max(8000, sampleRate);
+        audioChannels = Math.max(1, channels);
+    }
+
     void setAudioConfig(ByteBuffer config) {
         byte[] value = copyRemaining(config);
         if (value.length > 0) {
@@ -260,9 +269,25 @@ final class RtspCastServer implements Closeable {
             if (snapshot == null || !snapshot.audioSetup) {
                 return;
             }
+            if (ac3Audio) {
+                // RFC 4184: FT=0 / NF=1 for a complete AC-3 sync frame.
+                // Fragment large frames for UDP; every fragment shares its timestamp.
+                int max = snapshot.tcp ? 8000 : 1200;
+                int count = (accessUnit.length + max - 1) / max;
+                for (int offset=0, part=0; offset<accessUnit.length; part++) {
+                    int length=Math.min(max, accessUnit.length-offset);
+                    writeRtpHeader(audioPacket,AUDIO_PAYLOAD_TYPE,part==count-1,nextAudioSequence(),
+                            (ptsUs*audioSampleRate/1000000L)&0xffffffffL,audioSsrc);
+                    audioPacket[12]=(byte)(count==1?0:part==0?1:3);
+                    audioPacket[13]=(byte)count;
+                    System.arraycopy(accessUnit,offset,audioPacket,14,length);
+                    send(snapshot,false,audioPacket,0,14+length,true);offset+=length;
+                }
+                return;
+            }
             int size = accessUnit.length;
             int sequence = nextAudioSequence();
-            long timestamp = (ptsUs * 48000L / 1000000L) & 0xffffffffL;
+            long timestamp = (ptsUs * audioSampleRate / 1000000L) & 0xffffffffL;
             writeRtpHeader(audioPacket, AUDIO_PAYLOAD_TYPE, true, sequence, timestamp, audioSsrc);
             audioPacket[12] = 0;
             audioPacket[13] = 16;
@@ -679,13 +704,13 @@ final class RtspCastServer implements Closeable {
         result.append("\r\na=control:trackID=0\r\n");
         if (audioEnabled) {
             result.append("m=audio 0 RTP/AVP ").append(AUDIO_PAYLOAD_TYPE).append("\r\n")
-                    .append("a=rtpmap:").append(AUDIO_PAYLOAD_TYPE)
-                    .append(" MPEG4-GENERIC/48000/2\r\n")
+                    .append("a=rtpmap:").append(AUDIO_PAYLOAD_TYPE);
+            if(ac3Audio) result.append(" ac3/").append(audioSampleRate).append("\r\n");
+            else result.append(" MPEG4-GENERIC/").append(audioSampleRate).append("/").append(audioChannels).append("\r\n")
                     .append("a=fmtp:").append(AUDIO_PAYLOAD_TYPE)
-                    .append(" streamtype=5;profile-level-id=1;mode=AAC-hbr;config=")
-                    .append(toHex(audioConfig))
-                    .append(";SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\n")
-                    .append("a=control:trackID=1\r\n");
+                    .append(" streamtype=5;profile-level-id=1;mode=AAC-hbr;config=").append(toHex(audioConfig))
+                    .append(";SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\n");
+            result.append("a=control:trackID=1\r\n");
         }
         return result.toString();
     }

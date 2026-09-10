@@ -10,21 +10,28 @@ import java.util.Set;
 final class EpgDisplayCache {
     private List<EpgManager.Program> source;
     private List<EpgManager.Program> displayed = Collections.emptyList();
+    private long displayedDay;
 
     List<EpgManager.Program> programsFor(List<EpgManager.Program> programs) {
         // EpgManager publishes complete snapshots, never mutating a published list.
         // Identity is an O(1) cache check; a refreshed guide has new list identities.
-        if (source == programs) {
+        long day = EpgManager.dayStart(System.currentTimeMillis());
+        java.util.Calendar end = java.util.Calendar.getInstance();
+        end.setTimeInMillis(day);
+        end.add(java.util.Calendar.DATE, 1);
+        long nextDay = end.getTimeInMillis();
+        if (source == programs && displayedDay == day) {
             return displayed;
         }
         List<EpgManager.Program> result = programs;
         if (programs == null || programs.isEmpty()) {
             result = Collections.emptyList();
-        } else if (programs.size() > 1) {
+        } else {
             Set<Key> seen = new HashSet<Key>();
             ArrayList<EpgManager.Program> unique = new ArrayList<EpgManager.Program>();
             for (EpgManager.Program program : programs) {
-                if (seen.add(new Key(program))) {
+                if (program.stopMillis > day && program.startMillis < nextDay
+                        && seen.add(new Key(program))) {
                     unique.add(program);
                 }
             }
@@ -35,6 +42,7 @@ final class EpgDisplayCache {
             }
         }
         source = programs;
+        displayedDay = day;
         displayed = result;
         return displayed;
     }

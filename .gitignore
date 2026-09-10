@@ -25,4 +25,6 @@ adb-*.png
 adb-*.xml
 scripts/node_modules/
 reports/
-scripts/
+scripts/*
+!scripts/build-launcher-mark.py
+!scripts/build-tv-banner.py

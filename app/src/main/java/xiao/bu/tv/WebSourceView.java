@@ -69,6 +69,7 @@ public final class WebSourceView extends FrameLayout {
     private volatile WebView webView;
     private volatile SourceClient sourceClient;
     private DesktopWebProfile desktopProfile;
+    private WebRenderDiagnostics renderDiagnostics;
     private View fullscreenView;
     private WebChromeClient.CustomViewCallback fullscreenCallback;
     private final LinearLayout loadingOverlay;
@@ -285,6 +286,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private void destroyCurrentWebView() {
+        if (renderDiagnostics != null) renderDiagnostics.stop("destroyed");
         hideFullscreenView();
         WebView current = webView;
         webView = null;
@@ -418,6 +420,11 @@ public final class WebSourceView extends FrameLayout {
         webView.setScaleY(height / (float) viewportHeight);
         webView.setTranslationX(0f);
         webView.setTranslationY(0f);
+        if (pageActive) {
+            if (renderDiagnostics == null) renderDiagnostics = new WebRenderDiagnostics(getContext());
+            renderDiagnostics.update(webView, castCaptureActive, castCaptureFrameRate,
+                    viewportWidth, viewportHeight);
+        }
     }
 
     private void applyDesktopViewport() {
@@ -671,6 +678,7 @@ public final class WebSourceView extends FrameLayout {
 
     private void onRendererGone(WebView failed, boolean crashed) {
         if (failed != webView) return;
+        if (renderDiagnostics != null) renderDiagnostics.stop("rendererGone crashed=" + crashed);
         final int failedRequest = requestId;
         final String failedUrl = pageUrl;
         final boolean visible = pageActive && isPageVisible();
@@ -706,6 +714,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void closePage() {
+        if (renderDiagnostics != null) renderDiagnostics.stop("closed");
         hideFullscreenView();
         if (destroyed) {
             return;
@@ -797,23 +806,16 @@ public final class WebSourceView extends FrameLayout {
         }
     }
 
-    private void runJavascript(String script) {
-        if (webView == null || script == null || script.length() == 0) {
-            return;
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            webView.evaluateJavascript(script, null);
-        } else {
-            webView.loadUrl("javascript:" + script);
-        }
-    }
-
     boolean isPageVisible() {
         return getVisibility() == View.VISIBLE;
     }
 
     boolean hasRetainedPage() {
         return !destroyed && webView != null && pageActive && requestId >= 0;
+    }
+
+    boolean hasRetainedPage(int expectedRequestId) {
+        return hasRetainedPage() && requestId == expectedRequestId;
     }
 
     void hideForStreamPlayback() {
@@ -1023,6 +1025,13 @@ public final class WebSourceView extends FrameLayout {
         updatePageLifecycle();
     }
 
+    String currentPageUrl() {
+        if (!hasRetainedPage()) return "";
+        String current = webView == null ? null : webView.getUrl();
+        if (current == null || !(current.startsWith("https://") || current.startsWith("http://"))) current = pageUrl;
+        return current != null && (current.startsWith("https://") || current.startsWith("http://")) ? current : "";
+    }
+
     void pausePage() {
         // Remember this even without a page: background channel changes must
         // inherit the session lifecycle, not unconditionally resume a new page.
@@ -1078,6 +1087,16 @@ public final class WebSourceView extends FrameLayout {
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             return null;
         }
+        // Match complete media files, not TS/M4S segments or URLs embedded in page queries.
+        int pathEnd = lower.indexOf('?');
+        int fragment = lower.indexOf('#');
+        if (pathEnd < 0 || (fragment >= 0 && fragment < pathEnd)) pathEnd = fragment;
+        String path = pathEnd < 0 ? lower : lower.substring(0, pathEnd);
+        if (path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mkv")
+                || path.endsWith(".mov") || path.endsWith(".flv")
+                || path.endsWith(".mp3") || path.endsWith(".m4a") || path.endsWith(".flac")
+                || path.endsWith(".wav") || path.endsWith(".ogg") || path.endsWith(".oga")
+                || path.endsWith(".opus")) return url;
         int query = lower.indexOf('?');
         int playlist = lower.indexOf(".m3u8");
         if (playlist >= 0 && (query < 0 || playlist < query)) {

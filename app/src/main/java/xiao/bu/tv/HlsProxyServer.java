@@ -136,6 +136,11 @@ final class HlsProxyServer implements Closeable {
     private volatile HlsMediaTracks.Manifest mediaTrackManifest;
     private volatile String mediaTrackPolicyUrl;
     private volatile String requestedVideoVariant = "";
+    private final HlsSegmentBitrate segmentBitrate = new HlsSegmentBitrate();
+
+    long measuredMediaBitrate(boolean video) {
+        return segmentBitrate.bitrate(video, SystemClock.elapsedRealtime());
+    }
 
     HlsMediaTracks.Manifest mediaTracks(String sourceUrl) {
         HlsMediaTracks.Manifest manifest = mediaTrackManifest;
@@ -498,6 +503,13 @@ final class HlsProxyServer implements Closeable {
                 return;
             }
             writeOk(output, response.contentType, response.body);
+            if (rangeHeader == null) {
+                HlsSegmentBitrate.Sample sample = segmentBitrate.begin(originUrl);
+                if (sample != null) {
+                    sample.add(response.body, 0, response.body.length);
+                    segmentBitrate.complete(sample, SystemClock.elapsedRealtime());
+                }
+            }
         } catch (Exception error) {
             if (!running || isPlayerDisconnect(error)) {
                 return;
@@ -647,6 +659,7 @@ final class HlsProxyServer implements Closeable {
             throws IOException {
         URI base = URI.create(responseUrl);
         String[] lines = body.split("\\r?\\n", -1);
+        if (!body.contains("#EXT-X-STREAM-INF")) segmentBitrate.register(responseUrl, lines);
         /* Generic third-party HLS may still use the proxy when a WebView supplied
          * Referer/Cookie headers. It only needs URL rewriting in that case: do not
          * apply rendition probing, CCTV live-edge holdback, segment prefetch or
@@ -742,6 +755,9 @@ final class HlsProxyServer implements Closeable {
                 responseStarted = true;
 
                 InputStream upstream = connection.getInputStream();
+                HlsSegmentBitrate.Sample bitrateSample = rangeHeader == null
+                        && status == HttpURLConnection.HTTP_OK ? segmentBitrate.begin(originUrl) : null;
+                long received = 0;
                 try {
                     // Reuse one copy buffer per bounded worker. A live stream requests
                     // thousands of segments; avoiding a fresh 64 KiB allocation for every
@@ -750,6 +766,8 @@ final class HlsProxyServer implements Closeable {
                     int count;
                     while (running && (count = upstream.read(buffer)) != -1) {
                         output.write(buffer, 0, count);
+                        received += count;
+                        if (bitrateSample != null) bitrateSample.add(buffer, 0, count);
                         upstreamDownloadedBytes.addAndGet(count);
                         streamedResponseBytes.addAndGet(count);
                     }
@@ -758,6 +776,9 @@ final class HlsProxyServer implements Closeable {
                     upstream.close();
                 }
                 streamedResponseCount.incrementAndGet();
+                if (running && (contentLength < 0 || received == contentLength)) {
+                    segmentBitrate.complete(bitrateSample, SystemClock.elapsedRealtime());
+                }
                 responseCompleted = true;
                 return;
             } catch (IOException error) {
@@ -1344,12 +1365,34 @@ final class HlsProxyServer implements Closeable {
                         + cctvStartupDownloadSegments);
             }
             long startedAt = SystemClock.elapsedRealtime();
-            for (int index = 0; index < cctvStartupDownloadSegments; index++) {
-                PlaylistSegment segment = playable.get(index);
-                if (!isCctvSegmentReady(segment.url)) {
-                    getOrDownloadStartupBody(segment.url);
+            // Download the existing startup window concurrently. Keep decryption on
+            // its ordered worker: H5E state must still advance in segment order.
+            List<FutureTask<byte[]>> downloads = new ArrayList<FutureTask<byte[]>>();
+            try {
+                for (int index = 0; index < cctvStartupDownloadSegments; index++) {
+                    final String url = playable.get(index).url;
+                    if (!isCctvSegmentReady(url)) {
+                        FutureTask<byte[]> task = new FutureTask<byte[]>(new Callable<byte[]>() {
+                            @Override public byte[] call() throws IOException {
+                                return getOrDownloadStartupBody(url);
+                            }
+                        });
+                        downloads.add(task);
+                        genericPrefetchWorkers.execute(task);
+                    }
                 }
+                for (FutureTask<byte[]> task : downloads) task.get();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IOException("CCTV startup interrupted", error);
+            } catch (ExecutionException error) {
+                Throwable cause = error.getCause();
+                if (cause instanceof IOException) throw (IOException) cause;
+                throw new IOException("CCTV startup download failed", cause);
+            } finally {
+                for (FutureTask<byte[]> task : downloads) if (!task.isDone()) task.cancel(true);
             }
+            long downloadedAt = SystemClock.elapsedRealtime();
             /* Decrypt startup data on the persistent ordered worker instead of this HTTP
              * request thread. Its wasm runtime is then reused by the rolling prefetch
              * tasks, avoiding a full module allocation on every channel start. */
@@ -1364,6 +1407,8 @@ final class HlsProxyServer implements Closeable {
                     + cctvStartupDownloadSegments
                     + " playable=" + cctvStartupDecryptSegments + " elapsedMs="
                     + (SystemClock.elapsedRealtime() - startedAt)
+                    + " downloadMs=" + (downloadedAt - startedAt)
+                    + " decryptMs=" + (SystemClock.elapsedRealtime() - downloadedAt)
                     + " first=" + segmentName(playable.get(0).url)
                     + " last=" + segmentName(
                             playable.get(cctvStartupDownloadSegments - 1).url));
@@ -1723,19 +1768,44 @@ final class HlsProxyServer implements Closeable {
     }
 
     private FutureTask<byte[]> newCctvSegmentTask(final String originUrl) {
+        // Fetch on the I/O pool as soon as the ordered task is queued. The next
+        // segment can arrive while this worker decrypts the current segment.
+        // cctvSegmentTasks already coalesces all consumers of the same URL.
+        final FutureTask<byte[]> download = new FutureTask<byte[]>(new Callable<byte[]>() {
+            @Override public byte[] call() throws Exception {
+                if (!running || Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("CCTV channel switched");
+                }
+                byte[] cached = takeDownloadedStartupBody(originUrl);
+                return cached != null ? cached : downloadCctvSegment(originUrl);
+            }
+        });
+        genericPrefetchWorkers.execute(download);
+        final long queuedAt = SystemClock.elapsedRealtime();
         return new FutureTask<byte[]>(new Callable<byte[]>() {
             @Override
             public byte[] call() throws Exception {
                 try {
-                    byte[] body = takeDownloadedStartupBody(originUrl);
-                    if (body == null) {
-                        body = downloadCctvSegment(originUrl);
+                    long workerAt = SystemClock.elapsedRealtime();
+                    byte[] body;
+                    try { body = download.get(); }
+                    catch (ExecutionException error) {
+                        Throwable cause = error.getCause();
+                        if (cause instanceof Exception) throw (Exception) cause;
+                        throw new IOException("CCTV download failed", cause);
                     }
                     if (!running || Thread.currentThread().isInterrupted()) {
                         throw new InterruptedException("CCTV channel switched");
                     }
+                    long decryptAt = SystemClock.elapsedRealtime();
+                    long cpuAt = android.os.Debug.threadCpuTimeNanos();
                     byte[] result = parallelCctvDecrypt
                             ? decryptCctvSegment(body, originUrl, true) : body;
+                    Log.i(TAG, "CCTV pipeline segment=" + segmentName(originUrl)
+                            + " queueMs=" + (workerAt - queuedAt)
+                            + " ioWaitMs=" + (decryptAt - workerAt)
+                            + " decryptWallMs=" + (SystemClock.elapsedRealtime() - decryptAt)
+                            + " decryptCpuMs=" + ((android.os.Debug.threadCpuTimeNanos() - cpuAt) / 1000000L));
                     if (parallelCctvDecrypt) {
                         synchronized (cctvSegmentCache) {
                             cctvSegmentCache.put(originUrl, result);
@@ -1751,6 +1821,7 @@ final class HlsProxyServer implements Closeable {
         }) {
             @Override
             protected void done() {
+                if (!download.isDone()) download.cancel(true);
                 /* Remove only this exact generation. A late failed task must never delete
                  * a newer retry for the same URL. Successful bytes remain in the LRU. */
                 synchronized (cctvSegmentTasks) {

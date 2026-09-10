@@ -7,7 +7,9 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>系统信息 · nTv</title>
+    <script src="/js/theme.js"></script>
     <link rel="stylesheet" href="/css/common.css" />
+    <link rel="stylesheet" href="/css/night.css" />
   </head>
   <body data-parent="/index.html">
     <main id="systemInfoPage" class="secondary-page channel-config-page">
@@ -30,9 +32,9 @@
           </div>
           <div class="system-info-row"><span>设备型号</span><b id="sysDevice">正在读取…</b></div>
           <button id="appUpdateButton" class="system-info-row system-update-row" type="button"
-            onclick="checkAppUpdate(false)">
+            onclick="appUpdateClick()">
             <span>应用版本<small id="sysUpdateStatus">点击检查更新</small></span>
-            <b><span id="sysApp">正在读取…</span><i aria-hidden="true">›</i></b>
+            <b><span id="sysApp">正在读取…</span><span id="appUpdateAction" class="app-update-action">检查更新</span></b>
           </button>
           <div class="system-info-row webview-info-row">
             <span>WebView</span><b id="sysWebViewSummary">正在读取…</b>
@@ -56,14 +58,8 @@
         </div>
         <p class="system-info-note">公网 IPv6 仅显示当前网卡上可路由的全局地址。</p>
       </section>
-      <section><div class="section-head"><h2>低版本兼容插件</h2><span id="cjsPluginStatus">正在读取…</span></div><div class="browser-settings-list"><div class="browser-setting-row"><div class="browser-setting-copy"><b>站点目录 URL</b><span>每个网站独立下载和更新，按当前应用架构加载</span></div><input id="cjsPluginUrl" type="url" aria-label="站点目录 URL"></div></div><div class="actions"><button class="primary" onclick="updateCjsPlugin()">刷新目录并检查已安装站点</button></div><div id="cjsSiteList" class="system-info-list"></div></section>
       <section id="apkTransferSection">
         <div class="section-head"><h2>APK 投送</h2></div>
-        <div id="apkReceiverField" class="field">
-          <label for="apkReceiverUrl">电视 IP 地址或最后一段</label>
-          <input id="apkReceiverUrl" type="text" inputmode="url" autocapitalize="off"
-            spellcheck="false" maxlength="256" placeholder="113 或 10.10.10.10" />
-        </div>
         <input id="apkFile" class="visually-hidden-file" type="file"
           accept=".apk,application/vnd.android.package-archive" onchange="sendSelectedApk()" />
         <div class="actions">
@@ -74,7 +70,7 @@
         <div id="apkTransferProgress" class="upload-progress" aria-hidden="true">
           <div id="apkTransferProgressBar" class="upload-progress-bar"></div>
         </div>
-        <p id="apkTransferHint" class="hint">填写电视 IP 即可发送，无需接管。</p>
+        <p id="apkTransferHint" class="hint">发送到当前网页所在的设备；安装成功后自动清理 APK。</p>
       </section>
     </main>
     <div id="message" class="message"></div>

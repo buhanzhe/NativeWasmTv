@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.util.Base64;
+import android.os.Build;
 import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -14,7 +14,7 @@ import java.util.*;
 
 /** Online per-site plugins with file integrity checks. Network I/O never holds the runtime monitor. */
 public final class CjsPluginRuntime {
-    public static final int HOST_PROTOCOL = 4;
+    public static final int HOST_PROTOCOL = 5;
     public static final String DEFAULT_MANIFEST_URL =
             "https://raw.githubusercontent.com/TvWasm/cjs/main/catalog.json";
     private static final String TAG = "CjsPlugin";
@@ -24,6 +24,7 @@ public final class CjsPluginRuntime {
     private static final int MAX_COMPONENT_CONFIG_BYTES = 2048;
     private static Context context;
     private static JSONObject catalog;
+    private static boolean catalogReadAttempted;
     private static boolean abiChangedAtStartup;
     private static final Map<String, State> states = new HashMap<String, State>();
     private static final Set<String> checked = new HashSet<String>();
@@ -52,7 +53,7 @@ public final class CjsPluginRuntime {
         return context;
     }
     private static SharedPreferences preferences() {
-        return requireContext().getSharedPreferences("cjs_sites_v4", Context.MODE_PRIVATE);
+        return requireContext().getSharedPreferences("cjs_sites_v5", Context.MODE_PRIVATE);
     }
     public static String getManifestUrl() {
         return preferences().getString("catalog_url", DEFAULT_MANIFEST_URL);
@@ -74,10 +75,11 @@ public final class CjsPluginRuntime {
             throw new IOException("插件名称无效");
         return value;
     }
-    private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v4"); }
+    private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v5"); }
     private static String currentAbi() { return BuildConfig.CJS_PLUGIN_ABI; }
-    private static String pref(State s, String key) { return s.id + ":" + currentAbi() + ":" + key; }
-    private static File siteRoot(State s) { return new File(new File(root(), s.id), currentAbi()); }
+    static String currentProfile() { return CjsNativeProfile.select(currentAbi(), Build.VERSION.SDK_INT); }
+    private static String pref(State s, String key) { return s.id + ":" + currentProfile() + ":" + key; }
+    private static File siteRoot(State s) { return new File(new File(root(), s.id), currentProfile()); }
     private static File directory(State s, int version) { return new File(siteRoot(s), String.valueOf(version)); }
 
     private static JSONObject readManifest(byte[] bytes) throws Exception {
@@ -85,11 +87,6 @@ public final class CjsPluginRuntime {
     }
     private static JSONObject readManifest(JSONObject value) throws Exception {
         if (value.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容");
-        // Read old cached envelopes during upgrade; newly published manifests are plain JSON.
-        if (value.has("payload")) {
-            value = new JSONObject(new String(Base64.decode(value.getString("payload"), Base64.DEFAULT), "UTF-8"));
-            value.put("protocol", HOST_PROTOCOL);
-        }
         return value;
     }
     private static synchronized void useCatalog(JSONObject value) throws Exception {
@@ -124,19 +121,15 @@ public final class CjsPluginRuntime {
     }
     public static synchronized boolean hasCatalog() {
         if (catalog != null) return true;
+        if (context == null || catalogReadAttempted) return false;
+        // A missing catalog is normal before the first download. Do not reopen it
+        // on every state query; refreshCatalog publishes downloaded catalogs directly.
+        catalogReadAttempted = true;
         try {
             File cache = new File(root(), "catalog.json");
             JSONObject stored = new JSONObject(new String(readFile(cache, MAX_MANIFEST_BYTES), "UTF-8"));
             JSONObject value = readManifest(stored);
             useCatalog(value);
-            if (stored.has("payload")) {
-                // Convert once without a network request or re-downloading any site artifacts.
-                try {
-                    File temp = new File(root(), "catalog-migration.tmp");
-                    writeAndSync(temp, value.toString().getBytes("UTF-8"));
-                    if (!temp.renameTo(cache)) Log.w(TAG, "Unable to migrate cached catalog");
-                } catch (Exception error) { Log.w(TAG, "Cached catalog migration deferred", error); }
-            }
             return true;
         } catch (Exception ignored) { return false; }
     }
@@ -209,6 +202,7 @@ public final class CjsPluginRuntime {
         try { input.readFully(header); } finally { input.close(); }
         verifyNativeAbi(header, currentAbi(), library.getName());
         if (!currentAbi().equals(new String(readFile(new File(dir, "abi.txt"), 64), "UTF-8"))) return null;
+        if (!currentProfile().equals(new String(readFile(new File(dir, "profile.txt"), 64), "UTF-8"))) return null;
         JSONObject result = new JSONObject(new String(readFile(new File(dir, "runtime.json"), MAX_SCRIPT_BYTES), "UTF-8"));
         return result.optInt("protocol") == HOST_PROTOCOL && s.id.equals(result.optString("id")) ? result : null;
     }
@@ -246,7 +240,7 @@ public final class CjsPluginRuntime {
         }
         return new JSONObject().put("installed", hasCatalog()).put("version", "按站点管理")
                 .put("pendingVersion", "").put("sites", items).put("abi", currentAbi())
-                .put("abiChangedAtStartup", abiChangedAtStartup).put("manifestUrl", getManifestUrl());
+                .put("nativeProfile", currentProfile()).put("abiChangedAtStartup", abiChangedAtStartup).put("manifestUrl", getManifestUrl());
     }
     /** Manual update affects only sites already installed on this ABI. */
     public static String installOrUpdate() throws Exception {
@@ -285,7 +279,13 @@ public final class CjsPluginRuntime {
                 for (int i = 0; i < files.length(); i++) {
                     JSONObject f = files.getJSONObject(i);
                     String abi = f.getString("abi");
-                    if (!"all".equals(abi) && !currentAbi().equals(abi)) continue;
+                    if (!"all".equals(abi)) {
+                        if (!currentProfile().equals(f.optString("profile"))) continue;
+                        if (!currentAbi().equals(abi) || f.optInt("minSdk", -1) != CjsNativeProfile.minSdk(currentProfile())
+                                || Build.VERSION.SDK_INT < f.getInt("minSdk")) throw new IOException("插件平台声明不匹配");
+                    } else if (f.has("profile") || !"runtime.json".equals(f.optString("name"))) {
+                        throw new IOException("共享插件文件声明无效");
+                    }
                     String filename = name(f.getString("name"));
                     if ((!"runtime.json".equals(filename) && !module.equals(filename)) || !downloaded.add(filename))
                         throw new IOException("站点文件声明无效");
@@ -296,6 +296,7 @@ public final class CjsPluginRuntime {
                 }
                 if (downloaded.size() != 2) throw new IOException("站点插件不完整");
                 writeAndSync(new File(staging, "abi.txt"), currentAbi().getBytes("UTF-8"));
+                writeAndSync(new File(staging, "profile.txt"), currentProfile().getBytes("UTF-8"));
                 JSONObject next = readRuntime(s, staging);
                 if (next == null || next.optInt("version") != version) throw new IOException("站点脚本版本无效");
                 File target = directory(s, version);
@@ -353,19 +354,35 @@ public final class CjsPluginRuntime {
         return "";
     }
     static synchronized SitePlugin siteForUrl(String pageUrl) throws IOException, JSONException {
+        State s = executableSite(pageUrl);
+        if (s == null) return null;
+        return new SitePlugin(s.id, script(s.id, s.runtime.getString("entry"), null),
+                s.entry.getString("module") + ".so", s.runtime.optString("transformer"),
+                s.runtime.optString("engine"), s.runtime.optString("jsApi", "cjs-v4"));
+    }
+    private static State executableSite(String pageUrl) throws IOException, JSONException {
         String id = componentForUrl(pageUrl);
         if (id.length() == 0 || !isInstalled(id)) return null;
         State s = state(id);
         String entry = s.runtime.optString("entry");
-        if (entry.length() == 0) return null;
+        if (entry.length() == 0 || !s.runtime.getJSONObject("scripts").has(entry)) return null;
         String jsApi = s.runtime.optString("jsApi", "cjs-v4");
         if (!"ku9".equals(jsApi) && !"cjs-v4".equals(jsApi))
             throw new IOException("站点脚本接口需要更新客户端: " + jsApi);
-        return new SitePlugin(id, script(id, entry, null), s.entry.getString("module") + ".so",
-                s.runtime.optString("transformer"), s.runtime.optString("engine"), jsApi);
+        return s;
     }
-    static boolean supportsSite(String pageUrl) {
-        try { return siteForUrl(pageUrl) != null; } catch (Exception ignored) { return false; }
+    static synchronized boolean supportsSite(String pageUrl) {
+        // A site's homepage is a browsable document, not a live-channel resolver
+        // input. Host matching alone must not intercept it after plugin install.
+        try {
+            if (pageUrl == null) return false;
+            URI uri = URI.create(pageUrl);
+            String path = uri.getPath();
+            if ((path == null || path.length() == 0 || "/".equals(path))
+                    && uri.getRawQuery() == null) return false;
+        } catch (IllegalArgumentException ignored) { return false; }
+        // Capability queries must not pin a script version before it is executed.
+        try { return executableSite(pageUrl) != null; } catch (Exception ignored) { return false; }
     }
     static synchronized JSONArray qualityOptions(String id) {
         JSONArray result = new JSONArray();
@@ -500,11 +517,6 @@ public final class CjsPluginRuntime {
         return value.toString();
     }
 
-    private static String safeName(String value) {
-        if (value == null) return "";
-        return value.replaceAll("[^A-Za-z0-9._-]", "");
-    }
-
     private static void writeAndSync(File file, byte[] data) throws IOException {
         FileOutputStream output = new FileOutputStream(file);
         try {
@@ -527,15 +539,6 @@ public final class CjsPluginRuntime {
             return output.toByteArray();
         } finally {
             input.close();
-        }
-    }
-
-    private static void pruneOldVersions(File root, String active) {
-        File[] children = root.listFiles();
-        if (children == null) return;
-        for (File child : children) {
-            if (child.isDirectory() && !active.equals(child.getName())
-                    && !child.getName().startsWith(".staging-")) deleteRecursively(child);
         }
     }
 

@@ -18,16 +18,17 @@ final class Ku9PlaylistServer implements Closeable {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
 
     private ServerSocket socket;
-    private volatile boolean running;
+    private Socket activeClient;
     private volatile byte[] playlist = new byte[0];
 
-    void start() throws IOException {
-        socket = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
-        running = true;
+    synchronized void start() throws IOException {
+        if (socket != null) return;
+        final ServerSocket listening = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
+        socket = listening;
         Thread thread = new Thread(new Runnable() {
             @Override
             public void run() {
-                acceptLoop();
+                acceptLoop(listening);
             }
         }, "ku9-live-playlist");
         thread.setDaemon(true);
@@ -38,21 +39,35 @@ final class Ku9PlaylistServer implements Closeable {
         playlist = content.getBytes(UTF_8);
     }
 
-    String url() {
+    synchronized String url() {
+        if (socket == null) throw new IllegalStateException("Playlist server is closed");
         return "http://127.0.0.1:" + socket.getLocalPort() + "/live.m3u8";
     }
 
-    private void acceptLoop() {
-        while (running) {
+    private void acceptLoop(ServerSocket listening) {
+        while (!listening.isClosed()) {
+            Socket client = null;
             try {
-                handle(socket.accept());
+                client = listening.accept();
+                synchronized (this) {
+                    if (socket != listening) {
+                        client.close();
+                        return;
+                    }
+                    activeClient = client;
+                }
+                handle(client);
             } catch (SocketException error) {
-                if (running) {
+                if (!listening.isClosed()) {
                     Log.w(TAG, "Playlist socket failed", error);
                 }
             } catch (IOException error) {
-                if (running) {
+                if (!listening.isClosed()) {
                     Log.w(TAG, "Playlist request failed", error);
+                }
+            } finally {
+                synchronized (this) {
+                    if (activeClient == client) activeClient = null;
                 }
             }
         }
@@ -97,14 +112,19 @@ final class Ku9PlaylistServer implements Closeable {
     }
 
     @Override
-    public void close() {
-        running = false;
+    public synchronized void close() {
         if (socket != null) {
             try {
                 socket.close();
             } catch (IOException ignored) {
             }
             socket = null;
+        }
+        // A player disconnecting halfway through its headers must not leave the
+        // old channel's worker blocked for the full socket timeout.
+        if (activeClient != null) {
+            try { activeClient.close(); } catch (IOException ignored) { }
+            activeClient = null;
         }
     }
 }

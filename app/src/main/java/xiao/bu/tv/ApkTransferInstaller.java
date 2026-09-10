@@ -37,7 +37,7 @@ final class ApkTransferInstaller {
 
     private ApkTransferInstaller() {}
 
-    static ReceivedApk save(Activity activity, String suppliedName, byte[] body)
+    static synchronized ReceivedApk save(Activity activity, String suppliedName, byte[] body)
             throws IOException {
         String originalName = safeOriginalName(suppliedName);
         if (body == null || body.length < 4 || body.length > MAX_APK_BYTES) {
@@ -49,10 +49,13 @@ final class ApkTransferInstaller {
         }
         File directory = ApkFileProvider.updateDirectory(activity);
         if (directory == null || (!directory.isDirectory() && !directory.mkdirs())) {
-            throw new IOException("电视无法创建 APK 接收目录");
+            throw new IOException("设备无法创建 APK 接收目录");
         }
-        cleanupReceivedFiles(directory);
-        File partial = new File(directory, "received-" + System.currentTimeMillis() + ".apk.part");
+        ReceivedApkCleanup.cleanup(activity, null);
+        long id = System.currentTimeMillis();
+        while (new File(directory, "received-" + id + ".apk").exists()
+                || new File(directory, "received-" + id + ".apk.part").exists()) id++;
+        File partial = new File(directory, "received-" + id + ".apk.part");
         File destination = new File(directory,
                 partial.getName().substring(0, partial.getName().length() - ".part".length()));
         FileOutputStream output = new FileOutputStream(partial);
@@ -64,7 +67,7 @@ final class ApkTransferInstaller {
         }
         if (!partial.renameTo(destination)) {
             partial.delete();
-            throw new IOException("电视保存 APK 失败");
+            throw new IOException("设备保存 APK 失败");
         }
 
         PackageManager manager = activity.getPackageManager();
@@ -83,6 +86,8 @@ final class ApkTransferInstaller {
         } catch (RuntimeException error) {
             label = info.packageName;
         }
+        try { ReceivedApkCleanup.track(activity, destination, info); }
+        catch (IOException error) { destination.delete(); throw error; }
         return new ReceivedApk(destination, originalName, info.packageName, label,
                 info.versionName == null ? "" : info.versionName, info.versionCode);
     }
@@ -114,13 +119,4 @@ final class ApkTransferInstaller {
         return name;
     }
 
-    private static void cleanupReceivedFiles(File directory) {
-        File[] files = directory.listFiles();
-        if (files == null) return;
-        for (File file : files) {
-            if (file.getName().startsWith("received-") && !file.delete()) {
-                // A Package Installer process may still hold the previous file open.
-            }
-        }
-    }
 }

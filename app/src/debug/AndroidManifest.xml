@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Shell-only on-device regression trigger; absent from release builds. -->
+        <receiver android:name=".CastAdaptiveProbeReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".CastLatencyProbeReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name=".CastAudioBitrateProbeReceiver"
+            android:exported="true" android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

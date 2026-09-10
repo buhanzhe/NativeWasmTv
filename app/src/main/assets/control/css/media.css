@@ -1,0 +1,64 @@
+/* Full-screen player controls; the still preview never runs as a video stream. */
+body.media-page-shell { background: #202529; color: #fff; }
+.media-backdrop-image { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+.media-backdrop-image[hidden] { display: none; }
+.media-backdrop-shade { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: linear-gradient(180deg,rgba(13,17,21,.4),rgba(13,17,21,.08) 30%,rgba(23,28,32,.85) 67%,#202529); }
+#mediaControllerPage { position: relative; max-width: 720px; padding: 8px 20px 18px; padding-bottom: max(18px,env(safe-area-inset-bottom)); }
+#mediaControllerPage .page-title { color: #fff; font-weight: 650; }
+#mediaControllerPage .online { color: #eee; background: transparent; }
+#mediaControllerPage .back-button { padding-left: 0; }
+#mediaControllerBody { min-height: 0; }
+#mediaControllerBody .media-player-card { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+#mediaControllerBody .media-scene { flex: 1; display: flex; align-items: flex-end; justify-content: space-between; min-height: 36px; padding-bottom: 18px; }
+#mediaControllerBody .media-live-badge { color: #fff; padding: 6px 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: rgba(0,0,0,.25); font-size: 12px; }
+#mediaControllerBody .media-live-badge::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ff375f; margin-right: 7px; }
+#mediaControllerBody .media-circle-action { width: 40px; height: 40px; min-height: 40px; color: white; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.15); }
+#mediaControllerBody #mediaScreenshot .media-icon { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#mediaControllerBody .media-now { flex: 0 0 auto; padding-bottom: 10px; }
+#mediaControllerBody .media-now b { color: white; font-size: 26px; line-height: 1.3; }
+#mediaControllerBody .media-now span { display: none; }
+#mediaControllerBody .media-now small { color: #c1c5c9; font-size: 13px; margin-top: 7px; }
+#mediaControllerBody .media-progress { margin: 8px 0 0; }
+#mediaControllerBody .media-time { color: #c1c5c9; font-size: 11px; }
+#mediaControllerBody .media-transport { display: flex; justify-content: space-around; align-items: center; width: 100%; max-width: 360px; margin: 20px auto 14px; }
+#mediaControllerBody .media-transport button { color: white; background: transparent; }
+#mediaControllerBody .media-transport button span { color: #d0d3d6; font-size: 11px; }
+#mediaControllerBody .media-transport .media-play-button { background: white; color: #111; width: 64px; height: 64px; min-height: 64px; box-shadow: none; }
+#mediaControllerPage .media-toolbar { flex: 0 0 60px; display: flex; justify-content: space-between; align-items: center; }
+#mediaControllerPage .media-toolbar button { min-width: 44px; min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; border: 0; border-radius: 0; color: white; background: transparent; box-shadow: none; }
+#mediaControllerPage .media-toolbar button[hidden] { display: none; }
+#mediaControllerPage .media-toolbar .media-icon { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#mediaControllerPage .media-toolbar span { margin-top: 7px; font-size: 11px; color: #d0d3d6; }
+#mediaControllerPage .media-favorite.selected { color: #ff375f; }
+#mediaControllerPage .media-favorite.selected path { fill: currentColor; }
+.media-page-shell .media-sniffed-sheet { height: 50vh; height: 50dvh; max-height: 50vh; display: flex; flex-direction: column; }
+.media-page-shell .media-sniffed-sheet .media-sheet-header { flex-shrink: 0; }
+.media-page-shell .media-sniffed-sheet .media-sniffed-list { overflow-y: auto; min-height: 0; flex: 1; -webkit-overflow-scrolling: touch; }
+.media-shot-sheet img { display: block; max-width: 100%; max-height: 48vh; margin: auto; object-fit: contain; }
+.media-shot-sheet a { display: block; text-align: center; padding: 12px; color: #007aff; }
+@media (max-height: 560px) {
+  #mediaControllerBody .media-scene { padding-bottom: 8px; }
+  #mediaControllerBody .media-now b { font-size: 22px; }
+  #mediaControllerBody .media-transport { margin: 8px auto; }
+  #mediaControllerPage { padding-bottom: 8px; }
+}
+@media (max-height: 420px) {
+  #mediaControllerBody .media-scene { min-height: 32px; padding-bottom: 2px; }
+  #mediaControllerBody .media-now { padding-bottom: 0; }
+  #mediaControllerBody .media-now small { display: none; }
+  #mediaControllerBody .media-transport .media-play-button { width: 44px; height: 44px; min-height: 44px; }
+  #mediaControllerPage .media-toolbar { flex-basis: 48px; }
+}
+
+.media-sniffed-item.selected { border-color:#0a84ff; }
+.media-sniffed-item.selected b { color:#0a84ff; }
+
+/* Draw the range ourselves: older Android renders a rectangular native thumb. */
+.media-seekbar { position: relative; height: 32px; }
+.media-seek-track { position: absolute; left: 8px; right: 8px; top: 14px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.24); }
+#mediaSeekFill { display: block; width: 0; height: 4px; border-radius: 2px; background: #0a84ff; }
+#mediaSeekKnob { position: absolute; top: -6px; left: 0; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+#mediaControllerBody #mediaProgress { position: absolute; left: 0; top: 0; width: 100%; height: 32px; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+.media-seekbar:focus-within #mediaSeekKnob { box-shadow: 0 0 0 4px rgba(10,132,255,.25); }
+.media-seekbar.unavailable #mediaSeekKnob, .media-seekbar.unavailable #mediaSeekFill { display: none; }
+#mediaControllerBody .media-time { margin-top: 0; padding: 0 8px; }

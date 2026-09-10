@@ -172,10 +172,11 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingLeft="16dp"
-        android:paddingTop="11dp"
+        android:paddingTop="9dp"
         android:paddingRight="16dp"
-        android:paddingBottom="14dp"
+        android:paddingBottom="10dp"
         android:visibility="gone">
+
 
         <xiao.bu.tv.LoadingSpinnerView
             android:id="@+id/channel_progress"
@@ -197,8 +198,18 @@
                 android:orientation="horizontal">
 
                 <TextView
-                    android:id="@+id/channel_name"
+                    android:id="@+id/channel_card_number"
                     android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginRight="8dp"
+                    android:textColor="#74B9FF"
+                    android:textStyle="bold"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/channel_name"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
                     android:layout_height="wrap_content"
                     android:ellipsize="end"
                     android:maxLines="1"
@@ -219,6 +230,13 @@
                     tools:ignore="HardcodedText" />
             </LinearLayout>
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="5dp"
+                android:layout_marginBottom="3dp"
+                android:background="#40FFFFFF" />
+
             <TextView
                 android:id="@+id/status_text"
                 android:layout_width="match_parent"
@@ -235,7 +253,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="5dp"
                 android:ellipsize="end"
-                android:maxLines="1"
+                android:maxLines="2"
+                android:lineSpacingExtra="3dp"
                 android:textColor="#E0FFFFFF"
                 android:textSize="12sp"
                 android:visibility="gone" />
@@ -250,9 +269,9 @@
         android:background="@drawable/channel_panel_background"
         android:orientation="vertical"
         android:paddingLeft="14dp"
-        android:paddingTop="10dp"
+        android:paddingTop="4dp"
         android:paddingRight="14dp"
-        android:paddingBottom="10dp"
+        android:paddingBottom="4dp"
         android:visibility="gone">
 
         <LinearLayout
@@ -263,6 +282,7 @@
 
             <ListView
                 android:id="@+id/channel_group_list"
+                android:scrollbars="none"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
                 android:choiceMode="singleChoice"
@@ -283,6 +303,7 @@
 
             <ListView
                 android:id="@+id/channel_list"
+                android:scrollbars="none"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
                 android:choiceMode="singleChoice"
@@ -293,6 +314,20 @@
                 android:listSelector="@drawable/channel_item_background"
                 android:paddingTop="2dp"
                 android:paddingBottom="2dp" />
+
+            <TextView
+                android:id="@+id/epg_toggle"
+                android:layout_width="28dp"
+                android:layout_height="120dp"
+                android:layout_gravity="center_vertical"
+                android:gravity="center"
+                android:background="@drawable/channel_item_background"
+                android:clickable="true"
+                android:focusable="false"
+                android:contentDescription="展开节目单"
+                android:text="节\n目\n单\n›"
+                android:textSize="13sp"
+                android:textColor="#DFFFFFFF" />
 
             <View
                 android:id="@+id/channel_epg_divider"
@@ -311,6 +346,20 @@
                 android:visibility="gone">
 
                 <TextView
+                    android:id="@+id/epg_favorite"
+                    android:visibility="gone"
+                    android:layout_width="match_parent"
+                    android:layout_height="40dp"
+                    android:paddingLeft="8dp"
+                    android:gravity="center_vertical"
+                    android:background="@drawable/favorite_button_background"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:text="☆ 收藏"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="14sp" />
+
+                <TextView
                     android:id="@+id/epg_status"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -327,6 +376,7 @@
 
                 <ListView
                     android:id="@+id/epg_list"
+                    android:scrollbars="none"
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
                     android:layout_weight="1"
@@ -342,15 +392,6 @@
 
         </LinearLayout>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:paddingTop="9dp"
-            android:text="节目组  →  频道  →  收藏  →  当前频道节目单"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp"
-            tools:ignore="HardcodedText" />
     </LinearLayout>
 
     <LinearLayout

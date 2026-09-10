@@ -5,7 +5,10 @@ import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -18,6 +21,8 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.Gravity;
+import android.widget.FrameLayout;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -31,8 +36,33 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.WeakHashMap;
 
 public final class ManagementActivity extends Activity {
+    // Accessed only on the main thread. Closing a page must not end its cast session.
+    private static final WeakHashMap<ManagementActivity, Boolean> openPages =
+            new WeakHashMap<ManagementActivity, Boolean>();
+
+    static void closeAll() {
+        ManagementActivity[] pages = openPages.keySet().toArray(new ManagementActivity[0]);
+        openPages.clear();
+        for (ManagementActivity page : pages) {
+            page.setResult(RESULT_CANCELED);
+            page.finish();
+        }
+    }
+
+    static boolean showTakeoverControls(String baseUrl) {
+        for (ManagementActivity page : openPages.keySet()) {
+            if (page.isFinishing() || page.webView == null || !page.isLocalControlPage(baseUrl)) continue;
+            page.takeoverMode = true;
+            page.clearHistoryAfterTakeover = true;
+            page.webView.loadUrl(flyMousePageUrl(baseUrl));
+            return true;
+        }
+        return false;
+    }
+
     static final String EXTRA_URL = "management_url";
     static final String EXTRA_TAKEOVER = "takeover_mode";
     private static final int FILE_CHOOSER_REQUEST = 4601;
@@ -45,6 +75,7 @@ public final class ManagementActivity extends Activity {
     private ValueCallback<Uri> legacyFileCallback;
     private NativeDeviceBridge nativeDeviceBridge;
     private boolean takeoverMode;
+    private boolean clearHistoryAfterTakeover;
     private volatile boolean localPointerPage;
     private volatile boolean localPointerResumed;
     private final android.os.Handler recoveryHandler =
@@ -52,11 +83,18 @@ public final class ManagementActivity extends Activity {
     private String currentPageUrl;
     private boolean pendingRendererRecovery;
     private int rendererRetries;
+    private volatile boolean systemDark;
+    private boolean sidebarDevice;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sidebarDevice = usesSidebar(this);
+        setRequestedOrientation(sidebarDevice
+                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        openPages.put(this, Boolean.TRUE);
         takeoverMode = getIntent().getBooleanExtra(EXTRA_TAKEOVER, false);
         applySystemUiVisibility();
         managementUrl = getIntent().getStringExtra(EXTRA_URL);
@@ -65,6 +103,37 @@ public final class ManagementActivity extends Activity {
             return;
         }
         createManagementWebView(takeoverMode ? flyMousePageUrl(managementUrl) : managementUrl);
+    }
+
+    public static boolean isTablet(Context context) {
+        Configuration config = context.getResources().getConfiguration();
+        return config.smallestScreenWidthDp >= 600;
+    }
+
+    static boolean usesSidebar(Context context) {
+        if (isTablet(context)) return true;
+        android.view.WindowManager manager = (android.view.WindowManager)
+                context.getSystemService(Context.WINDOW_SERVICE);
+        if (manager == null) return false;
+        android.view.Display display = manager.getDefaultDisplay();
+        android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+        display.getMetrics(metrics);
+        return hasLandscapeNaturalOrientation(metrics.widthPixels, metrics.heightPixels,
+                display.getRotation());
+    }
+
+    static boolean hasLandscapeNaturalOrientation(int width, int height, int rotation) {
+        // Some landscape tablets/TVs report only 480 dp. Do not force these into
+        // the phone's portrait window. Undo rotation so a rotated phone stays a phone.
+        boolean quarterTurn = rotation == android.view.Surface.ROTATION_90
+                || rotation == android.view.Surface.ROTATION_270;
+        return quarterTurn ? height > width : width > height;
+    }
+
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        MainActivity owner = CastKeepAliveService.localInputOwner();
+        if (owner != null && owner.dispatchCastVolumeKey(event)) return true;
+        return super.dispatchKeyEvent(event);
     }
 
     private static String flyMousePageUrl(String baseUrl) {
@@ -78,8 +147,10 @@ public final class ManagementActivity extends Activity {
 
     @SuppressLint("SetJavaScriptEnabled")
     private void createManagementWebView(String urlToLoad) {
+        readSystemTheme();
         webView = new WebView(this);
-        webView.setBackgroundColor(Color.rgb(247, 247, 248));
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        webView.setBackgroundColor(systemDark ? Color.rgb(17, 20, 25) : Color.rgb(247, 247, 248));
         // Several Android TV/tablet WebView implementations render a black frame when
         // a hardware-decoded Surface is paused underneath. The local control page is
         // lightweight, so software composition is more reliable here.
@@ -87,6 +158,7 @@ public final class ManagementActivity extends Activity {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setAllowContentAccess(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
         nativeDeviceBridge = new NativeDeviceBridge();
@@ -94,6 +166,16 @@ public final class ManagementActivity extends Activity {
         webView.setWebChromeClient(Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
                 ? new ModernFileChooserClient() : new LegacyFileChooserClient());
         WebViewRecovery.attach(webView, new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (view == webView) refreshPageTheme();
+                if (view == webView && clearHistoryAfterTakeover
+                        && flyMousePageUrl(managementUrl).equals(url)) {
+                    clearHistoryAfterTakeover = false;
+                    view.clearHistory();
+                }
+            }
+
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != webView) return;
@@ -120,7 +202,47 @@ public final class ManagementActivity extends Activity {
             }
 
         }, this::onRendererGone);
-        setContentView(webView);
+        final View outside = new View(this);
+        outside.setContentDescription("关闭管理网页");
+        outside.setOnClickListener(view -> finish());
+        FrameLayout panel = new FrameLayout(this) {
+            private boolean sidebar;
+            private int paneLeft;
+
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int width = View.MeasureSpec.getSize(widthSpec), height = View.MeasureSpec.getSize(heightSpec);
+                sidebar = sidebarDevice && width > height;
+                if (sidebar) {
+                    // Keep the 720:1280 portrait proportions, but rasterize text at
+                    // the final screen resolution. Scaling a software WebView layer
+                    // blurs glyphs, particularly when a 4K display enlarges that layer.
+                    int paneWidth = Math.round(height * 720f / 1280f);
+                    paneLeft = width - paneWidth;
+                    setMeasuredDimension(width, height);
+                    webView.measure(View.MeasureSpec.makeMeasureSpec(paneWidth, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+                    outside.measure(View.MeasureSpec.makeMeasureSpec(paneLeft, View.MeasureSpec.EXACTLY), heightSpec);
+                } else {
+                    paneLeft = 0;
+                    super.onMeasure(widthSpec, heightSpec);
+                }
+                outside.setVisibility(sidebar ? View.VISIBLE : View.GONE);
+            }
+
+            @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+                if (sidebar) {
+                    outside.layout(0, 0, paneLeft, bottom - top);
+                    webView.layout(paneLeft, 0, right - left, bottom - top);
+                } else {
+                    super.onLayout(changed, left, top, right, bottom);
+                }
+            }
+        };
+        panel.addView(outside, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        panel.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.RIGHT));
+        setContentView(panel);
         webView.loadUrl(urlToLoad);
     }
 
@@ -208,33 +330,41 @@ public final class ManagementActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
-    private Intent playlistFileIntent() {
-        Intent intent = new Intent(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT
-                ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_GET_CONTENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                    "text/plain",
-                    "application/vnd.apple.mpegurl",
-                    "application/x-mpegurl",
-                    "audio/mpegurl",
-                    "audio/x-mpegurl",
-                    "application/octet-stream"
-            });
-        }
-        return intent;
-    }
-
-    private void launchFileChooser() {
+    private void launchFileChooser(String[] accepted) {
         try {
-            startActivityForResult(Intent.createChooser(
-                    playlistFileIntent(), "选择频道源文件"), FILE_CHOOSER_REQUEST);
-        } catch (ActivityNotFoundException error) {
+            Intent chooser = fileChooserIntent(accepted);
+            if (chooser.resolveActivity(getPackageManager()) == null)
+                chooser.setAction(Intent.ACTION_GET_CONTENT);
+            startActivityForResult(Intent.createChooser(chooser, "选择文件"), FILE_CHOOSER_REQUEST);
+        } catch (RuntimeException error) {
             cancelFileChooser();
+            notifyFileChooser("无法打开文件选择器，请检查系统文件管理器");
+            android.util.Log.w("ManagementActivity", "File chooser launch failed", error);
             Toast.makeText(this, "系统中没有可用的文件管理器",
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    static Intent fileChooserIntent(String[] accepted) {
+        java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
+        if (accepted != null) for (String value : accepted) {
+            if (value == null) continue;
+            // Chromium may return one comma-separated entry, rather than one entry
+            // per MIME type. A comma is invalid in Intent.setType().
+            for (String part : value.split(",")) {
+                String mime = part.trim().toLowerCase(Locale.US);
+                if (mime.startsWith(".")) mime = android.webkit.MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(mime.substring(1));
+                if (mime != null && mime.matches("[a-z0-9!#$&^_.+*\\-]+/[a-z0-9!#$&^_.+*\\-]+")) types.add(mime);
+            }
+        }
+        Intent chooser = new Intent(Build.VERSION.SDK_INT >= 19 ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_GET_CONTENT);
+        chooser.addCategory(Intent.CATEGORY_OPENABLE);
+        chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        chooser.setType(types.size() == 1 ? types.iterator().next() : "*/*");
+        if (Build.VERSION.SDK_INT >= 19 && types.size() > 1)
+            chooser.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[types.size()]));
+        return chooser;
     }
 
     private void cancelFileChooser() {
@@ -283,16 +413,36 @@ public final class ManagementActivity extends Activity {
             super.onActivityResult(requestCode, resultCode, data);
             return;
         }
-        if (filePathCallback != null) {
-            filePathCallback.onReceiveValue(resultCode == RESULT_OK
-                    ? ModernResultParser.resultUris(data) : null);
-            filePathCallback = null;
+        Uri[] values = null;
+        if (resultCode == RESULT_OK && data != null) {
+            values = Build.VERSION.SDK_INT >= 16 ? ModernResultParser.resultUris(data)
+                    : data.getData() == null ? null : new Uri[] { data.getData() };
         }
-        if (legacyFileCallback != null) {
-            legacyFileCallback.onReceiveValue(resultCode == RESULT_OK && data != null
-                    ? data.getData() : null);
-            legacyFileCallback = null;
+        boolean delivered = values != null && values.length > 0 && values[0] != null;
+        android.util.Log.i("ManagementActivity", "File chooser result=" + resultCode
+                + " hasFile=" + delivered + " callback="
+                + (filePathCallback != null || legacyFileCallback != null));
+        notifyFileChooser(delivered ? "" : resultCode == RESULT_OK
+                ? "选择器未返回可读取的文件，请换用系统文件管理器" : "已取消选择文件");
+        ValueCallback<Uri[]> modern = filePathCallback;
+        ValueCallback<Uri> legacy = legacyFileCallback;
+        filePathCallback = null;
+        legacyFileCallback = null;
+        try {
+            if (modern != null) modern.onReceiveValue(delivered ? values : null);
+            if (legacy != null) legacy.onReceiveValue(delivered ? values[0] : null);
+        } catch (RuntimeException error) {
+            android.util.Log.w("ManagementActivity", "File chooser callback failed", error);
+            notifyFileChooser("文件回传失败，请重新打开投屏页面后重试");
         }
+    }
+
+    private void notifyFileChooser(String message) {
+        if (webView == null) return;
+        String script = "window.multimediaChooserResult&&window.multimediaChooserResult("
+                + org.json.JSONObject.quote(message) + ")";
+        if (Build.VERSION.SDK_INT >= 19) webView.evaluateJavascript(script, null);
+        else webView.loadUrl("javascript:" + script);
     }
 
     @TargetApi(Build.VERSION_CODES.LOLLIPOP)
@@ -302,7 +452,7 @@ public final class ManagementActivity extends Activity {
                 FileChooserParams params) {
             cancelFileChooser();
             filePathCallback = callback;
-            launchFileChooser();
+            launchFileChooser(params == null ? null : params.getAcceptTypes());
             return true;
         }
 
@@ -341,25 +491,49 @@ public final class ManagementActivity extends Activity {
                 String capture) {
             cancelFileChooser();
             legacyFileCallback = callback;
-            launchFileChooser();
+            launchFileChooser(acceptType == null ? null : acceptType.split(","));
         }
     }
 
     @Override
     public void onBackPressed() {
+        if (webView != null && Build.VERSION.SDK_INT >= 19) {
+            webView.evaluateJavascript("(function(){return typeof window.mediaDismissSheet==='function' && window.mediaDismissSheet();})()",
+                    new ValueCallback<String>() {
+                        @Override public void onReceiveValue(String value) {
+                            if (!"true".equals(value)) navigateBack();
+                        }
+                    });
+            return;
+        }
+        if (webView != null) {
+            webView.loadUrl("javascript:(function(){if(!(typeof window.mediaDismissSheet==='function' && window.mediaDismissSheet()))NtvDevice.navigateBackAfterSheet();})()");
+            return;
+        }
+        navigateBack();
+    }
+
+    private void navigateBack() {
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
             return;
         }
-        finishOrConfirmTakeover();
-    }
-
-    private void finishOrConfirmTakeover() {
-        if (takeoverMode) setResult(RESULT_OK);
         finish();
     }
 
     private final class NativeDeviceBridge implements SensorEventListener {
+        @JavascriptInterface
+        public void navigateBackAfterSheet() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    if (webView != null && !isFinishing() && isLocalControlPage(webView.getUrl())) ManagementActivity.this.navigateBack();
+                }
+            });
+        }
+        @JavascriptInterface
+        public boolean isSystemDark() {
+            return systemDark;
+        }
         private final SensorManager sensorManager = (SensorManager)
                 getSystemService(SENSOR_SERVICE);
         private final Sensor gyroscope = sensorManager == null ? null
@@ -413,7 +587,8 @@ public final class ManagementActivity extends Activity {
                 @Override public void run() {
                     if (webView == null || isFinishing() || screenshotBusy
                             || !isLocalControlPage(webView.getUrl())
-                            || !"/video-recorder.html".equals(Uri.parse(webView.getUrl()).getPath())) {
+                            || !("/video-recorder.html".equals(Uri.parse(webView.getUrl()).getPath())
+                                || "/pages/media.html".equals(Uri.parse(webView.getUrl()).getPath()))) {
                         return;
                     }
                     if (Build.VERSION.SDK_INT < 19) {
@@ -602,6 +777,8 @@ public final class ManagementActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        readSystemTheme();
+        refreshPageTheme();
         localPointerResumed = true;
         recoverManagementPage();
         applySystemUiVisibility();
@@ -625,6 +802,25 @@ public final class ManagementActivity extends Activity {
         super.onPause();
     }
 
+    private void readSystemTheme() {
+        systemDark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    private void refreshPageTheme() {
+        if (webView == null || !isLocalControlPage(webView.getUrl())) return;
+        String script = "window.refreshSystemTheme&&window.refreshSystemTheme()";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) webView.evaluateJavascript(script, null);
+        else webView.loadUrl("javascript:" + script);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration configuration) {
+        super.onConfigurationChanged(configuration);
+        readSystemTheme();
+        refreshPageTheme();
+    }
+
     private void cancelLocalPointer() {
         MainActivity target = CastKeepAliveService.localInputOwner();
         if (!localPointerPage || target == null || !target.ownsLocalPointerPage(managementUrl)) return;
@@ -634,6 +830,7 @@ public final class ManagementActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        openPages.remove(this);
         recoveryHandler.removeCallbacksAndMessages(null);
         pendingRendererRecovery = false;
         cancelLocalPointer();
@@ -646,6 +843,14 @@ public final class ManagementActivity extends Activity {
         }
         if (webView != null) {
             webView.stopLoading();
+            webView.onPause();
+            // Detach the window before freeing Chromium's drawing resources.
+            // Older GPU drivers cannot safely keep drawing a destroyed WebView.
+            android.view.ViewParent parent = webView.getParent();
+            if (parent instanceof android.view.ViewGroup) {
+                ((android.view.ViewGroup) parent).removeView(webView);
+            }
+            webView.setWebChromeClient(null);
             webView.destroy();
             webView = null;
         }

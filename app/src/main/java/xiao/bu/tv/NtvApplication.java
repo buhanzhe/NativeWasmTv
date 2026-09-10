@@ -9,7 +9,11 @@ public final class NtvApplication extends Application {
     public void onCreate() {
         super.onCreate();
         // Do not load a second crash SDK/ANR watchdog in :crash_watchdog.
-        if (isMainProcess()) CrashReporting.startIfAllowed(this);
+        if (isMainProcess()) {
+            GithubProxy.initialize(this);
+            CrashReporting.startIfAllowed(this);
+            ReceivedApkCleanup.initialize(this);
+        }
     }
 
     private boolean isMainProcess() {
@@ -24,5 +28,11 @@ public final class NtvApplication extends Application {
             // Fail closed if the process cannot be identified.
             return false;
         }
+    }
+
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        CrashReporting.putDiagnostic(this, "memory_trim",
+                "t=" + System.currentTimeMillis() + " level=" + level);
     }
 }

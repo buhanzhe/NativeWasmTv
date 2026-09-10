@@ -9,9 +9,18 @@ import com.tencent.bugly.crashreport.CrashReport;
 /** Main-process crash reporting, enabled automatically on supported Android versions. */
 final class CrashReporting {
     private static final String TAG = "NtvCrashReporting";
-    private static boolean started;
+    private static volatile boolean started;
 
     private CrashReporting() {}
+
+    static void putDiagnostic(Context context, String key, String value) {
+        if (!started) return;
+        try {
+            Sdk.putDiagnostic(context.getApplicationContext(), key, value);
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Unable to attach crash diagnostic", error);
+        }
+    }
 
     static synchronized void startIfAllowed(Context context) {
         if (started || Build.VERSION.SDK_INT < 15) return;
@@ -26,6 +35,11 @@ final class CrashReporting {
     }
 
     private static final class Sdk {
+        static void putDiagnostic(Context context, String key, String value) {
+            CrashReport.putUserData(context, key,
+                    value.length() > 200 ? value.substring(0, 200) : value);
+        }
+
         static void start(Context context) {
             // Classic Bugly only needs the public App ID. App Key stays off-device.
             CrashReport.setCollectPrivacyInfo(context, false);

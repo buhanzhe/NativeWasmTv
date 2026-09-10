@@ -70,7 +70,7 @@ final class WifiDirectCoordinator implements Closeable {
     private final WifiP2pManager.Channel channel;
     private final boolean supported;
     private boolean registered;
-    private boolean receiverPrepareRequested;
+    private volatile boolean receiverPrepareRequested;
     private boolean receiverGroupCreationIssued;
     private boolean receiverControllerGroupOwner;
     private String receiverControllerDeviceAddress = "";
@@ -88,6 +88,14 @@ final class WifiDirectCoordinator implements Closeable {
     private volatile WifiP2pInfo connectionInfo;
     private volatile WifiP2pGroup groupInfo;
     private volatile String localAddress = "";
+    private volatile long warmUntil;
+    private final java.util.concurrent.atomic.AtomicInteger warmGeneration =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private final Runnable expireWarmGroup = new Runnable() {
+        @Override public void run() {
+            if (warmUntil > 0 && SystemClock.elapsedRealtime() >= warmUntil) removeGroup();
+        }
+    };
     private final Runnable receiverDiscoveryPulse = new Runnable() {
         @Override public void run() {
             WifiP2pInfo info = connectionInfo;
@@ -184,15 +192,33 @@ final class WifiDirectCoordinator implements Closeable {
         return enabled;
     }
 
-    boolean hasPermission() {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                || activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-                        == PackageManager.PERMISSION_GRANTED;
+    String requiredPermission() {
+        return CastPermissionPolicy.directPermission(Build.VERSION.SDK_INT,
+                activity.getApplicationInfo().targetSdkVersion);
     }
+
+    boolean hasPermission() {
+        String permission = requiredPermission();
+        return permission.length() == 0
+                || activity.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    boolean locationEnabled() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        try {
+            android.location.LocationManager location = (android.location.LocationManager)
+                    activity.getSystemService(Context.LOCATION_SERVICE);
+            return location != null && (location.isProviderEnabled("gps")
+                    || location.isProviderEnabled("network"));
+        } catch (RuntimeException unavailable) { return false; }
+    }
+
 
     /** Receiver side: become discoverable and publish the exact device address. */
     JSONObject prepareReceiver(boolean controllerGroupOwner, String controllerDeviceAddress,
             String controllerDeviceName) {
+        useGroup();
+        final int generation = ++operationGeneration;
         receiverPrepareRequested = true;
         receiverGroupCreationIssued = false;
         receiverControllerGroupOwner = controllerGroupOwner;
@@ -203,6 +229,10 @@ final class WifiDirectCoordinator implements Closeable {
         connectGroupOwnerIntent = controllerGroupOwner ? 0 : 15;
         mainHandler.removeCallbacks(receiverGroupFallback);
         if (!supported || !enabled) return stateJson();
+        if (!locationEnabled()) {
+            setState(STATE_UNAVAILABLE, "请开启系统位置服务以发现直连设备；局域网投屏不受影响");
+            return stateJson();
+        }
         if (!hasPermission()) {
             setState(STATE_PERMISSION, "请在电视上允许附近设备发现权限");
             mainHandler.post(new Runnable() {
@@ -214,6 +244,14 @@ final class WifiDirectCoordinator implements Closeable {
         }
         requestGroupInfo();
         WifiP2pInfo current = connectionInfo;
+        WifiP2pGroup currentGroup = groupInfo;
+        if (controllerGroupOwner && current != null && current.groupFormed
+                && !current.isGroupOwner && currentGroup != null && currentGroup.getOwner() != null
+                && receiverControllerDeviceAddress.length() > 0
+                && receiverControllerDeviceAddress.equals(normalizeAddress(currentGroup.getOwner().deviceAddress))) {
+            setState(STATE_CONNECTED, "复用已连接的 Wi-Fi Direct 通道");
+            return stateJson();
+        }
         if (!controllerGroupOwner && current != null
                 && current.groupFormed && current.isGroupOwner
                 && ownDeviceAddress.length() > 0) {
@@ -223,14 +261,21 @@ final class WifiDirectCoordinator implements Closeable {
         setState(STATE_PREPARING, "电视正在等待 Wi-Fi Direct 连接");
         mainHandler.post(new Runnable() {
             @Override public void run() {
+                if (generation != operationGeneration || !receiverPrepareRequested) return;
                 try {
+                    if (!controllerGroupOwner) {
+                        // The LAN handshake already chose this device as owner.
+                        // Scanning for eight seconds cannot help it become an owner.
+                        receiverGroupFallback.run();
+                        return;
+                    }
                     // Both peers must participate in discovery on older Android.
                     // Creating an autonomous group first makes some Android 7
                     // devices disappear from an Android 17 peer scan.
                     // Old Android keeps discovery marked active for hours and a
                     // second discoverPeers call may return success without a new
                     // scan. Stop the stale session so the phone's new group appears.
-                    restartPeerDiscovery();
+                    if (receiverControllerDeviceAddress.length() == 0) restartPeerDiscovery();
                     mainHandler.removeCallbacks(receiverDiscoveryPulse);
                     mainHandler.postDelayed(receiverDiscoveryPulse, 350L);
                     if (receiverControllerGroupOwner
@@ -238,16 +283,9 @@ final class WifiDirectCoordinator implements Closeable {
                         // The controller publishes its p2p0 hardware address over
                         // the already-authenticated LAN request. Connecting by
                         // address skips the slow/occasionally stale Android 7 scan.
-                        mainHandler.postDelayed(new Runnable() {
-                            @Override public void run() {
-                                connectTo(receiverControllerDeviceAddress);
-                            }
-                        }, 180L);
+                        connectTo(receiverControllerDeviceAddress);
                     }
                     mainHandler.removeCallbacks(receiverGroupFallback);
-                    if (!controllerGroupOwner) {
-                        mainHandler.postDelayed(receiverGroupFallback, 8000L);
-                    }
                 } catch (SecurityException error) {
                     setState(STATE_PERMISSION, "电视缺少附近设备发现权限");
                 }
@@ -302,9 +340,17 @@ final class WifiDirectCoordinator implements Closeable {
         return ownDeviceName.length() > 0 ? ownDeviceName : Build.MODEL;
     }
 
+    /** Overlap peer discovery with the receiver's group creation, after LAN is live. */
+    void warmPeerDiscovery() {
+        if (!supported || !enabled || !hasPermission()) return;
+        WifiP2pInfo info = connectionInfo;
+        if (info == null || !info.groupFormed) restartPeerDiscovery();
+    }
+
     /** Controller side. This method must run off the main thread. */
     Route connect(String deviceAddress, int receiverPort, int controllerPort,
             long timeoutMs) {
+        useGroup();
         if (!supported || !enabled || !hasPermission()) {
             return null;
         }
@@ -341,7 +387,7 @@ final class WifiDirectCoordinator implements Closeable {
         });
 
         long deadline = SystemClock.elapsedRealtime() + Math.max(1000L, timeoutMs);
-        while (SystemClock.elapsedRealtime() < deadline) {
+        while (generation == operationGeneration && SystemClock.elapsedRealtime() < deadline) {
             WifiP2pInfo info = connectionInfo;
             if (controllerGroupResetComplete && info != null
                     && info.groupFormed && info.isGroupOwner) {
@@ -365,6 +411,7 @@ final class WifiDirectCoordinator implements Closeable {
                 }
             }
         }
+        if (generation != operationGeneration) return null;
         setState(STATE_FAILED, "Wi-Fi Direct 连接超时，继续使用局域网");
         return null;
     }
@@ -447,6 +494,10 @@ final class WifiDirectCoordinator implements Closeable {
     JSONObject stateJson() {
         JSONObject result = new JSONObject();
         try {
+            result.put("androidApi", Build.VERSION.SDK_INT);
+            result.put("handoverProtocol", 1);
+            result.put("locationEnabled", locationEnabled());
+            result.put("requiredPermission", requiredPermission());
             result.put("supported", supported);
             result.put("enabled", enabled);
             result.put("permissionGranted", hasPermission());
@@ -460,9 +511,45 @@ final class WifiDirectCoordinator implements Closeable {
             result.put("groupOwnerAddress", info == null || info.groupOwnerAddress == null
                     ? "" : info.groupOwnerAddress.getHostAddress());
             result.put("localAddress", localAddress);
+            result.put("warmRemainingMs", Math.max(0L, warmUntil - SystemClock.elapsedRealtime()));
         } catch (JSONException ignored) {
         }
         return result;
+    }
+
+    /** Old single-band receivers work more reliably as the owner of their own group. */
+    Route connectToOwner(String address, String name, int receiverPort, int controllerPort,
+            long timeoutMs) throws java.io.IOException {
+        prepareReceiver(true, address, name);
+        final int generation = operationGeneration;
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
+        while (receiverPrepareRequested && generation == operationGeneration
+                && SystemClock.elapsedRealtime() < deadline) {
+            WifiP2pInfo info = connectionInfo;
+            WifiP2pGroup group = groupInfo;
+            boolean expectedOwner = group != null && group.getOwner() != null
+                    && normalizeAddress(address).length() > 0
+                    && normalizeAddress(address).equals(normalizeAddress(group.getOwner().deviceAddress));
+            if (info != null && info.groupFormed && !info.isGroupOwner
+                    && expectedOwner && info.groupOwnerAddress != null && localAddress().length() > 0) {
+                return new Route(url(info.groupOwnerAddress.getHostAddress(), receiverPort),
+                        url(localAddress(), controllerPort));
+            }
+            synchronized (signal) {
+                try { signal.wait(100L); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+            }
+        }
+        return null;
+    }
+
+    boolean isDirectPeer(String peerUrl) {
+        WifiP2pInfo info = connectionInfo;
+        if (info == null || !info.groupFormed || localAddress().length() == 0) return false;
+        try {
+            return sameIpv4Prefix(InetAddress.getByName(new java.net.URL(peerUrl).getHost()),
+                    InetAddress.getByName(localAddress()));
+        } catch (Exception ignored) { return false; }
     }
 
     String localAddress() {
@@ -470,7 +557,67 @@ final class WifiDirectCoordinator implements Closeable {
         return value == null ? "" : value;
     }
 
+    /** Keep a successfully paired link briefly, without keeping takeover or scanning alive. */
+    void releaseGroupForReuse() {
+        final int generation = warmGeneration.get();
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (generation != warmGeneration.get()) return;
+                WifiP2pInfo info = connectionInfo;
+                if (info == null || !info.groupFormed) {
+                    // Ordinary LAN exits have no P2P work to cancel.
+                    if (!STATE_IDLE.equals(state) || receiverPrepareRequested || connectIssued) removeGroup();
+                    return;
+                }
+                operationGeneration++;
+                receiverPrepareRequested = false;
+                connectIssued = false;
+                wantedDeviceAddress = "";
+                mainHandler.removeCallbacks(receiverDiscoveryPulse);
+                mainHandler.removeCallbacks(receiverGroupFallback);
+                try { manager.stopPeerDiscovery(channel, null); }
+                catch (RuntimeException ignored) { }
+                warmUntil = SystemClock.elapsedRealtime() + 60000L;
+                mainHandler.removeCallbacks(expireWarmGroup);
+                mainHandler.postDelayed(expireWarmGroup, 60000L);
+                setState(STATE_CONNECTED, "直连通道暂存，投屏已结束");
+            }
+        });
+    }
+
+    void useGroup() {
+        warmGeneration.incrementAndGet();
+        boolean wasWarm = warmUntil > 0L;
+        warmUntil = 0L;
+        mainHandler.removeCallbacks(expireWarmGroup);
+        WifiP2pInfo info = connectionInfo;
+        if (wasWarm && info != null && info.groupFormed) {
+            setState(STATE_CONNECTED, "Wi-Fi Direct 通道已就绪");
+        }
+    }
+
+    Route reuseRoute(String deviceAddress, String peerAddress, int receiverPort, int controllerPort) {
+        WifiP2pInfo info = connectionInfo;
+        WifiP2pGroup group = groupInfo;
+        String target = normalizeAddress(deviceAddress);
+        if (info == null || !info.groupFormed || group == null || target.length() == 0
+                || peerAddress == null || peerAddress.length() == 0 || localAddress().length() == 0) return null;
+        boolean member = false;
+        if (!info.isGroupOwner) {
+            member = group.getOwner() != null
+                    && target.equals(normalizeAddress(group.getOwner().deviceAddress));
+        } else {
+            for (WifiP2pDevice client : group.getClientList()) {
+                if (target.equals(normalizeAddress(client.deviceAddress))) { member = true; break; }
+            }
+        }
+        String receiverUrl = url(peerAddress, receiverPort);
+        return member && isDirectPeer(receiverUrl)
+                ? new Route(receiverUrl, url(localAddress(), controllerPort)) : null;
+    }
+
     void removeGroup() {
+        useGroup();
         operationGeneration++;
         receiverPrepareRequested = false;
         receiverGroupCreationIssued = false;
@@ -559,12 +706,14 @@ final class WifiDirectCoordinator implements Closeable {
 
     private void discoverPeersAgain() {
         if (!supported || !hasPermission()) return;
+        final int generation = operationGeneration;
         mainHandler.post(new Runnable() {
             @Override public void run() {
+                if (generation != operationGeneration) return;
                 try {
                     manager.discoverPeers(channel, new WifiP2pManager.ActionListener() {
                         @Override public void onSuccess() {
-                            requestPeers();
+                            if (generation == operationGeneration) requestPeers();
                         }
 
                         @Override public void onFailure(int reason) {
@@ -580,29 +729,34 @@ final class WifiDirectCoordinator implements Closeable {
 
     private void restartPeerDiscovery() {
         if (!supported || !hasPermission()) return;
+        final int generation = operationGeneration;
         mainHandler.post(new Runnable() {
             @Override public void run() {
+                if (generation != operationGeneration) return;
                 try {
                     manager.stopPeerDiscovery(channel, new WifiP2pManager.ActionListener() {
                         @Override public void onSuccess() {
                             mainHandler.postDelayed(new Runnable() {
-                                @Override public void run() { discoverPeersAgain(); }
+                                @Override public void run() {
+                                    if (generation == operationGeneration) discoverPeersAgain();
+                                }
                             }, 100L);
                         }
 
                         @Override public void onFailure(int reason) {
-                            discoverPeersAgain();
+                            if (generation == operationGeneration) discoverPeersAgain();
                         }
                     });
                 } catch (RuntimeException error) {
-                    discoverPeersAgain();
+                    if (generation == operationGeneration) discoverPeersAgain();
                 }
             }
         });
     }
 
     private void connectTo(final String deviceAddress) {
-        if (connectIssued) return;
+        if (!receiverPrepareRequested || connectIssued) return;
+        final int generation = operationGeneration;
         connectIssued = true;
         setState(STATE_CONNECTING, "正在建立电视直连通道");
         WifiP2pConfig config = new WifiP2pConfig();
@@ -614,12 +768,17 @@ final class WifiDirectCoordinator implements Closeable {
         try {
             manager.connect(channel, config, new WifiP2pManager.ActionListener() {
                 @Override public void onSuccess() {
+                    if (generation != operationGeneration) return;
                     requestConnectionInfo();
                 }
 
                 @Override public void onFailure(int reason) {
+                    if (generation != operationGeneration) return;
                     connectIssued = false;
                     setState(STATE_FAILED, failureText("连接电视失败", reason));
+                    // Addressed join can fail when the framework has no peer entry.
+                    // Scan only after that fast path failed, then reuse the peer pulse.
+                    restartPeerDiscovery();
                 }
             });
         } catch (SecurityException error) {

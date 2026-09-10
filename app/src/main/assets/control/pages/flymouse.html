@@ -7,7 +7,9 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>手机飞鼠 · nTv</title>
+    <script src="/js/theme.js"></script>
     <link rel="stylesheet" href="/css/common.css" />
+    <link rel="stylesheet" href="/css/night.css" />
   </head>
   <body data-parent="/index.html">
     <main id="flyMousePage" class="secondary-page">
@@ -27,7 +29,7 @@
           <div id="panelTouch" class="control-panel active">
             <div class="actions">
               <button id="gyroButton" class="primary" onclick="enableGyroscope()">启用陀螺仪</button
-              ><button onclick="calibrateGyroscope()">重新校准</button>
+              ><button onclick="openBrowserSettings()">浏览器配置</button>
             </div>
             <div id="touchpad" class="touchpad">单指移动 · 长按拖动 · 双指滚动与捏合缩放</div>
             <div class="actions">

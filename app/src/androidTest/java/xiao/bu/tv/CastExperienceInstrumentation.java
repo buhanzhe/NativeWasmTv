@@ -16,7 +16,7 @@ import org.json.*;
 
 /** Local-only test probe. Uses production takeover/pointer APIs; no packaged app changes. */
 public final class CastExperienceInstrumentation extends Instrumentation {
-    MainActivity activity;
+    volatile MainActivity activity;
     ChannelCatalog.Group[] original;
     Map<String, ?> preferences;
     boolean done;
@@ -25,6 +25,12 @@ public final class CastExperienceInstrumentation extends Instrumentation {
     volatile boolean sampling;
     final JSONArray pixelSamples = new JSONArray();
     @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
+    @Override public void callActivityOnResume(android.app.Activity resumed) {
+        super.callActivityOnResume(resumed);
+        // Rotation can replace the Activity returned by startActivitySync.
+        // Probe the displayed instance rather than a released player on the old one.
+        if (resumed instanceof MainActivity) activity = (MainActivity) resumed;
+    }
     @Override public void onStart() {
         try {
             managementMonitor=addMonitor(ManagementActivity.class.getName(),null,false);

@@ -40,10 +40,10 @@ final class CastGlCompositor implements Closeable {
     private final RenderThread thread;
 
     CastGlCompositor(Surface encoderSurface, int width, int height, int fps,
-            boolean includeVideoLayer)
+            boolean includeVideoLayer, CastFrameTiming timing)
             throws IOException {
         thread = new RenderThread(encoderSurface, width, height, fps,
-                includeVideoLayer);
+                includeVideoLayer, timing);
         thread.start();
         try {
             if (!thread.ready.await(5L, TimeUnit.SECONDS)) {
@@ -90,6 +90,38 @@ final class CastGlCompositor implements Closeable {
         thread.sarDen = Math.max(1, sarDen);
     }
 
+    // Keep WebView's hardware-canvas producer and GL textures alive across
+    // encoder changes. Releasing/recreating these surfaces can race GPU fences
+    // on older Adreno drivers, even after the Java draw call has returned.
+    void detachEncoder() throws IOException {
+        thread.command(new Runnable() { @Override public void run() {
+            thread.outputPaused = true;
+            GLES20.glFinish();
+            RenderThread.check(EGL14.eglMakeCurrent(thread.eglDisplay,
+                    thread.parkingSurface, thread.parkingSurface, thread.eglContext), "park encoder");
+            if (thread.eglSurface != EGL14.EGL_NO_SURFACE)
+                EGL14.eglDestroySurface(thread.eglDisplay, thread.eglSurface);
+            thread.eglSurface = EGL14.EGL_NO_SURFACE;
+        }});
+    }
+
+    void attachEncoder(final Surface surface, final int width, final int height,
+            final CastFrameTiming timing) throws IOException {
+        thread.command(new Runnable() { @Override public void run() {
+            thread.eglSurface = EGL14.eglCreateWindowSurface(thread.eglDisplay,
+                    thread.eglConfig, surface, new int[] { EGL14.EGL_NONE }, 0);
+            RenderThread.check(thread.eglSurface != EGL14.EGL_NO_SURFACE
+                    && EGL14.eglMakeCurrent(thread.eglDisplay, thread.eglSurface,
+                    thread.eglSurface, thread.eglContext), "replace encoder surface");
+            thread.width = width;
+            thread.height = height;
+            thread.timing = timing;
+            // Keep the producer buffer size fixed; scale the texture in GL.
+            // Resizing a live hardware-canvas BufferQueue breaks old Adreno fences.
+            thread.outputPaused = false;
+        }});
+    }
+
     @Override
     public void close() {
         thread.shutdown();
@@ -98,9 +130,10 @@ final class CastGlCompositor implements Closeable {
     private static final class RenderThread extends Thread {
         final CountDownLatch ready = new CountDownLatch(1);
         final Surface outputSurface;
-        final int width;
-        final int height;
+        int width;
+        int height;
         final boolean includeVideoLayer;
+        CastFrameTiming timing;
         final long frameIntervalNs;
         final Object frameLock = new Object();
         final FloatBuffer videoVertices = allocateVertices();
@@ -119,6 +152,10 @@ final class CastGlCompositor implements Closeable {
         volatile Surface uiSurface;
         volatile Throwable failure;
 
+        Runnable pendingCommand;
+        boolean outputPaused;
+        EGLConfig eglConfig;
+        EGLSurface parkingSurface = EGL14.EGL_NO_SURFACE;
         EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
         EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
         EGLSurface eglSurface = EGL14.EGL_NO_SURFACE;
@@ -133,12 +170,13 @@ final class CastGlCompositor implements Closeable {
         int matrixHandle;
 
         RenderThread(Surface outputSurface, int width, int height, int fps,
-                boolean includeVideoLayer) {
+                boolean includeVideoLayer, CastFrameTiming timing) {
             super("cast-gl-compositor");
             this.outputSurface = outputSurface;
             this.width = width;
             this.height = height;
             this.includeVideoLayer = includeVideoLayer;
+            this.timing = timing;
             frameIntervalNs = 1000000000L / Math.max(1, fps);
             android.opengl.Matrix.setIdentityM(videoMatrix, 0);
             android.opengl.Matrix.setIdentityM(uiMatrix, 0);
@@ -152,14 +190,18 @@ final class CastGlCompositor implements Closeable {
                 ready.countDown();
                 long nextFrameAt = 0;
                 while (running) {
+                    Runnable command = null;
                     synchronized (frameLock) {
                         while (running) {
+                            if (pendingCommand != null) {
+                                command = pendingCommand; pendingCommand = null; break;
+                            }
                             long waitNs = nextFrameAt - System.nanoTime();
-                            if ((uiFrameAvailable || videoFrameAvailable) && waitNs <= 0) break;
+                            if (!outputPaused && (uiFrameAvailable || videoFrameAvailable) && waitNs <= 0) break;
                             try {
                                 // No blind duplicate-frame encoding. Recheck both the
                                 // frame predicate and deadline after every wakeup.
-                                if (waitNs <= 0) frameLock.wait();
+                                if (outputPaused || waitNs <= 0) frameLock.wait();
                                 else frameLock.wait(waitNs / 1000000L, (int)(waitNs % 1000000L));
                             } catch (InterruptedException interrupted) {
                                 Thread.currentThread().interrupt(); running = false;
@@ -169,6 +211,7 @@ final class CastGlCompositor implements Closeable {
                     if (!running) {
                         break;
                     }
+                    if (command != null) { command.run(); continue; }
                     long began = System.nanoTime();
                     draw();
                     // For webpage-only casting the UI producer already controls
@@ -195,10 +238,14 @@ final class CastGlCompositor implements Closeable {
                     EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8,
                     EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
                     EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                    EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT, EGL14.EGL_NONE
+                    EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT | EGL14.EGL_PBUFFER_BIT, EGL14.EGL_NONE
             };
             check(EGL14.eglChooseConfig(eglDisplay, configAttributes, 0,
                     configs, 0, 1, count, 0) && count[0] > 0, "eglChooseConfig");
+            eglConfig = configs[0];
+            parkingSurface = EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig,
+                    new int[] { EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE }, 0);
+            check(parkingSurface != EGL14.EGL_NO_SURFACE, "eglCreatePbufferSurface");
             eglContext = EGL14.eglCreateContext(eglDisplay, configs[0],
                     EGL14.EGL_NO_CONTEXT, new int[] {
                             EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE }, 0);
@@ -280,10 +327,13 @@ final class CastGlCompositor implements Closeable {
                 }
                 drawTexture(uiTextureId, uiMatrix, uiVertices, true);
                 long ptsNs = System.nanoTime();
+                timing.submitted(ptsNs / 1000L, ptsNs);
                 EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
                 check(EGL14.eglSwapBuffers(eglDisplay, eglSurface), "eglSwapBuffers");
+                timing.swapCompleted(ptsNs / 1000L, System.nanoTime());
                 if (BuildConfig.DEBUG && BuildConfig.CAST_LATENCY_TRACE)
                     android.util.Log.i("NtvCastLatency", "GL pts=" + ptsNs / 1000L
+                            + " video=" + (videoTexture == null ? -1L : videoTexture.getTimestamp() / 1000L)
                             + " ui=" + uiTexture.getTimestamp() / 1000L
                             + " end=" + System.nanoTime() / 1000L);
             } finally {
@@ -333,6 +383,34 @@ final class CastGlCompositor implements Closeable {
             putVertices(videoVertices, x, y);
         }
 
+        void command(final Runnable action) throws IOException {
+            final CountDownLatch done = new CountDownLatch(1);
+            final Throwable[] error = new Throwable[1];
+            Runnable task = new Runnable() { @Override public void run() {
+                try { action.run(); } catch (Throwable e) { error[0] = e; }
+                finally { done.countDown(); }
+            }};
+            synchronized (frameLock) {
+                if (!running || failure != null) throw new IOException("GPU compositor stopped", failure);
+                pendingCommand = task;
+                frameLock.notifyAll();
+            }
+            try {
+                if (!done.await(3, TimeUnit.SECONDS)) {
+                    synchronized (frameLock) {
+                        if (pendingCommand == task) pendingCommand = null;
+                        running = false;
+                        frameLock.notifyAll();
+                    }
+                    throw new IOException("GPU encoder switch timed out");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("GPU encoder switch interrupted", e);
+            }
+            if (error[0] != null) throw new IOException("GPU encoder switch failed", error[0]);
+        }
+
         void shutdown() {
             running = false;
             signal();
@@ -377,6 +455,8 @@ final class CastGlCompositor implements Closeable {
                 if (eglSurface != EGL14.EGL_NO_SURFACE) {
                     EGL14.eglDestroySurface(eglDisplay, eglSurface);
                 }
+                if (parkingSurface != EGL14.EGL_NO_SURFACE)
+                    EGL14.eglDestroySurface(eglDisplay, parkingSurface);
                 if (eglContext != EGL14.EGL_NO_CONTEXT) {
                     EGL14.eglDestroyContext(eglDisplay, eglContext);
                 }

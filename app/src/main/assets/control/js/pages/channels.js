@@ -421,13 +421,16 @@ function isLocalPlaylistLocation(location) {
 
 function githubProxySourceUrl(value) {
   var url = String(value || "").replace(/^\s+|\s+$/g, ""),
-    prefix = "https://gh-proxy.com/";
-  if (url.indexOf(prefix) === 0) return url;
+    fallback = "https://gh-proxy.com/",
+    prefix = state && state.settings && state.settings.githubProxyBaseUrl || fallback;
+  if (url.indexOf(prefix) === 0) url = url.substring(prefix.length);
+  else if (url.indexOf(fallback) === 0) url = url.substring(fallback.length);
   var anchor = document.createElement("a");
   anchor.href = url;
   var host = String(anchor.hostname || "").toLowerCase();
-  return host === "github.com" || host === "raw.githubusercontent.com" ||
-    /\.githubusercontent\.com$/.test(host) ? prefix + url : value;
+  return /^https?:\/\//i.test(url) && (host === "github.com" || host === "raw.githubusercontent.com" ||
+    host === "objects.githubusercontent.com" || host === "release-assets.githubusercontent.com")
+    ? prefix + url : value;
 }
 
 function requestPlaylistText(source, done) {

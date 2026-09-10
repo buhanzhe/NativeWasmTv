@@ -8,7 +8,9 @@
     groupHapticIndex = -1,
     channelHapticIndex = -1,
     lastHapticAt = 0,
-    previousOverflow = "";
+    isOpen = false,
+    openTimer = null,
+    closeTimer = null;
 
   function byId(id) {
     return document.getElementById(id);
@@ -92,6 +94,7 @@
   }
 
   function buildChannels(preferred) {
+    clearTimeout(channelTimer);
     var items = channels();
     selectedChannel = clamp(preferred, items.length);
     buildWheel(byId("channelItemWheel"), items, selectedChannel, function (channel) {
@@ -109,8 +112,8 @@
     }, function (index) {
       if (selectedGroup === index) return;
       selectedGroup = index;
-      buildChannels(selectedGroup === Number(pickerState.current.groupIndex)
-        ? pickerState.current.channelIndex : 0);
+      var current = pickerState.current || {};
+      buildChannels(selectedGroup === Number(current.groupIndex) ? current.channelIndex : 0);
     });
     buildChannels(preferredChannel);
   }
@@ -122,6 +125,7 @@
   function bindWheelScrolling() {
     var groupWheel = byId("channelGroupWheel"), channelWheel = byId("channelItemWheel");
     groupWheel.onscroll = function () {
+      if (!isOpen) return;
       tickWheelIfChanged(groupWheel,
         selectedFromScroll(groupWheel, groups().length));
       clearTimeout(groupTimer);
@@ -130,12 +134,13 @@
         settleWheel(groupWheel, index);
         if (selectedGroup !== index) {
           selectedGroup = index;
-          buildChannels(selectedGroup === Number(pickerState.current.groupIndex)
-            ? pickerState.current.channelIndex : 0);
+          var current = pickerState.current || {};
+          buildChannels(selectedGroup === Number(current.groupIndex) ? current.channelIndex : 0);
         }
       }, 90);
     };
     channelWheel.onscroll = function () {
+      if (!isOpen) return;
       tickWheelIfChanged(channelWheel,
         selectedFromScroll(channelWheel, channels().length));
       clearTimeout(channelTimer);
@@ -156,6 +161,7 @@
   }
 
   function open() {
+    if (isOpen) return;
     if (!pickerState || !groups().length) {
       api("/api/state?view=home", null, function (error, data) {
         if (error) {
@@ -171,24 +177,42 @@
       });
       return;
     }
+    var backdrop = byId("channelPickerBackdrop");
+    clearTimeout(closeTimer);
+    clearTimeout(groupTimer);
+    clearTimeout(channelTimer);
+    backdrop.hidden = false;
+    isOpen = true;
+    // Hidden wheels have no scroll range: make them measurable before positioning.
     var current = pickerState.current || {};
     buildGroups(current.groupIndex, current.channelIndex);
-    var backdrop = byId("channelPickerBackdrop");
-    backdrop.hidden = false;
-    previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    setTimeout(function () { backdrop.className = "channel-picker-backdrop open"; }, 0);
+    openTimer = setTimeout(function () {
+      if (isOpen) backdrop.className = "channel-picker-backdrop open";
+    }, 0);
   }
 
   function close() {
     var backdrop = byId("channelPickerBackdrop");
-    if (!backdrop || backdrop.hidden) return;
+    if (!backdrop || !isOpen) return;
+    isOpen = false;
+    clearTimeout(openTimer);
+    clearTimeout(groupTimer);
+    clearTimeout(channelTimer);
     backdrop.className = "channel-picker-backdrop";
-    document.body.style.overflow = previousOverflow;
-    setTimeout(function () { backdrop.hidden = true; }, 220);
+    closeTimer = setTimeout(function () { if (!isOpen) backdrop.hidden = true; }, 220);
   }
 
   function confirm() {
+    if (!isOpen) return;
+    clearTimeout(groupTimer);
+    clearTimeout(channelTimer);
+    var group = selectedFromScroll(byId("channelGroupWheel"), groups().length);
+    if (group !== selectedGroup) {
+      selectedGroup = group;
+      var current = pickerState.current || {};
+      buildChannels(group === Number(current.groupIndex) ? current.channelIndex : 0);
+    }
+    selectedChannel = selectedFromScroll(byId("channelItemWheel"), channels().length);
     if (!channels().length) {
       toast("该分组没有可用频道", true);
       return;
@@ -214,6 +238,39 @@
     backdrop.onclick = function (event) {
       if (event.target === backdrop) close();
     };
+    // Keep the main page's width, scroll position and flex layout unchanged.
+    // Older WebViews lack overscroll-behavior, so also stop chaining at wheel edges.
+    function wheelFor(target) {
+      while (target && target !== backdrop) {
+        if (target.id === "channelGroupWheel" || target.id === "channelItemWheel") return target;
+        target = target.parentNode;
+      }
+      return null;
+    }
+    function blockScroll(event, delta) {
+      var wheel = wheelFor(event.target);
+      if (!wheel || (delta < 0 && wheel.scrollTop <= 0)
+          || (delta > 0 && wheel.scrollTop + wheel.clientHeight >= wheel.scrollHeight - 1)) {
+        event.preventDefault();
+      }
+    }
+    var touchY = 0;
+    backdrop.addEventListener("touchstart", function (event) {
+      if (event.touches.length) touchY = event.touches[0].clientY;
+    }, false);
+    backdrop.addEventListener("touchmove", function (event) {
+      if (!event.touches.length) return;
+      var y = event.touches[0].clientY;
+      blockScroll(event, touchY - y);
+      touchY = y;
+    }, false);
+    backdrop.addEventListener("wheel", function (event) { blockScroll(event, event.deltaY); }, false);
+    document.addEventListener("keydown", function (event) {
+      if (!isOpen) return;
+      if (event.key === "Escape" || event.keyCode === 27) { close(); event.preventDefault(); }
+      else if (!wheelFor(event.target) && (event.keyCode === 32 || (event.keyCode >= 33 && event.keyCode <= 40))) event.preventDefault();
+    }, false);
+    window.addEventListener("pagehide", close, false);
     bindWheelScrolling();
   }
 

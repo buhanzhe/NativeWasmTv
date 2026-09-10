@@ -12,6 +12,7 @@ final class Channel {
     final String yangshipinStreamId;
     final String yangshipinMaxDefinition;
     final String epgId;
+    final String logoUrl;
     final int catalogSource;
     final String favoriteKey;
 
@@ -46,6 +47,14 @@ final class Channel {
             String yangshipinPid, String yangshipinStreamId,
             String yangshipinMaxDefinition, String epgId, int catalogSource,
             String favoriteKey) {
+        this(number, name, streamId, urls, yangshipinPid, yangshipinStreamId,
+                yangshipinMaxDefinition, epgId, catalogSource, favoriteKey, "");
+    }
+
+    private Channel(String number, String name, String streamId, String[] urls,
+            String yangshipinPid, String yangshipinStreamId,
+            String yangshipinMaxDefinition, String epgId, int catalogSource,
+            String favoriteKey, String logoUrl) {
         this.number = number;
         this.name = name;
         this.streamId = streamId;
@@ -55,6 +64,7 @@ final class Channel {
         this.yangshipinStreamId = yangshipinStreamId;
         this.yangshipinMaxDefinition = yangshipinMaxDefinition;
         this.epgId = epgId;
+        this.logoUrl = logoUrl == null ? "" : logoUrl.trim();
         this.catalogSource = catalogSource;
         this.favoriteKey = favoriteKey;
     }
@@ -74,7 +84,7 @@ final class Channel {
         combined[urls.length] = candidate;
         return new Channel(number, name, streamId, combined,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                catalogSource, favoriteKey);
+                catalogSource, favoriteKey, logoUrl);
     }
 
     static boolean sameSourceUrl(String first, String second) {
@@ -204,13 +214,19 @@ final class Channel {
     Channel asFavorite(String key, int source) {
         return new Channel(number, name, streamId, urls,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                source, key);
+                source, key, logoUrl);
     }
 
     Channel withCatalogSource(int source) {
         return new Channel(number, name, streamId, urls,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                source, favoriteKey);
+                source, favoriteKey, logoUrl);
+    }
+
+    Channel withLogo(String url) {
+        return new Channel(number, name, streamId, urls, yangshipinPid,
+                yangshipinStreamId, yangshipinMaxDefinition, epgId,
+                catalogSource, favoriteKey, url);
     }
 
     int sourceCount() {

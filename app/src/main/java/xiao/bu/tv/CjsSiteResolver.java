@@ -3,7 +3,6 @@ package xiao.bu.tv;
 import android.app.Activity;
 import android.text.TextUtils;
 import android.util.Log;
-import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -54,7 +53,7 @@ final class CjsSiteResolver {
         }
     };
 
-    CjsSiteResolver(Activity activity, FrameLayout root) {
+    CjsSiteResolver(Activity activity) {
         this.activity = activity;
     }
 
@@ -66,18 +65,23 @@ final class CjsSiteResolver {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                long loadStarted = android.os.SystemClock.elapsedRealtime();
                 try {
                     final CjsPluginRuntime.SitePlugin site =
                             CjsPluginRuntime.siteForUrl(pageUrl);
                     if (site == null) {
                         throw new IOException("没有匹配该网页的在线站点插件");
                     }
+                    if (requestGeneration != generation) return;
+                    final Pending request = new Pending(requestId, requestGeneration,
+                            channelName, pageUrl, quality, sourceUrl, site, callback);
+                    Log.i(TAG, "CJS local load site=" + site.id + " request=" + requestId
+                            + " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - loadStarted));
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             if (requestGeneration == generation && !activity.isFinishing()) {
-                                start(new Pending(requestId, requestGeneration,
-                                        channelName, pageUrl, quality, sourceUrl, site, callback));
+                                start(request);
                             }
                         }
                     });
@@ -97,7 +101,7 @@ final class CjsSiteResolver {
 
     private void start(Pending request) {
         android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
-        String key = cacheKey(request);
+        String key = request.cacheKey;
         long now = System.currentTimeMillis();
         long expires = cache.getLong(key + ":until", 0L);
         if (expires > now && expires - now <= 600000L) {
@@ -117,10 +121,15 @@ final class CjsSiteResolver {
         new Thread(new Runnable() {
             @Override public void run() {
                 Bridge host = new Bridge(work);
+                if (host.isCancelled()) return;
                 long started = android.os.SystemClock.elapsedRealtime();
                 try {
                     Log.i(TAG, "QuickJS starting site=" + work.site.id);
-                    NativeQuickJs.execute(buildJavascript(work), host);
+                    if (work.javascript == null) work.javascript = buildJavascript(work);
+                    long preparedAt = android.os.SystemClock.elapsedRealtime();
+                    Log.i(TAG, "CJS prepare site=" + work.site.id + " request=" + work.requestId
+                            + " elapsedMs=" + (preparedAt - started));
+                    NativeQuickJs.execute(work.javascript, host);
                     if (!host.terminal && !host.isCancelled()) host.fail("脚本没有返回播放结果");
                 } catch (Throwable error) {
                     if (!host.isCancelled()) host.fail("QuickJS: " + safeMessage(error));
@@ -221,7 +230,7 @@ final class CjsSiteResolver {
                 android.content.SharedPreferences.Editor edit = cache.edit();
                 if (cache.getAll().size() >= 128) edit.clear();
                 // Cache hits don't refresh their own expiry.
-                String key = cacheKey(request);
+                String key = request.cacheKey;
                 if (cache.getLong(key + ":until", 0) <= System.currentTimeMillis()) {
                     edit.putString(key, json).putLong(key + ":until", System.currentTimeMillis() + ttl * 1000).apply();
                 }
@@ -311,6 +320,7 @@ final class CjsSiteResolver {
 
     private final class Bridge implements NativeQuickJs.Host {
         private final Pending request;
+        private Ku9SiteCache cache;
         private boolean terminal;
         Bridge(Pending request) { this.request = request; }
 
@@ -335,7 +345,8 @@ final class CjsSiteResolver {
         }
 
         private Ku9SiteCache scriptCache() {
-            return new Ku9SiteCache(activity, request.site.id);
+            if (cache == null) cache = new Ku9SiteCache(activity, request.site.id);
+            return cache;
         }
 
         public String get(String url, String headersJson) {
@@ -428,6 +439,8 @@ final class CjsSiteResolver {
         final String sourceUrl;
         final CjsPluginRuntime.SitePlugin site;
         final Callback callback;
+        final String cacheKey;
+        String javascript;
         boolean initialCompleted;
 
         Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
@@ -441,6 +454,10 @@ final class CjsSiteResolver {
             this.sourceUrl = sourceUrl;
             this.site = site;
             this.callback = callback;
+            // Prepared on the loader thread, once per channel selection. Live
+            // playlist refreshes reuse the source and never hash it on the UI thread.
+            this.cacheKey = cacheKey(this);
+            // Build only on a cache miss; live playlist refreshes reuse the result.
         }
     }
 }

@@ -773,15 +773,6 @@ final class Ku9ScriptResolver {
         }
     }
 
-    private static String firstNonEmpty(String... values) {
-        for (String value : values) {
-            if (!TextUtils.isEmpty(value)) {
-                return value;
-            }
-        }
-        return "";
-    }
-
     private static SimpleDateFormat dateFormat(String pattern, String timezone) {
         SimpleDateFormat format = new SimpleDateFormat(
                 TextUtils.isEmpty(pattern) ? "yyyy-MM-dd HH:mm:ss" : pattern, Locale.US);
@@ -793,13 +784,6 @@ final class Ku9ScriptResolver {
     private static TimeZone timeZone(String timezone) {
         return TextUtils.isEmpty(timezone) ? TimeZone.getDefault()
                 : TimeZone.getTimeZone(timezone);
-    }
-
-    private static boolean isDirectDataSource(String value) {
-        String lower = value == null ? "" : value.toLowerCase(Locale.US);
-        return lower.startsWith("file://") || lower.startsWith("rtmp://")
-                || lower.startsWith("rtsp://") || lower.endsWith(".flv")
-                || lower.endsWith(".mp4") || lower.endsWith(".ts");
     }
 
     private static int parseInt(String value) {

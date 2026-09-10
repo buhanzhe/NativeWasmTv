@@ -50,6 +50,8 @@ final class AutoUpdater {
     private volatile int liteVersionCode;
     private volatile String liteVersionName = "";
     private volatile boolean liteArchitectureUpgrade;
+    private volatile UpdateInfo liteUpdate;
+    private volatile boolean downloadActive;
     private boolean promptShowing;
     private AlertDialog promptDialog;
     private ProgressDialog progressDialog;
@@ -91,10 +93,15 @@ final class AutoUpdater {
 
     synchronized String checkLiteForUpdates() {
         if (destroyed) return stateResponse(false, "更新服务已关闭");
+        if (downloadActive || "downloading".equals(liteState)) return stateResponse(true, "正在下载更新");
         if (liteChecking) return stateResponse(true, "正在检查更新");
+        liteUpdate = null;
         liteChecking = true;
         liteState = "checking";
         liteMessage = "正在读取最新 Release…";
+        liteVersionCode = 0;
+        liteVersionName = "";
+        liteArchitectureUpgrade = false;
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -110,14 +117,10 @@ final class AutoUpdater {
                         liteMessage = "已是最新版本";
                         return;
                     }
+                    liteUpdate = update;
                     liteState = "available";
                     liteMessage = architectureUpgrade
                             ? "可升级到 64 位版本" : "发现新版本 " + update.versionName;
-                    activity.runOnUiThread(new Runnable() {
-                        @Override public void run() {
-                            showUpdatePrompt(update);
-                        }
-                    });
                 } catch (Exception error) {
                     liteState = "error";
                     liteMessage = "检查失败：" + readableMessage(error);
@@ -128,6 +131,24 @@ final class AutoUpdater {
             }
         }, "update-lite-check").start();
         return stateResponse(true, "正在检查更新");
+    }
+
+    synchronized String installLiteUpdate() {
+        if (destroyed) return stateResponse(false, "更新服务已关闭");
+        if (downloadActive || "downloading".equals(liteState)) return stateResponse(true, "正在下载更新");
+        final UpdateInfo update = liteUpdate;
+        if (liteChecking || update == null || !("available".equals(liteState) || "ready".equals(liteState)))
+            return stateResponse(false, "请先检查更新");
+        liteState = "downloading";
+        liteMessage = "正在下载更新…";
+        activity.runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if (destroyed || activity.isFinishing()) return;
+                // The system-information page owns confirmation and progress for manual updates.
+                downloadUpdate(update, false);
+            }
+        });
+        return stateResponse(true, liteMessage);
     }
 
     JSONObject stateJson() {
@@ -171,17 +192,36 @@ final class AutoUpdater {
 
     private UpdateInfo loadUpdateInfo(String manifestUrl, boolean allowArchitectureUpgrade)
             throws IOException, JSONException {
+        String json = readManifest(manifestUrl,
+                allowArchitectureUpgrade ? IMPORTANT_VERSION_URL : null);
+
+        JSONObject object = new JSONObject(json);
+        return parseUpdateInfo(object, allowArchitectureUpgrade);
+    }
+
+    // Old releases predate version-lite.json. Only a missing file permits this
+    // compatibility fallback; network/server/JSON errors must not report stale data.
+    String readManifest(String manifestUrl, String legacyUrl) throws IOException {
+        try {
+            return downloadManifest(manifestUrl);
+        } catch (HttpStatusException error) {
+            if (error.status != 404 || legacyUrl == null) throw error;
+            Log.i(TAG, "Release has no lightweight manifest; reading legacy metadata");
+            return downloadManifest(legacyUrl);
+        }
+    }
+
+    private String downloadManifest(String manifestUrl) throws IOException {
         // Updates use the default HTTPS accelerator and shared TLS stack.
         HttpURLConnection connection = openConnection(GithubProxy.apply(activity, manifestUrl)
-                + "?_=" + System.currentTimeMillis());
+                + (manifestUrl.indexOf('?') >= 0 ? "&" : "?") + "_=" + System.currentTimeMillis());
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Cache-Control", "no-cache");
-        String json;
         try {
             requireSuccessful(connection);
             InputStream input = new BufferedInputStream(connection.getInputStream());
             try {
-                json = readUtf8(input, MAX_MANIFEST_BYTES);
+                return readUtf8(input, MAX_MANIFEST_BYTES);
             } finally {
                 input.close();
             }
@@ -189,7 +229,10 @@ final class AutoUpdater {
             connection.disconnect();
         }
 
-        JSONObject object = new JSONObject(json);
+    }
+
+    private UpdateInfo parseUpdateInfo(JSONObject object, boolean allowArchitectureUpgrade)
+            throws JSONException {
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
         boolean architectureUpgrade = allowArchitectureUpgrade
@@ -229,7 +272,7 @@ final class AutoUpdater {
     }
 
     private void showUpdatePrompt(final UpdateInfo update) {
-        if (destroyed || promptShowing || activity.isFinishing()) {
+        if (destroyed || promptShowing || downloadActive || activity.isFinishing()) {
             return;
         }
         promptShowing = true;
@@ -296,6 +339,13 @@ final class AutoUpdater {
     }
 
     private void downloadUpdate(final UpdateInfo update) {
+        downloadUpdate(update, true);
+    }
+
+    private void downloadUpdate(final UpdateInfo update, boolean showProgress) {
+        if (downloadActive) return;
+        downloadActive = true;
+        if (showProgress) {
         progressDialog = new ProgressDialog(activity);
         progressDialog.setTitle(R.string.update_downloading);
         progressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
@@ -303,6 +353,7 @@ final class AutoUpdater {
         progressDialog.setCancelable(false);
         progressDialog.setMax(100);
         progressDialog.show();
+        }
 
         new Thread(new Runnable() {
             @Override
@@ -341,6 +392,11 @@ final class AutoUpdater {
                     }
                     finishDownload(apk);
                 } catch (final Exception error) {
+                    downloadActive = false;
+                    if ("downloading".equals(liteState)) {
+                        liteState = "error";
+                        liteMessage = "下载失败：" + readableMessage(error);
+                    }
                     Log.e(TAG, "Update download failed", error);
                     if (partial != null && partial.exists() && !partial.delete()) {
                         Log.w(TAG, "Unable to remove failed partial APK " + partial);
@@ -397,6 +453,7 @@ final class AutoUpdater {
                         final int progress = (int) Math.min(100L, total * 100L / length);
                         if (progress != lastProgress) {
                             lastProgress = progress;
+                            if ("downloading".equals(liteState)) liteMessage = "正在下载更新 " + progress + "%";
                             activity.runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
@@ -422,6 +479,11 @@ final class AutoUpdater {
     }
 
     private void finishDownload(final File apk) {
+        downloadActive = false;
+        if ("downloading".equals(liteState)) {
+            liteState = "ready";
+            liteMessage = "下载完成，请在设备上完成安装";
+        }
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -481,7 +543,15 @@ final class AutoUpdater {
     private static void requireSuccessful(HttpURLConnection connection) throws IOException {
         int status = connection.getResponseCode();
         if (status < 200 || status >= 300) {
-            throw new IOException("HTTP " + status);
+            throw new HttpStatusException(status);
+        }
+    }
+
+    private static final class HttpStatusException extends IOException {
+        final int status;
+        HttpStatusException(int status) {
+            super("HTTP " + status);
+            this.status = status;
         }
     }
 
