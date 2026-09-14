@@ -5,14 +5,12 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
 import java.security.MessageDigest;
-import java.util.Locale;
 
-/** Executes CJS scripts in bounded QuickJS runtimes on background threads. */
+/** CJS site metadata and native-transform extensions over the shared Ku9 execution contract. */
 final class CjsSiteResolver {
     interface Callback {
         void onResolved(int requestId, Result result);
@@ -39,7 +37,8 @@ final class CjsSiteResolver {
     }
 
     private static final String TAG = "CjsSiteResolver";
-    private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+    private final Ku9JsContract contract;
+    private final Ku9ScriptEngine engine;
 
     private final Activity activity;
     private volatile Pending pending;
@@ -55,6 +54,8 @@ final class CjsSiteResolver {
 
     CjsSiteResolver(Activity activity) {
         this.activity = activity;
+        contract = new Ku9JsContract(activity);
+        engine = new Ku9ScriptEngine(activity);
     }
 
     void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
@@ -118,30 +119,24 @@ final class CjsSiteResolver {
     }
 
     private void execute(final Pending work) {
-        new Thread(new Runnable() {
-            @Override public void run() {
-                Bridge host = new Bridge(work);
-                if (host.isCancelled()) return;
-                long started = android.os.SystemClock.elapsedRealtime();
-                try {
-                    Log.i(TAG, "QuickJS starting site=" + work.site.id);
-                    if (work.javascript == null) work.javascript = buildJavascript(work);
-                    long preparedAt = android.os.SystemClock.elapsedRealtime();
-                    Log.i(TAG, "CJS prepare site=" + work.site.id + " request=" + work.requestId
-                            + " elapsedMs=" + (preparedAt - started));
-                    NativeQuickJs.execute(work.javascript, host);
-                    if (!host.terminal && !host.isCancelled()) host.fail("脚本没有返回播放结果");
-                } catch (Throwable error) {
-                    if (!host.isCancelled()) host.fail("QuickJS: " + safeMessage(error));
-                } finally {
-                    Log.i(TAG, "QuickJS finished site=" + work.site.id + " elapsedMs="
-                            + (android.os.SystemClock.elapsedRealtime() - started));
-                }
+        if (pending != work || generation != work.generation) return;
+        new Thread(() -> {
+            try {
+                if (work.javascript == null) work.javascript = buildJavascript(work);
+                activity.runOnUiThread(() -> {
+                    if (pending == work && generation == work.generation)
+                        engine.execute(work.javascript, new Bridge(work), work.browser);
+                });
+            } catch (Exception error) {
+                activity.runOnUiThread(() -> {
+                    if (pending == work && generation == work.generation)
+                        fail(work, "站点脚本准备失败: " + safeMessage(error));
+                });
             }
-        }, "cjs-quickjs").start();
+        }, "cjs-prepare").start();
     }
 
-    private static String buildJavascript(Pending request) {
+    private String buildJavascript(Pending request) {
         JSONObject item = new JSONObject();
         try {
             item.put("url", "ku9".equals(request.site.jsApi) && !TextUtils.isEmpty(request.sourceUrl) ? request.sourceUrl : request.pageUrl);
@@ -153,21 +148,7 @@ final class CjsSiteResolver {
             item.put("params", source == null ? new JSONObject() : new JSONObject(source.parameters));
         } catch (Exception ignored) {
         }
-        return buildJavascript(request.site.script, item);
-    }
-
-    static String buildJavascript(String script, JSONObject item) {
-        return "(function(){'use strict';"
-                + Ku9JsContract.bootstrap("NtvCjsBridge")
-                + "window.cjs=window.ku9;"
-                + "function done(v){NtvCjsBridge.complete(JSON.stringify(v==null?{}:v));}"
-                + "function fail(e){NtvCjsBridge.fail(String(e)+(e&&e.stack?'\\n'+e.stack:''));}"
-                + "try{var pluginMain=(function(){" + script + "\n"
-                + "return typeof main==='function'?main:null;})();"
-                + "if(typeof pluginMain!=='function')throw new Error('站点插件没有 main(item) 入口');"
-                + "var r=pluginMain(" + item.toString() + ");"
-                + "if(r&&typeof r.then==='function'){r.then(done,fail);}else{done(r);}}"
-                + "catch(e){fail(e);}})();";
+        return contract.build(request.site.script, item);
     }
 
     private void complete(final Pending request, String json) {
@@ -190,7 +171,7 @@ final class CjsSiteResolver {
                 }
                 if (selected != null) url = selected;
             }
-            String referer = value.optString("referer", request.pageUrl).trim();
+            String referer = Ku9JsContract.resultHeader(value, "referer", "Referer");
             String transformer = value.optString("transformer", "").trim();
             String[] transformerArgs = stringArray(value.optJSONArray("transformerArgs"));
             String[] mediaHosts = stringArray(value.optJSONArray("mediaHosts"));
@@ -274,6 +255,7 @@ final class CjsSiteResolver {
     private void clearPending() {
         handler.removeCallbacks(refreshPlaylist);
         pending = null;
+        engine.cancel();
     }
 
     private void closePlaylistServer() {
@@ -318,115 +300,31 @@ final class CjsSiteResolver {
         return TextUtils.isEmpty(value) ? "未知错误" : value;
     }
 
-    private final class Bridge implements NativeQuickJs.Host {
+    private final class Bridge extends Ku9Host {
         private final Pending request;
-        private Ku9SiteCache cache;
-        private boolean terminal;
-        Bridge(Pending request) { this.request = request; }
-
-        @Override public boolean isCancelled() {
-            return generation != request.generation || Thread.currentThread().isInterrupted();
+        private final Ku9SiteCache cache;
+        Bridge(Pending request) {
+            this.request = request;
+            cache = new Ku9SiteCache(activity, request.site.id);
         }
-
-        @Override public String invoke(int operation, String[] args) throws Exception {
-            if (isCancelled()) throw new IOException("CJS cancelled");
-            switch (operation) {
-                case 0: return get(args[0], args[1]);
-                case 1: return post(args[0], args[1], args[2]);
-                case 2: return request(args[0], args[1], args[2], args[3], Boolean.parseBoolean(args[4]));
-                case 3: return md5(args[0]);
-                case 4: log(args[0]); return null;
-                case 5: complete(args[0]); return null;
-                case 6: fail(args[0]); return null;
-                case 7: return scriptCache().get(args[0]);
-                case 8: scriptCache().put(args[0], args[1], Double.parseDouble(args[2])); return null;
-                default: throw new IOException("Unknown CJS host operation");
-            }
+        @Override protected boolean isRequestCancelled() {
+            return generation != request.generation || pending != request || Thread.currentThread().isInterrupted();
         }
-
-        private Ku9SiteCache scriptCache() {
-            if (cache == null) cache = new Ku9SiteCache(activity, request.site.id);
-            return cache;
+        @Override @android.webkit.JavascriptInterface public String getCache(String key) { return cache.get(key); }
+        @Override @android.webkit.JavascriptInterface public void setCache(String key, String value, double ttlMs) {
+            cache.put(key, value, ttlMs);
         }
-
-        public String get(String url, String headersJson) {
-            if (!isOnline(url)) {
-                return "";
-            }
-            try {
-                return Ku9HttpClient.getText(url,
-                        Ku9HttpClient.parseHeaders(headersJson), MAX_RESPONSE_BYTES);
-            } catch (IOException error) {
-                Log.w(TAG, "CJS GET failed " + url, error);
-                return "";
-            }
+        @Override protected void onComplete(final String json) {
+            activity.runOnUiThread(() -> {
+                if (pending == request && generation == request.generation)
+                    CjsSiteResolver.this.complete(request, json);
+            });
         }
-
-        public String post(String url, String body, String headersJson) {
-            return isOnline(url) ? Ku9HttpClient.postText(
-                    url, body, headersJson, MAX_RESPONSE_BYTES) : "";
-        }
-
-        public String request(String url, String method, String headersJson,
-                String body, boolean followRedirects) {
-            if (!isOnline(url)) {
-                return "{\"code\":0,\"error\":\"online URL required\"}";
-            }
-            long startedAt = android.os.SystemClock.elapsedRealtime();
-            String result = Ku9HttpClient.requestJson(url, method, headersJson, body,
-                    followRedirects, MAX_RESPONSE_BYTES);
-            try {
-                JSONObject response = new JSONObject(result);
-                if (response.optInt("code") == 0) Log.w(TAG, "Site HTTP failure: " + response.optString("error"));
-            } catch (JSONException ignored) { }
-            Log.i(TAG, "Site request completed elapsedMs="
-                    + (android.os.SystemClock.elapsedRealtime() - startedAt)
-                    + " url=" + url);
-            return result;
-        }
-
-        public String md5(String value) {
-            try {
-                byte[] bytes = MessageDigest.getInstance("MD5")
-                        .digest(String.valueOf(value).getBytes("UTF-8"));
-                StringBuilder result = new StringBuilder(bytes.length * 2);
-                for (byte item : bytes) {
-                    result.append(String.format(Locale.US, "%02x", item & 0xff));
-                }
-                return result.toString();
-            } catch (Exception error) {
-                return "";
-            }
-        }
-
-        public void log(String value) {
-            Log.i(TAG, value);
-        }
-
-        public void complete(final String json) {
-            if (!terminal && !isCancelled()) {
-                terminal = true;
-                activity.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (pending == request && generation == request.generation)
-                            CjsSiteResolver.this.complete(request, json);
-                    }
-                });
-            }
-        }
-
-        public void fail(final String reason) {
-            if (!terminal && !isCancelled()) {
-                terminal = true;
-                activity.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        CjsSiteResolver.this.fail(request,
-                                "站点插件执行失败: " + reason);
-                    }
-                });
-            }
+        @Override protected void onFailure(final String reason) {
+            activity.runOnUiThread(() -> {
+                if (pending == request && generation == request.generation)
+                    CjsSiteResolver.this.fail(request, "站点插件执行失败: " + reason);
+            });
         }
     }
 
@@ -441,6 +339,7 @@ final class CjsSiteResolver {
         final Callback callback;
         final String cacheKey;
         String javascript;
+        final boolean browser;
         boolean initialCompleted;
 
         Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
@@ -453,6 +352,7 @@ final class CjsSiteResolver {
             this.quality = quality;
             this.sourceUrl = sourceUrl;
             this.site = site;
+            this.browser = Ku9EnginePolicy.usesWebView(site.script);
             this.callback = callback;
             // Prepared on the loader thread, once per channel selection. Live
             // playlist refreshes reuse the source and never hash it on the UI thread.

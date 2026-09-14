@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -31,6 +32,25 @@ final class HttpStreamResolver {
         Result(String url, boolean directMedia) {
             this.url = url;
             this.directMedia = directMedia;
+        }
+    }
+
+    static final class InvalidSourceUrlException extends IOException {
+        final String invalidUrl;
+        final String problem;
+
+        InvalidSourceUrlException(String url, String reason, Throwable cause) {
+            super("源地址格式错误：" + reason, cause);
+            invalidUrl = url == null ? "（空地址）" : url;
+            problem = reason;
+        }
+
+        String userMessage() {
+            return "错误地址：\n" + invalidUrl + "\n\n格式问题：\n" + problem
+                    + "\n\n地址填写示例：\nhttps://example.com/live.m3u8"
+                    + "\n\n频道列表格式示例：\n分组名称,#genre#"
+                    + "\n频道名称,https://example.com/live.m3u8"
+                    + "\n\n#genre# 是独立的分组标记，不要拼在地址后面。";
         }
     }
 
@@ -80,7 +100,8 @@ final class HttpStreamResolver {
     private static Result resolveInternal(String value) throws IOException {
         String current = value;
         for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
-            HttpURLConnection connection = NetworkClient.open(URI.create(current).toURL());
+            URI currentUri = httpUri(current);
+            HttpURLConnection connection = NetworkClient.open(currentUri.toURL());
             connection.setConnectTimeout(7000);
             connection.setReadTimeout(7000);
             connection.setInstanceFollowRedirects(false);
@@ -99,7 +120,13 @@ final class HttpStreamResolver {
                     if (location == null || location.length() == 0) {
                         throw new IOException("源地址重定向缺少目标地址");
                     }
-                    current = URI.create(current).resolve(location).toString();
+                    try {
+                        current = currentUri.resolve(new URI(location.trim())).toString();
+                    } catch (URISyntaxException error) {
+                        throw new InvalidSourceUrlException(location,
+                                "服务器返回的重定向地址包含非法字符（位置 " + error.getIndex() + "）", error);
+                    }
+                    httpUri(current);
                     continue;
                 }
                 if (status < 200 || status >= 300) {
@@ -130,6 +157,7 @@ final class HttpStreamResolver {
                 }
                 String mediaUrl = findMediaUrl(body);
                 if (mediaUrl != null) {
+                    httpUri(mediaUrl);
                     if (isHlsUrl(mediaUrl)) {
                         return new Result(mediaUrl, false);
                     }
@@ -149,6 +177,30 @@ final class HttpStreamResolver {
             }
         }
         throw new IOException("源地址重定向次数过多");
+    }
+
+    private static URI httpUri(String value) throws IOException {
+        if (value == null || value.trim().length() == 0) {
+            throw new InvalidSourceUrlException(value, "地址不能为空", null);
+        }
+        try {
+            URI uri = new URI(value.trim());
+            if ((!"http".equalsIgnoreCase(uri.getScheme())
+                    && !"https".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getHost() == null || uri.getHost().length() == 0) {
+                throw new InvalidSourceUrlException(value,
+                        "需要以 http:// 或 https:// 开头，并包含完整的服务器域名或 IP", null);
+            }
+            return uri;
+        } catch (URISyntaxException error) {
+            // Callers handle IOException on the resolver thread. URI.create's
+            // unchecked exception used to escape and terminate the application.
+            String problem = value.contains("#genre#")
+                    ? "地址中混入了 #genre# 分组标记；请将分组行与频道地址分开填写"
+                    : "地址包含非法字符（位置 " + error.getIndex()
+                            + "），请检查空格、方括号和 Markdown 链接格式";
+            throw new InvalidSourceUrlException(value, problem, error);
+        }
     }
 
     private static String legacyFallback(String value, int statusCode) {

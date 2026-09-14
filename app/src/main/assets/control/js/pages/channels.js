@@ -214,6 +214,12 @@ function renderPlaylistSources() {
       this._source._status = "";
       this._source._kind = "";
     };
+    location.onchange = function () {
+      var problem = playlistAddressProblem(this.value, true);
+      this._source._status = problem ? playlistFormatError(this._source, 0, this.value, problem).message : "等待刷新";
+      this._source._kind = problem ? "bad" : "";
+      renderPlaylistSources();
+    };
     var file = document.createElement("button");
     file.type = "button";
     file.className = "source-file";
@@ -221,7 +227,7 @@ function renderPlaylistSources() {
     file.title = "选择本地频道源文件";
     file.setAttribute("aria-label", "选择本地频道源文件");
     file.innerHTML =
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4M9 12h6M9 16h6"/></svg>';
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h7l4 4v13h-11z"/><path d="M13.5 3.5v4h4M9 12h6M9 16h6"/></svg><span>本地</span>';
     file._source = source;
     file.onclick = function () {
       choosePlaylistFile(this._source);
@@ -391,7 +397,14 @@ function cleanPlaylistSources() {
       name = String(source.name || "").replace(/^\s+|\s+$/g, ""),
       location = String(source.location || "").replace(/^\s+|\s+$/g, "");
     if (!name && !location) continue;
-    if (!location) throw new Error("“" + (name || "频道来源") + "”缺少地址或文件");
+    var problem = playlistAddressProblem(location, true);
+    if (problem && source.enabled !== false) {
+      var error = playlistFormatError(source, 0, source.location, problem);
+      source._status = error.message;
+      source._kind = "bad";
+      renderPlaylistSources();
+      throw error;
+    }
     cleaned.push({
       id: source.id || "",
       name: name || "频道源 " + (cleaned.length + 1),
@@ -417,6 +430,46 @@ function setSourceState(source, text, kind) {
 
 function isLocalPlaylistLocation(location) {
   return /^(file|content):\/\//i.test(location) || location.charAt(0) === "/";
+}
+
+function playlistFormatError(source, line, value, reason) {
+  var error = new Error("来源：" + (source.name || "频道来源") + (line ? " · 第 " + line + " 行" : "")
+    + "\n错误内容：" + (value == null || value === "" ? "（空）" : value)
+    + "\n格式问题：" + reason);
+  error.playlistFormat = true;
+  return error;
+}
+
+function playlistAddressProblem(value, sourceLocation) {
+  var text = String(value || "").replace(/^\s+|\s+$/g, "");
+  if (!text) return "请填写地址，或通过“本地”按钮选择频道文件";
+  if (/#genre#/i.test(text)) return "#genre# 是分组标记，应单独写成“分组名称,#genre#”，不能拼在地址后面";
+  if (/^\[.*\]\(/.test(text)) return "请填写纯网址，不要粘贴 Markdown 的 [文字](网址) 格式";
+  if (sourceLocation && isLocalPlaylistLocation(text)) return "";
+  if (/[\s<>"\\^`{}|]/.test(text)) return "网址包含空格或非法字符，请使用编码后的完整网址";
+  if (/%(?![0-9a-f]{2})/i.test(text)) return "百分号后需要两位十六进制编码，例如空格应写为 %20";
+  if (text.indexOf("#") !== text.lastIndexOf("#")) return "网址中包含重复的 # 分隔符";
+  if (/^webview:\/\//i.test(text) && !sourceLocation) text = text.replace(/^webview:\/\//i, "");
+  var absolute = /^(https?|rtmps?|rtmpt|rtsp):\/\/([^/?#]+)/i.exec(text);
+  if (absolute) {
+    if (sourceLocation && !/^https?:/i.test(text)) return "频道列表来源需要 HTTP/HTTPS 地址，或选择本地文件";
+    if (typeof URL === "function") {
+      try { if (!new URL(text).hostname) return "网址缺少服务器域名或 IP"; }
+      catch (error) { return "网址的服务器、端口或字符格式不正确"; }
+    }
+    return "";
+  }
+  if (sourceLocation) return "请填写以 http:// 或 https:// 开头的完整频道列表地址，或选择本地文件";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(text)) return "协议或服务器地址不正确";
+  return ""; // M3U files may use paths relative to the playlist URL.
+}
+
+function showPlaylistFormatError(error) {
+  var panel = document.getElementById("playlistFormatErrors"),
+    item = document.createElement("p");
+  item.textContent = error.message;
+  document.getElementById("playlistFormatErrorItems").appendChild(item);
+  panel.style.display = "block";
 }
 
 function githubProxySourceUrl(value) {
@@ -488,13 +541,26 @@ function parsePlaylistOnPhone(text, source) {
     group = "在线频道",
     pending = null,
     entries = [],
-    epg = "";
+    epg = "",
+    pendingLine = 0;
+  function invalid(lineNumber, raw, reason) {
+    throw playlistFormatError(source, lineNumber, raw, reason);
+  }
+  function stream(value, lineNumber, raw) {
+    var problem = playlistAddressProblem(value, false);
+    if (problem) invalid(lineNumber, raw, problem);
+    var result = playlistStreamUrl(value, source.location);
+    if (!result) invalid(lineNumber, raw, "无法解析频道地址；本地列表中的频道请使用完整网址");
+    return result;
+  }
   if (lines.length && /^#EXTM3U/i.test(lines[0]))
     epg = playlistAttribute(lines[0], "x-tvg-url") || playlistAttribute(lines[0], "url-tvg");
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].replace(/^\s+|\s+$/g, "");
     if (!line) continue;
     if (/^#EXTINF:/i.test(line)) {
+      if (pending) invalid(pendingLine, lines[pendingLine - 1], "#EXTINF 后缺少频道播放地址");
+      pendingLine = i + 1;
       var comma = line.lastIndexOf(",");
       pending = {
         name:
@@ -507,8 +573,9 @@ function parsePlaylistOnPhone(text, source) {
       continue;
     }
     if (line.charAt(0) === "#") continue;
-    var url = playlistStreamUrl(line, source.location);
-    if (pending && url) {
+    var url;
+    if (pending) {
+      url = stream(line, i + 1, lines[i]);
       entries.push({
         name: pending.name || "未命名频道",
         group: pending.group || group,
@@ -519,14 +586,17 @@ function parsePlaylistOnPhone(text, source) {
       continue;
     }
     var split = line.indexOf(",");
-    if (split <= 0) continue;
+    if (split <= 0) invalid(i + 1, lines[i], "需要“频道名称,播放地址”，或 M3U 的 #EXTINF 与地址两行格式");
     var name = line.substring(0, split).replace(/^\s+|\s+$/g, ""),
       value = line.substring(split + 1).replace(/^\s+|\s+$/g, "");
-    if (/^#genre#$/i.test(value)) {
+    // Some TXT generators leave empty CSV columns after group markers.
+    if (/^#genre#(?:\s*,\s*)*$/i.test(value)) {
       group = name || "在线频道";
       continue;
     }
-    url = playlistStreamUrl(value, source.location);
+    // Ignore empty columns before an explicit URL, never commas inside its query.
+    value = value.replace(/^(?:,\s*)+(?=(?:https?|rtmps?|rtmpt|rtsp|webview):\/\/)/i, "");
+    url = stream(value, i + 1, lines[i]);
     if (url)
       entries.push({
         name: name || "未命名频道",
@@ -535,7 +605,8 @@ function parsePlaylistOnPhone(text, source) {
         url: url
       });
   }
-  if (!entries.length) throw new Error("没有找到可播放频道");
+  if (pending) invalid(pendingLine, lines[pendingLine - 1], "#EXTINF 后缺少频道播放地址");
+  if (!entries.length) throw playlistFormatError(source, 0, source.location, "没有找到可播放频道，请检查文件内容是否为 TXT 或 M3U 频道列表");
   return { entries: entries, epg: epg };
 }
 
@@ -629,10 +700,13 @@ function buildMergedM3u(merged) {
 
 function mergeAndPushPlaylistSources() {
   if (mergeBusy) return;
+  document.getElementById("playlistFormatErrors").style.display = "none";
+  document.getElementById("playlistFormatErrorItems").innerHTML = "";
   var cleaned;
   try {
     cleaned = cleanPlaylistSources();
   } catch (error) {
+    if (error.playlistFormat) showPlaylistFormatError(error);
     toast(error.message, true);
     return;
   }
@@ -649,6 +723,7 @@ function mergeAndPushPlaylistSources() {
   setMergeUi("手机正在整理", "读取 0 / " + enabled.length + " 个来源", "working");
   var results = [],
     failures = [],
+    formatFailures = 0,
     index = 0;
   function finish(error) {
     mergeBusy = false;
@@ -657,6 +732,10 @@ function mergeAndPushPlaylistSources() {
       setMergeUi("刷新未完成", error.message || String(error), "");
       toast(error.message || String(error), true);
       renderPlaylistSources();
+      return;
+    }
+    if (formatFailures) {
+      finish(new Error("有 " + formatFailures + " 个来源格式不正确，请修改错误详情后重试；电视频道未更新"));
       return;
     }
     var merged = mergePhoneEntries(results);
@@ -728,6 +807,10 @@ function mergeAndPushPlaylistSources() {
         results.push(parsed);
         setSourceState(source, "已解析 " + parsed.entries.length + " 个频道", "good");
       } catch (parseError) {
+        if (parseError.playlistFormat) {
+          formatFailures++;
+          showPlaylistFormatError(parseError);
+        }
         failures.push(source.name);
         setSourceState(source, parseError.message, "bad");
       }

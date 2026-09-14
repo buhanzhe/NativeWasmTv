@@ -126,6 +126,16 @@ function startPage() {
 }
 function goBack() {
   if (typeof window.mediaDismissSheet === "function" && window.mediaDismissSheet()) return;
+  if (window.NtvDevice && typeof NtvDevice.returnFromMultimedia === "function" && NtvDevice.returnFromMultimedia()) return;
+  if (window.NtvDevice && typeof NtvDevice.returnFromSniffedResource === "function" && NtvDevice.returnFromSniffedResource()) return;
+  if (typeof mediaState !== "undefined" && mediaState && mediaState.canReturnToWeb === true) {
+    api("/api/control", { action: "returnToWeb" }, function (error) {
+      if (error) { toast(error.message, true); return; }
+      mediaState.canReturnToWeb = false;
+      if (typeof refreshMediaController === "function") refreshMediaController();
+    });
+    return;
+  }
   if (history.length > 1) {
     history.back();
     return;

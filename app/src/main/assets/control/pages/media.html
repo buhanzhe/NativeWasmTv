@@ -27,6 +27,7 @@
         <div class="media-empty">正在读取播放状态…</div>
       </div>
       <nav class="media-toolbar" aria-label="播放工具">
+        <button id="mediaChannelsButton" type="button" aria-label="切换频道" aria-haspopup="dialog" onclick="mediaOpenChannels()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>频道</span></button>
         <button id="mediaFavorite" class="media-favorite" type="button" aria-label="收藏当前频道" aria-pressed="false" onclick="mediaToggleFavorite()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg><span>收藏</span></button>
         <button id="mediaSniffedButton" type="button" hidden aria-label="线路" aria-haspopup="dialog" aria-expanded="false" onclick="mediaOpenSniffed()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18M3 11h9M3 17h6M15 10l7 5-7 5Z"/></svg><span id="mediaSniffedLabel">线路</span></button>
         <button type="button" onclick="openVideoRecorderPage()" aria-label="视频下载"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg><span>下载</span></button>
@@ -162,8 +163,37 @@
         <a id="mediaShotSave" download="nTv-screenshot.png">保存截图（PNG）</a>
       </section>
     </div>
+    <div id="channelPickerBackdrop" class="channel-picker-backdrop" hidden>
+      <div class="channel-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="channelPickerTitle">
+        <div class="channel-picker-header">
+          <button class="channel-picker-cancel" onclick="closeChannelPicker()">取消</button>
+          <b id="channelPickerTitle">选择频道</b>
+          <button class="channel-picker-confirm" onclick="confirmChannelPicker()">切换频道</button>
+        </div>
+        <div class="channel-picker-labels"><span>频道分组</span><span>频道</span></div>
+        <div class="channel-picker-wheels">
+          <div id="channelGroupWheel" class="channel-wheel" aria-label="频道分组"></div>
+          <div id="channelItemWheel" class="channel-wheel" aria-label="频道"></div>
+          <div class="channel-wheel-selection" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
     <div id="message" class="message"></div>
+    <div id="mediaMultimediaBackdrop" class="media-sheet-backdrop" aria-hidden="true" onclick="mediaCloseMultimedia()">
+      <section id="multimediaSection" class="media-settings-sheet" role="dialog" aria-modal="true" aria-label="多媒体投送" onclick="event.stopPropagation()">
+        <div class="media-sheet-handle" aria-hidden="true"></div><div class="media-sheet-header"><b>多媒体投送</b><button type="button" onclick="mediaCloseMultimedia()">完成</button></div>
+        <p class="hint">投送到当前连接的电视。按返回可继续之前的网页。</p>
+        <div class="switch-row"><div class="switch-copy"><b>保留源音频编码发送</b><div class="hint">保留 AAC 或杜比 AC-3 原音轨；其他编码请关闭后转为 AAC。</div></div><input id="multimediaPreserveAudio" type="checkbox" class="source-toggle" aria-label="保留源音频编码发送" /></div>
+        <label id="multimediaChoose" class="primary wide multimedia-file-choose">选择图片、视频或音乐
+          <input id="multimediaFile" type="file" accept="image/*,video/*,audio/*" aria-label="选择图片、视频或音乐" onclick="return beginMultimediaChoice()" onchange="sendMultimediaFile(this)" />
+        </label>
+        <button id="multimediaStop" class="wide" style="display:none" onclick="stopMultimedia()">结束多媒体投屏</button>
+        <p id="multimediaStatus" class="hint">文件不超过 1 GB；手机需支持该文件的解码。</p>
+      </section>
+    </div>
     <script src="/js/common.js"></script>
+    <script src="/js/channel-picker.js"></script>
     <script src="/js/pages/media.js"></script>
+    <script src="/js/pages/multimedia.js"></script>
   </body>
 </html>

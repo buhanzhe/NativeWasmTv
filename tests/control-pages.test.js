@@ -77,6 +77,79 @@ test('browser playlist downloads use the configured GitHub accelerator', () => {
   assert.equal(c.githubProxySourceUrl('http://192.168.1.8/live.m3u8'), 'http://192.168.1.8/live.m3u8');
 });
 
+test('channel source format errors remain visible and block requests', () => {
+  const b = browser('channels'), c = b.context;
+  const bad = 'https://example.com/channels.txt#genre#,';
+  c.playlistSources = [{id:'bad', name:'错误源', location:bad, enabled:true}];
+  c.mergeAndPushPlaylistSources();
+  assert.equal(b.elements.get('playlistFormatErrors').style.display, 'block');
+  const message = b.elements.get('playlistFormatErrorItems').children[0].textContent;
+  assert.ok(message.includes(bad));
+  assert.ok(message.includes('分组标记'));
+  assert.equal(c.mergeBusy, false);
+  assert.equal(b.requests.filter(r => r.url.includes('/api/playlist/')).length, 0);
+});
+
+test('playlist validation preserves supported streams, signed URLs and relative M3U paths', () => {
+  const c = browser('channels').context;
+  c.URL = URL;
+  const source = {name:'测试',location:'https://example.com/lists/channels.txt'};
+  const text = '分组,#genre#\n直播,https://example.com/live.m3u8?token=a%2Bb%2F&x=1,2\n网页,webview://https://example.com/\n实时,rtsp://192.168.0.1:8554/live\n推流,rtmp://example.com/live';
+  const parsed = c.parsePlaylistOnPhone(text, source);
+  assert.equal(parsed.entries.length, 4);
+  assert.equal(parsed.entries[0].url, 'https://example.com/live.m3u8?token=a%2Bb%2F&x=1,2');
+  const m3u = c.parsePlaylistOnPhone('#EXTM3U\n#EXTINF:-1,频道\n../live.m3u8', source);
+  assert.equal(m3u.entries[0].url, 'https://example.com/live.m3u8');
+  assert.equal(c.playlistAddressProblem('file:///storage/频道 列表.txt', true), '');
+});
+
+test('playlist validation reports original line and does not silently ignore broken rows', () => {
+  const c = browser('channels').context;
+  c.URL = URL;
+  const source = {name:'本地测试',location:'https://example.com/channels.txt'};
+  for (const bad of ['坏频道,https://example.com/list.txt#genre#,',
+    '坏频道,[视频](https://example.com/live)', '坏频道,https://example.com/a b',
+    '坏频道,https://example.com/%GG', '坏频道,http://example.com/1.m3u8?mode=1&$8M FHD',
+    '这一行漏了逗号', '#EXTINF:-1,缺少地址']) {
+    assert.throws(() => c.parsePlaylistOnPhone('分组,#genre#\n' + bad, source), error => {
+      assert.equal(error.playlistFormat, true);
+      assert.ok(error.message.includes('第 2 行'));
+      assert.ok(error.message.includes(bad));
+      return true;
+    });
+  }
+});
+
+test('PHP TXT channel lists accept empty CSV columns without changing URL parameters', () => {
+  const c = browser('channels').context;
+  c.URL = URL;
+  const source = {name:'PHP 频道列表',location:'http://example.com/apk/112.php'};
+  const parsed = c.parsePlaylistOnPhone('港台,#genre#,\r\r\n频道,,http://example.com/live.php?id=中文&x=1,2\r\r\n广东,#genre#\n频道二,http://example.com/b.m3u8', source);
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(parsed.entries[0].group, '港台');
+  assert.equal(parsed.entries[0].url, 'http://example.com/live.php?id=中文&x=1,2');
+  assert.equal(parsed.entries[1].group, '广东');
+  assert.throws(() => c.parsePlaylistOnPhone('坏频道,http://example.com/live.php#genre#,', source),
+    error => error.playlistFormat === true);
+});
+
+test('a malformed imported source cannot cause a partial catalog replacement', () => {
+  const b = browser('channels'), c = b.context;
+  c.URL = URL;
+  c.playlistSources = [
+    {id:'good',name:'正确源',location:'https://example.com/good.txt',enabled:true},
+    {id:'bad',name:'错误源',location:'https://example.com/bad.txt',enabled:true}];
+  const badLine = '频道,https://example.com/live#genre#,';
+  c.requestPlaylistText = (source, done) => done(null,
+    source.id === 'good' ? '频道,https://example.com/live.m3u8' : badLine);
+  c.mergeAndPushPlaylistSources();
+  assert.equal(c.mergeBusy, false);
+  assert.equal(b.elements.get('mergeButton').disabled, false);
+  assert.ok(b.elements.get('mergeDetail').textContent.includes('电视频道未更新'));
+  assert.ok(b.elements.get('playlistFormatErrorItems').children[0].textContent.includes(badLine));
+  assert.equal(b.requests.filter(r => r.url === '/api/playlist/merge').length, 0);
+});
+
 test('APK upload always targets the current web server, regardless of takeover state', () => {
   const b = browser('system'), c = b.context;
   c.state = { isTelevision: false, takeoverReceiverUrl: 'http://192.168.49.1:9966',
@@ -243,7 +316,9 @@ test('media sniffed resources preserve unchanged rows and send the exact selecte
   const url = 'https://example.com/master.m3u8?a=1&token=<test>';
   c.renderMediaSources({ webPage: true, sniffedResources: [{ url }] });
   const list = b.elements.get('mediaSniffedList'), button = list.children[0];
-  assert.equal(button.children[1].textContent, url);
+  assert.equal(button.children[1].textContent, 'https://example.com/master.m3u8');
+  assert.equal(button.children[1].title, url);
+  assert.equal(button.children[0].textContent, '资源 1 · 视频 · M3U8');
   const writes = b.writes();
   c.renderMediaSources({ webPage: true, sniffedResources: [{ url }] });
   assert.equal(b.writes(), writes);
@@ -310,9 +385,10 @@ test('update check is silent; installation is an explicit system-page action', (
 test('multimedia upload retains the selected file until the browser finishes reading it', () => {
   const b = browser(), c = b.context;
   c.setInterval = () => 0;
-  c.state = {};
+  c.state = {canInitiateTakeover:true,takeoverReceiverUrl:"http://192.168.1.8:9966"};
   c.normalizeReceiverAddress = value => value;
   c.document.getElementById('remoteCatalogUrl').value = 'http://192.168.1.8:9966';
+  c.startPage=()=>{};
   vm.runInContext(fs.readFileSync(path.join(root, 'js/pages/multimedia.js'), 'utf8'), c);
   const file = { name: 'sample.mp4', size: 12345 };
   const input = { files: [file], value: 'selected.mp4' };
@@ -343,7 +419,9 @@ test('back dismisses the media sheet and leaves the controller available', () =>
 
 test('multimedia polling has one in-flight request and resumes after hiding', () => {
   const b = browser(), c = b.context;
+  c.state={canInitiateTakeover:true,takeoverReceiverUrl:"http://192.168.0.114:9966"};
   c.setInterval = () => 0;
+  c.startPage=()=>{};
   vm.runInContext(fs.readFileSync(path.join(root, 'js/pages/multimedia.js'), 'utf8'), c);
   for (let i = 0; i < 100; i++) c.pollMultimedia();
   assert.equal(b.requests.length, 1);
@@ -357,6 +435,104 @@ test('multimedia polling has one in-flight request and resumes after hiding', ()
   b.requests[1].respond({ok:true,active:false});
   c.pollMultimedia();
   assert.equal(b.requests.length, 3);
+});
+
+test('local multimedia selection uses native URI bridge without uploading bytes', () => {
+  const b=browser(), c=b.context;
+  c.setInterval=()=>0;
+  c.normalizeReceiverAddress=value=>value;
+  let chosen;
+  c.NtvDevice=c.window.NtvDevice={chooseLocalMultimedia:(target,audio)=>{chosen={target,audio};}};
+  c.startPage=()=>{};
+  vm.runInContext(fs.readFileSync(path.join(root,'js/pages/multimedia.js'),'utf8'),c);
+  c.state={canInitiateTakeover:true,takeoverReceiverUrl:'http://192.168.0.114:9966'};
+  c.document.getElementById('multimediaPreserveAudio').checked=true;
+  assert.equal(c.beginMultimediaChoice(),false);
+  assert.deepEqual(chosen,{target:'http://192.168.0.114:9966',audio:true});
+  assert.equal(b.requests.filter(r=>r.url.includes('/upload')).length,0);
+  assert.equal(c.multimediaChoosing,true);
+  c.multimediaLocalResult('cancelled');
+  assert.equal(c.multimediaChoosing,false);
+  assert.equal(c.document.getElementById('multimediaStatus').textContent,'cancelled');
+});
+
+test('multimedia uses the connected TV and back returns to content before navigation', () => {
+  const b=browser(), c=b.context;
+  c.setInterval=()=>0;c.normalizeReceiverAddress=v=>v;
+  c.state={canInitiateTakeover:true,takeoverReceiverUrl:'http://192.168.0.114:9966'};
+  let target, returned=0;
+  c.NtvDevice=c.window.NtvDevice={chooseLocalMultimedia:(v)=>{target=v;},returnFromMultimedia:()=>{returned++;return true;}};
+  c.startPage=()=>{};
+  vm.runInContext(fs.readFileSync(path.join(root,'js/pages/multimedia.js'),'utf8'),c);
+  c.document.getElementById('remoteCatalogUrl').value='http://wrong.example:9966';
+  assert.equal(c.beginMultimediaChoice(),false);
+  assert.equal(target,'http://192.168.0.114:9966');
+  c.goBack();assert.equal(returned,1);assert.equal(c.location.replaced,undefined);
+});
+
+test('multimedia entry requires a connected sender and closes on disconnect', () => {
+  const b=browser('media'), c=b.context;
+  c.setInterval=()=>0;c.startPage=()=>{};
+  vm.runInContext(fs.readFileSync(path.join(root,'js/pages/multimedia.js'),'utf8'),c);
+  c.state={canInitiateTakeover:true,takeoverReceiverUrl:''};
+  c.renderMultimediaEntry();assert.equal(c.document.getElementById('mediaMultimediaButton').hidden,true);
+  c.state.takeoverReceiverUrl='http://192.168.0.114:9966';
+  c.renderMultimediaEntry();assert.equal(c.document.getElementById('mediaMultimediaButton').hidden,false);
+  c.mediaOpenMultimedia();assert.equal(c.mediaDismissSheet(),true);
+  c.mediaOpenMultimedia();c.state.takeoverReceiverUrl='';c.renderMultimediaEntry();
+  assert.equal(c.document.getElementById('mediaMultimediaBackdrop').getAttribute('aria-hidden'),'true');
+  assert.equal(c.beginMultimediaChoice(),false);
+  c.state={canInitiateTakeover:false,takeoverReceiverUrl:'http://192.168.0.114:9966'};
+  c.renderMultimediaEntry();assert.equal(c.document.getElementById('mediaMultimediaButton').hidden,true);
+});
+
+test('back closes a sniffed player through the native bridge before page navigation', () => {
+  const b=browser(), c=b.context;let returned=0;
+  c.NtvDevice=c.window.NtvDevice={returnFromSniffedResource:()=>{returned++;return true;}};
+  c.goBack();assert.equal(returned,1);assert.equal(c.location.replaced,undefined);
+});
+
+test('external media controller back restores the page without navigating away', () => {
+  const b=browser(), c=b.context;
+  c.mediaState={canReturnToWeb:true};
+  c.goBack();let request=b.requests[b.requests.length-1];
+  assert.equal(request.url,'/api/control');
+  assert.equal(JSON.parse(request.body).action,'returnToWeb');
+  request.respond({ok:true,returned:true});
+  assert.equal(c.mediaState.canReturnToWeb,false);assert.equal(c.location.replaced,undefined);
+});
+
+test('volume previews survive polling and commit once to the media receiver route', () => {
+  const b=browser('media'), c=b.context;
+  c.mediaControllerOpen=true;
+  c.mediaState={volume:6,volumeMax:15,volumeAvailable:true};
+  c.mediaRenderVolume();
+  const input=c.document.getElementById('mediaVolume');
+  assert.equal(input.value,'6');
+  assert.equal(c.document.getElementById('mediaVolumeValue').textContent,'40%');
+  const before=b.requests.length;
+  input.value='9';c.mediaVolumePreview(input);
+  input.value='12';c.mediaVolumePreview(input);
+  c.mediaState.volume=7;c.mediaRenderVolume();
+  assert.equal(input.value,'12');assert.equal(b.requests.length,before);
+  c.mediaVolumeCommit(input);
+  assert.equal(b.requests.length,before+1);
+  const request=b.requests[b.requests.length-1];
+  assert.equal(request.url,'/api/media/control');
+  assert.deepEqual(JSON.parse(request.body),{action:'volume',volume:12});
+  c.mediaState.volumeAvailable=false;c.mediaRenderVolume();
+  assert.equal(input.disabled,true);
+  assert.equal(c.document.getElementById('mediaVolumeValue').textContent,'--');
+  c.mediaVolumeCommit(input);assert.equal(b.requests.length,before+1);
+});
+
+test('cancelled volume gesture restores receiver state including mute', () => {
+  const b=browser('media'), c=b.context;
+  c.mediaState={volume:0,volumeMax:25,volumeAvailable:true};
+  c.mediaRenderVolume();const input=c.document.getElementById('mediaVolume');
+  assert.equal(input.getAttribute('aria-valuetext'),'静音');
+  input.value='20';c.mediaVolumePreview(input);c.mediaVolumeCancel();
+  assert.equal(input.value,'0');assert.equal(c.mediaVolumeEditing,false);
 });
 
 console.log('All ' + passed + ' control-page regression scenarios passed.');

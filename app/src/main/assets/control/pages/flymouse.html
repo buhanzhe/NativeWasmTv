@@ -16,20 +16,21 @@
       <div class="top">
         <button class="back-button" onclick="goBack()">‹ 返回</button>
         <div class="page-title">手机飞鼠</div>
-        <div class="online"><span class="dot"></span><span id="flyStatus">电视在线</span></div>
+        <button id="flyFullscreen" class="back-button" onclick="toggleFlyFullscreen()" aria-label="进入全屏" aria-pressed="false">⛶ 全屏</button>
       </div>
       <section class="mouse-card">
         <div id="mouseControls" class="mouse-controls">
           <div class="control-modes">
             <button id="modeTouch" class="active" onclick="switchControlMode('touch')">
               触控板</button
-            ><button id="modeKeyboard" onclick="switchControlMode('keyboard')">全键盘</button
+            ><button id="modeKeyboard" onclick="switchControlMode('keyboard', true)">键盘</button
             ><button id="modeGamepad" onclick="switchControlMode('gamepad')">游戏手柄</button>
           </div>
           <div id="panelTouch" class="control-panel active">
             <div class="actions">
               <button id="gyroButton" class="primary" onclick="enableGyroscope()">启用陀螺仪</button
-              ><button onclick="openBrowserSettings()">浏览器配置</button>
+              ><button onclick="openBrowserSettings()">浏览器配置</button
+              ><button onclick="location.href='/pages/media.html'">媒体控制</button>
             </div>
             <div id="touchpad" class="touchpad">单指移动 · 长按拖动 · 双指滚动与捏合缩放</div>
             <div class="actions">
@@ -39,16 +40,29 @@
             </div>
           </div>
           <div id="panelKeyboard" class="control-panel">
-            <div class="keyboard-note">建议旋转手机横屏；文字框支持手机中文输入法</div>
+            <div class="keyboard-note">下方按键直接输入到电视；中文请点中/英，输入后发送文字</div>
             <div class="keyboard-input">
               <input
                 id="remoteText"
                 type="text"
                 autocomplete="off"
                 placeholder="输入文字后发送到电视网页焦点"
-              /><button class="primary" onclick="sendRemoteText()">发送</button>
+              /><button class="primary" onclick="sendRemoteText()">发送文字</button>
             </div>
-            <div class="keyboard">
+            <div id="simpleKeyboard" class="phone-keyboard">
+              <div id="phoneKeyRows"></div>
+              <div class="keyboard-row phone-keyboard-tools">
+                <button id="phoneSymbols" class="key wide" onclick="togglePhoneSymbols()">123</button>
+                <button class="key wide" onclick="document.getElementById('remoteText').focus()">中/英</button>
+                <button class="key space" onclick="remoteKey('space')">空格</button>
+                <button class="key" onclick="phoneCharacter('.')">.</button>
+                <button class="key wide primary" onclick="remoteKey('enter')">回车</button>
+              </div>
+            </div>
+            <div class="actions">
+              <button id="fullKeyboardToggle" aria-expanded="false" aria-controls="fullKeyboard" onclick="toggleFullKeyboard()">横向全键盘 ↔</button>
+            </div>
+            <div id="fullKeyboard" class="keyboard" style="display:none">
               <div class="keyboard-row">
                 <button class="key wide" onclick="remoteKey('escape')">Esc</button
                 ><button class="key" onclick="remoteKey('1')">1</button

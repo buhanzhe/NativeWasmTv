@@ -105,16 +105,7 @@
           />
         </div>
       </section>
-      <section id="multimediaSection">
-        <h2>多媒体投屏</h2>
-        <p class="hint">使用上方电视地址。图片和视频由手机转为 H.264，经 RTSP 投送；视频同时投送声音，无需录音或录屏权限。</p>
-        <div class="switch-row"><div class="switch-copy"><b>保留源音频编码发送</b><div class="hint">保留 AAC 或杜比 AC-3 原音轨；其他编码请关闭后转为 AAC。</div></div><input id="multimediaPreserveAudio" type="checkbox" class="source-toggle" aria-label="保留源音频编码发送" /></div>
-        <label id="multimediaChoose" class="primary wide multimedia-file-choose">选择图片或视频
-          <input id="multimediaFile" type="file" accept="image/*,video/*" aria-label="选择图片或视频" onclick="return beginMultimediaChoice()" onchange="sendMultimediaFile(this)" />
-        </label>
-        <button id="multimediaStop" class="wide" style="display:none" onclick="stopMultimedia()">结束多媒体投屏</button>
-        <p id="multimediaStatus" class="hint">文件不超过 1 GB；手机需支持该文件的解码。</p>
-      </section>
+
     </main>
     <div id="takeoverProgressDialog" class="takeover-progress-dialog" aria-hidden="true">
       <div class="takeover-progress-card" role="dialog" aria-modal="true"
@@ -129,6 +120,5 @@
     <div id="message" class="message"></div>
     <script src="/js/common.js"></script>
     <script src="/js/pages/cast.js"></script>
-    <script src="/js/pages/multimedia.js"></script>
   </body>
 </html>

@@ -24,7 +24,7 @@ import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.X509TrustManager;
 
-/** Small TLS 1.2 client for API 14/15. TCP/DNS/timeouts remain owned by OkHttp. */
+/** Small TLS 1.2 client for pre-Lollipop devices. TCP/DNS/timeouts remain owned by OkHttp. */
 final class LegacyTlsSocket extends SSLSocket {
     private static final String[] CIPHERS = {
         "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",

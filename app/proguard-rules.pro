@@ -1,4 +1,12 @@
--keep class tv.danmaku.ijk.media.player.** { *; }
+# Preserve the classes looked up by libijkplayer/libsdl and their JNI signatures.
+# The unused AndroidMediaPlayer/TextureMediaPlayer wrappers and Java-only helpers
+# may be shrunk normally; keeping the entire dependency prevented their removal.
+-keep class tv.danmaku.ijk.media.player.IjkMediaPlayer { *; }
+-keep class tv.danmaku.ijk.media.player.IjkMediaPlayer$* { *; }
+-keep class tv.danmaku.ijk.media.player.exceptions.IjkMediaException { *; }
+-keep class tv.danmaku.ijk.media.player.ffmpeg.FFmpegApi { *; }
+-keep interface tv.danmaku.ijk.media.player.misc.IAndroidIO { *; }
+-keep interface tv.danmaku.ijk.media.player.misc.IMediaDataSource { *; }
 -keep class xiao.bu.tv.DolbyAudioOutput { public *; }
 
 # Bugly reflection/JNI entry points and retraceable crash source locations.

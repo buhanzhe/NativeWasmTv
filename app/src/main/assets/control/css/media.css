@@ -62,3 +62,33 @@ body.media-page-shell { background: #202529; color: #fff; }
 .media-seekbar:focus-within #mediaSeekKnob { box-shadow: 0 0 0 4px rgba(10,132,255,.25); }
 .media-seekbar.unavailable #mediaSeekKnob, .media-seekbar.unavailable #mediaSeekFill { display: none; }
 #mediaControllerBody .media-time { margin-top: 0; padding: 0 8px; }
+
+#mediaControllerBody .media-scene-actions { display: flex; align-items: center; gap: 12px; }
+#mediaControllerBody .media-circle-action[hidden] { display: none; }
+
+.media-page-shell .channel-picker-sheet { color: #1d1d1f; }
+
+/* Rotate a native range for touch/keyboard support on older WebViews too. */
+#mediaControllerBody .media-player-card { position: relative; }
+#mediaControllerBody .media-volume-control { position: absolute; top: 16px; right: 0; width: 48px; padding: 10px 0; display: flex; flex-direction: column; align-items: center; color: #fff; background: rgba(0,0,0,.38); border: 1px solid rgba(255,255,255,.18); border-radius: 24px; }
+.media-volume-control > span { font-size: 11px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.media-volume-control > svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.media-volume-range { position: relative; width: 44px; height: 140px; margin: 6px 0; }
+.media-volume-track { position: absolute; top: 8px; bottom: 8px; left: 20px; width: 4px; border-radius: 2px; background: rgba(255,255,255,.28); pointer-events: none; }
+#mediaVolumeFill { position: absolute; bottom: 0; width: 4px; border-radius: 2px; background: #0a84ff; }
+#mediaVolumeKnob { position: absolute; left: -6px; width: 16px; height: 16px; margin-bottom: -8px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+#mediaControllerBody #mediaVolume { position: absolute; top: 48px; left: -48px; width: 140px; height: 44px; min-height: 0; margin: 0; padding: 0; opacity: 0; transform: rotate(-90deg); -webkit-transform: rotate(-90deg); cursor: pointer; touch-action: none; }
+.media-volume-range:focus-within #mediaVolumeKnob { box-shadow: 0 0 0 4px rgba(10,132,255,.4); }
+.media-volume-control.unavailable { opacity: .45; }
+@media (max-height: 650px) {
+  #mediaControllerBody .media-volume-control { top: 0; padding: 6px 0; }
+  .media-volume-range { height: 84px; }
+  #mediaControllerBody #mediaVolume { width: 84px; top: 20px; left: -20px; }
+  #mediaControllerBody .media-scene-actions { margin-right: 60px; }
+  #mediaControllerBody .media-now { padding-right: 60px; }
+}
+@media (max-height: 420px) {
+  #mediaControllerBody .media-player-card { padding-right: 60px; }
+  #mediaControllerBody .media-scene-actions { margin-right: 0; }
+  #mediaControllerBody .media-now { padding-right: 0; }
+}

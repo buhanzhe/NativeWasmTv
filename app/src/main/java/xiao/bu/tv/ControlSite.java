@@ -31,6 +31,7 @@ final class ControlSite {
                 || "/css/media.css".equals(path)
                 || "/js/channel-picker.js".equals(path)
                 || "/js/pointer-queue.js".equals(path)
+                || "/js/pages/multimedia.js".equals(path)
                 || "/js/pages/home.js".equals(path)) {
             return true;
         }

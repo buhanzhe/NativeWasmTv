@@ -16,11 +16,15 @@ import java.util.HashMap;
 final class Ku9SourceSmokeTest {
     private static final String BASE = "https://raw.githubusercontent.com/buhanzhe/webSourceM3U8/main/k-web/ku9/js/";
 
-    private static final class Host implements NativeQuickJs.Host {
+    private static final class Host extends Ku9Host {
         final JSONArray http = new JSONArray();
         final HashMap<String, String> cache = new HashMap<String, String>();
         String result, failure;
-        @Override public boolean isCancelled() { return false; }
+        @Override protected boolean isRequestCancelled() { return false; }
+        @Override protected void onComplete(String value) { result = value; }
+        @Override protected void onFailure(String value) { failure = value; }
+        @Override public String getCache(String key) { return cache.containsKey(key) ? cache.get(key) : ""; }
+        @Override public void setCache(String key, String value, double ttl) { cache.put(key, value); }
         @Override public String invoke(int op, String[] args) throws Exception {
             if (op <= 2) {
                 long start = SystemClock.elapsedRealtime();
@@ -43,7 +47,7 @@ final class Ku9SourceSmokeTest {
                 case 6: failure = args[0]; return null;
                 case 7: return cache.containsKey(args[0]) ? cache.get(args[0]) : "";
                 case 8: cache.put(args[0], args[1]); return null;
-                default: throw new IllegalArgumentException("Unknown bridge operation " + op);
+                default: return super.invoke(op, args);
             }
         }
     }
@@ -80,7 +84,7 @@ final class Ku9SourceSmokeTest {
                     scripts.put(entry[0], script);
                 }
                 row.put("sha256", hex(MessageDigest.getInstance("SHA-256").digest(script.getBytes("UTF-8"))));
-                NativeQuickJs.execute(CjsSiteResolver.buildJavascript(script,
+                NativeQuickJs.execute(new Ku9JsContract(context).build(script,
                         new JSONObject().put("url", BASE+entry[0]+"?"+entry[1]).put("name", entry[0])), host);
                 if (host.failure != null) throw new Exception(host.failure);
                 Ku9JsContract.Output output = Ku9JsContract.parse(host.result);

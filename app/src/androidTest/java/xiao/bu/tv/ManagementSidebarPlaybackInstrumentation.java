@@ -51,7 +51,7 @@ public final class ManagementSidebarPlaybackInstrumentation extends Instrumentat
             }
             runOnMainSync(() -> {
                 main.suspendForMultimedia(false);
-                main.resumeSentMultimedia(videoFile, "侧栏播放测试", false, 1000);
+                main.resumeSentMultimedia(new MultimediaInput(main, videoFile), "侧栏播放测试", false, 1000);
             });
             SystemClock.sleep(1000);
             Object player = field(main, "player");

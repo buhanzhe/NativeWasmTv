@@ -12,6 +12,8 @@ final class MultimediaCastManager implements Closeable {
     final MainActivity host;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile Session sending;
+    private Runnable pendingLocal;
+    private volatile boolean transitioning;
     private volatile String message = "选择图片或视频，由本机转码后投送";
     private volatile String receiverToken = "";
     private volatile long receiverBeat;
@@ -21,7 +23,7 @@ final class MultimediaCastManager implements Closeable {
         File[] stale=new File(host.getCacheDir(),"multimedia-cast").listFiles();
         if(stale!=null)for(File file:stale)if(file.isFile()&&file.getName().startsWith("cast-"))file.delete();
     }
-    boolean active() { return sending != null || !receiverToken.isEmpty(); }
+    boolean active() { return sending != null || transitioning || !receiverToken.isEmpty(); }
     private <T> T onUi(Callable<T> action) throws Exception {
         if (Looper.myLooper()==Looper.getMainLooper()) return action.call();
         FutureTask<T> task=new FutureTask<>(action); ui.post(task);
@@ -31,13 +33,13 @@ final class MultimediaCastManager implements Closeable {
         if (Build.VERSION.SDK_INT<18) throw new IOException("多媒体转码需要 Android 4.3 或以上的手机");
         if (destroyed || active()) throw new IOException("请先结束当前多媒体投送");
         if(length<=0 || length>1024*1024*1024) throw new IOException("请选择不超过 1 GB 的图片或视频");
-        final String target=RemoteCatalogClient.normalizeServerUrl(address);
+        final String target=host.multimediaTarget(address);
         if(target.isEmpty()) throw new IOException("请填写电视地址");
         onUi(() -> { host.checkMultimediaStart(); return null; });
         File folder=new File(host.getCacheDir(),"multimedia-cast"); folder.mkdirs();
         if(folder.getUsableSpace()<length+32L*1024*1024) throw new IOException("手机可用存储空间不足");
         File file=File.createTempFile("cast-",".media",folder);
-        Session session=new Session(target,file,name,preserveAudio); sending=session; message="正在读取文件";
+        Session session=new Session(target,new MultimediaInput(host,file),name,preserveAudio); sending=session; message="正在读取文件";
         try {
             try(FileOutputStream out=new FileOutputStream(file)) {
                 byte[] buffer=new byte[64*1024]; int remaining=length;
@@ -51,13 +53,27 @@ final class MultimediaCastManager implements Closeable {
             return state().toString();
         } catch(Exception error) { sending=null; file.delete(); message=error.getMessage(); throw error; }
     }
+    synchronized void openLocal(String address, android.net.Uri uri, String name, boolean preserveAudio) throws Exception {
+        if(Build.VERSION.SDK_INT<18)throw new IOException("多媒体转码需要 Android 4.3 或以上的手机");
+        if(destroyed || !receiverToken.isEmpty())throw new IOException("当前设备正在接收多媒体");
+        if(sending!=null || transitioning) {
+            pendingLocal=() -> {try {openLocal(address,uri,name,preserveAudio);} catch(Exception e){message=e.getMessage();}};
+            if(sending!=null)sending.cancelled=true;message="正在切换投送内容";return;
+        }
+        String target=host.multimediaTarget(address);
+        if(target.isEmpty())throw new IOException("请填写电视地址");
+        host.checkMultimediaStart();
+        Session session=new Session(target,new MultimediaInput(host,uri),name,preserveAudio);
+        sending=session;message="正在读取本地文件";
+        session.thread=new Thread(() -> run(session),"multimedia-session");session.thread.start();
+    }
     private void run(Session s) {
         CastNetworkLease wifi=new CastNetworkLease(); PowerManager.WakeLock cpu=null;
         boolean suspended=false;
         try {
             message="正在连接电视";
             JSONObject hello=request(s.target,new JSONObject().put("action","hello"));
-            if(hello.optInt("protocol")!=1) throw new IOException("请先更新电视端应用");
+            if(hello.optInt("protocol")!=1 || !host.multimediaTakeoverSession().isEmpty() && !hello.optBoolean("takeoverMedia")) throw new IOException("请先更新电视端应用，以支持保留网页切换多媒体");
             CastConfig config=onUi(() -> { host.checkMultimediaStart(); host.suspendForMultimedia(false); return host.multimediaConfig(); });
             suspended=true; wifi.acquire(host);
             cpu=((PowerManager)host.getSystemService(android.content.Context.POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"nTv:multimedia");
@@ -79,13 +95,13 @@ final class MultimediaCastManager implements Closeable {
             if(local.contains(":")) local="["+local+"]";
             request(s.target,new JSONObject().put("action","start").put("token",s.token)
                     .put("url","rtsp://"+local+":"+s.stream.server.port()+"/cast")
-                    .put("transport",config.transport).put("image",s.stream.isImage()).put("title",s.name));
+                    .put("takeoverSession",host.multimediaTakeoverSession()).put("transport",config.transport).put("image",s.stream.isImage()).put("title",s.name));
             s.startedRemote = true;
             message="正在投送 · H.264 / RTSP"; long last=SystemClock.elapsedRealtime();
             while(!s.cancelled&&!s.finished) {
                 try {
                     JSONObject beat=request(s.target,new JSONObject().put("action","heartbeat").put("token",s.token));
-                    if(!beat.optBoolean("active")) throw new IOException("电视已结束投送");
+                    if(!beat.optBoolean("active")) {s.cancelled=true;break;}
                     last=SystemClock.elapsedRealtime();
                 } catch(Exception failure) {if(SystemClock.elapsedRealtime()-last>=3000)throw new IOException("电视连接已断开");}
                 Thread.sleep(700);
@@ -95,37 +111,42 @@ final class MultimediaCastManager implements Closeable {
             message=s.cancelled?"已结束投送":"播放结束";
         } catch(Exception failure) { message=s.cancelled?"已结束投送":failure.getMessage(); }
         finally {
+            transitioning=true;
             final long position = s.stream == null ? 0 : s.stream.positionMs();
             final boolean image = s.stream != null && s.stream.isImage();
             if(s.stream!=null)s.stream.close();
             wifi.release(); if(cpu!=null&&cpu.isHeld())cpu.release();
-            if(sending==s)sending=null;
-            if(suspended)ui.post(() -> {
-                if(destroyed || sending != null) {s.file.delete();return;}
-                if(s.startedRemote && s.resumeLocal) host.resumeSentMultimedia(s.file,s.name,image,position);
+            if(suspended) {
+                try {onUi(() -> {
+                if(sending==s)sending=null;
+                if(destroyed || sending != null) {s.file.delete();return null;}
+                if(host.restoreMultimediaWeb()) {s.file.delete();}
+                else if(s.startedRemote && s.resumeLocal) host.resumeSentMultimedia(s.file,s.name,image,position);
                 else {s.file.delete();if(s.resumeLocal)host.restoreAfterMultimedia();}
-            });
-            else s.file.delete();
+                return null;
+                });}catch(Exception ignored){}
+            } else {if(sending==s)sending=null;s.file.delete();}
             // Resume locally before waiting on an unreachable TV's final stop request.
             try {request(s.target,new JSONObject().put("action","stop").put("token",s.token));} catch(Exception ignored) {}
+            ui.post(() -> {transitioning=false;Runnable next=pendingLocal;pendingLocal=null;if(!destroyed && next!=null)next.run();});
         }
     }
     JSONObject state() throws Exception {
         Session s=sending;
-        return new JSONObject().put("ok",true).put("active",s!=null).put("message",message)
+        return new JSONObject().put("ok",true).put("active",s!=null || transitioning).put("message",message)
                 .put("positionMs",s!=null&&s.stream!=null?s.stream.positionMs():0);
     }
     String control(JSONObject request) throws Exception {
         String action=request.optString("action");
         if("state".equals(action))return state().toString();
-        if("stopSending".equals(action)) {Session s=sending;if(s!=null){s.cancelled=true;if(s.stream!=null)s.stream.close();}return state().toString();}
+        if("stopSending".equals(action)) {return onUi(() -> {returnToPrevious();return state().toString();});}
         return onUi(() -> {
             JSONObject result=new JSONObject().put("ok",true).put("protocol",1);
-            if("hello".equals(action))return result.toString();
+            if("hello".equals(action))return result.put("takeoverMedia",true).toString();
             String token=request.optString("token");
             if(token.isEmpty())throw new IOException("缺少会话标识");
             if("start".equals(action)) {
-                host.checkMultimediaStart();
+                host.checkMultimediaReceiver(request.optString("takeoverSession"));
                 if(active())throw new IOException("电视正在投送，请先结束当前会话");
                 URI stream=new URI(request.optString("url"));
                 if(!"rtsp".equals(stream.getScheme())||stream.getHost()==null||!"/cast".equals(stream.getPath()))throw new IOException("无效的 RTSP 地址");
@@ -145,7 +166,13 @@ final class MultimediaCastManager implements Closeable {
         if(receiverToken.isEmpty())return;receiverToken="";ui.removeCallbacks(watchdog);
         if(!destroyed)host.restoreAfterMultimedia();
     }
-    void stop(){Session s=sending;if(s!=null){s.resumeLocal=false;s.cancelled=true;if(s.stream!=null)s.stream.close();}endReceiver();}
+    void returnToPrevious() {
+        pendingLocal=null;
+        Session s=sending;
+        if(s!=null){s.cancelled=true;return;}
+        endReceiver();
+    }
+    void stop(){pendingLocal=null;Session s=sending;if(s!=null){s.resumeLocal=false;s.cancelled=true;if(s.stream!=null)s.stream.close();}endReceiver();}
     @Override public void close(){destroyed=true;stop();}
     private static JSONObject request(String base,JSONObject data)throws Exception {
         HttpURLConnection c=NetworkClient.open(new URL(base+"/api/multimedia/control"));
@@ -162,8 +189,8 @@ final class MultimediaCastManager implements Closeable {
         } finally {c.disconnect();}
     }
     private static final class Session {
-        final String target,token=UUID.randomUUID().toString(),name;final File file;
+        final String target,token=UUID.randomUUID().toString(),name;final MultimediaInput file;
         final boolean preserveAudio;volatile boolean cancelled,finished;volatile boolean startedRemote,resumeLocal=true;volatile String error="";volatile MultimediaStream stream;Thread thread;
-        Session(String target,File file,String name,boolean preserveAudio){this.preserveAudio=preserveAudio;this.target=target;this.file=file;this.name=name;}
+        Session(String target,MultimediaInput file,String name,boolean preserveAudio){this.preserveAudio=preserveAudio;this.target=target;this.file=file;this.name=name;}
     }
 }

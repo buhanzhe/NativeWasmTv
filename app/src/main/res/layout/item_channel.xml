@@ -70,6 +70,7 @@
         android:layout_width="34dp"
         android:layout_height="34dp"
         android:layout_marginLeft="4dp"
+        android:layout_marginRight="4dp"
         android:background="@drawable/favorite_button_background"
         android:clickable="true"
         android:contentDescription="收藏"

@@ -40,7 +40,7 @@
     }
     function schedule() {
       if (busy || !queue.length) return;
-      if (queue[0].body.action !== "move" && queue[0].body.action !== "scroll") { pump(); return; }
+      if (queue[0].body.action !== "move" && queue[0].body.action !== "scroll" && queue[0].body.action !== "zoom" && (queue[0].body.action !== "webSwipe" || queue[0].body.end)) { pump(); return; }
       if (scheduled) return;
       scheduled = true;
       frame(function () { scheduled = false; pump(); });
@@ -59,6 +59,12 @@
           oldX * nextX < 0 ? nextX : oldX + nextX));
         tail.body.scrollY = Math.max(-1440, Math.min(1440,
           oldY * nextY < 0 ? nextY : oldY + nextY));
+      } else if (!done && tail && !tail.done && body.action === "webSwipe" && tail.body.action === "webSwipe"
+          && !body.end && !tail.body.end && body.gestureId === tail.body.gestureId) {
+        tail.body.scrollX = Math.max(-1440, Math.min(1440, tail.body.scrollX + body.scrollX));
+      } else if (!done && tail && !tail.done && body.action === "zoom" && tail.body.action === "zoom") {
+        // Relative scales compose by multiplication, preserving small pinch samples.
+        tail.body.zoomFactor = Math.max(0.1, Math.min(10, tail.body.zoomFactor * body.zoomFactor));
       } else {
         // Bound backlog during network stalls, without dropping just an UP edge.
         if (queue.length >= 64) {
@@ -151,7 +157,7 @@
   global.NtvTrackpadGesture = function () {
     var ids = [], startX = 0, startY = 0, lastX = 0, lastY = 0,
       startDistance = 0, lastDistance = 0, lastAt = 0, speed = 0,
-      remainderX = 0, remainderY = 0, mode = "", pinchVotes = 0;
+      remainderX = 0, remainderY = 0, mode = "";
     function points(touches) {
       var found = {}, i;
       for (i = 0; i < touches.length; i++) found[String(touches[i].identifier)] = touches[i];
@@ -167,7 +173,7 @@
     }
     this.begin = function (touches, time) {
       var dx, dy;
-      mode = ""; speed = 0; remainderX = 0; remainderY = 0; pinchVotes = 0;
+      mode = ""; speed = 0; remainderX = 0; remainderY = 0;
       ids = [String(touches[0].identifier), String(touches[1].identifier)];
       startX = lastX = (touches[0].clientX + touches[1].clientX) / 2;
       startY = lastY = (touches[0].clientY + touches[1].clientY) / 2;
@@ -183,25 +189,21 @@
       var totalX = value.x - startX, totalY = value.y - startY,
         pan = Math.sqrt(totalX * totalX + totalY * totalY),
         pinch = Math.abs(value.distance - startDistance), activated = false,
-        pinchThreshold = Math.max(12, startDistance * 0.08),
+        pinchThreshold = Math.max(4, startDistance * 0.025),
         pinchCandidate = pinch >= pinchThreshold && pinch > pan * 1.4;
       if (!mode) {
-        // A vertical two-finger swipe often changes the measured finger spacing by
-        // a few pixels. Require two consecutive, clearly dominant spacing changes
-        // before locking into zoom; ordinary scrolling should win immediately.
-        pinchVotes = pinchCandidate ? pinchVotes + 1 : 0;
-        if (pinchVotes >= 2) mode = "pinch";
+        // Spacing must dominate translation, but no second sample or 12px dead zone.
+        if (pinchCandidate) mode = "pinch";
         else if (pan >= 5) mode = "scroll";
         else { lastX = value.x; lastY = value.y; lastDistance = value.distance; return null; }
         activated = true;
       }
       if (mode === "pinch") {
-        // Include the deliberate movement used to cross the stronger threshold so
-        // zoom still starts promptly once the gesture is unambiguous.
+        // Include activation travel and retain fractional changes throughout the gesture.
         var factor = value.distance / Math.max(1, activated ? startDistance : lastDistance);
         lastX = value.x; lastY = value.y; lastDistance = value.distance; lastAt = time;
-        factor = Math.max(0.86, Math.min(1.16, factor));
-        return Math.abs(factor - 1) < 0.002 ? null : { type: "pinch", factor: factor };
+        factor = Math.max(0.1, Math.min(10, Math.pow(factor, 1.25)));
+        return factor === 1 ? null : { type: "pinch", factor: factor };
       }
       var elapsed = Math.max(4, Math.min(80, time - lastAt || 16)),
         dx = activated ? totalX : value.x - lastX,

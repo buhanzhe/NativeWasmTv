@@ -165,7 +165,7 @@
     <LinearLayout
         android:id="@+id/channel_bar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="118dp"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="18dp"
         android:background="@drawable/player_info_background"
@@ -183,7 +183,7 @@
             android:layout_width="26dp"
             android:layout_height="26dp"
             android:layout_marginRight="10dp"
-            android:visibility="gone" />
+            android:visibility="invisible" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -254,10 +254,11 @@
                 android:layout_marginTop="5dp"
                 android:ellipsize="end"
                 android:maxLines="2"
+                android:minLines="2"
                 android:lineSpacingExtra="3dp"
                 android:textColor="#E0FFFFFF"
                 android:textSize="12sp"
-                android:visibility="gone" />
+                android:visibility="invisible" />
         </LinearLayout>
 
     </LinearLayout>
@@ -317,7 +318,7 @@
 
             <TextView
                 android:id="@+id/epg_toggle"
-                android:layout_width="28dp"
+                android:layout_width="40dp"
                 android:layout_height="120dp"
                 android:layout_gravity="center_vertical"
                 android:gravity="center"

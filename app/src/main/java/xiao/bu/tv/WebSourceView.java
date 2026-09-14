@@ -94,6 +94,7 @@ public final class WebSourceView extends FrameLayout {
     private boolean loadImages = true;
     private int viewportWidth = VIEWPORT_720P_WIDTH;
     private int viewportHeight = VIEWPORT_720P_HEIGHT;
+    private float loadingInterfaceScale = 1f;
     private int compatibilityInjectionCount;
     private String compatibilityBundleUrl;
     private byte[] compatibilityBundle;
@@ -264,8 +265,7 @@ public final class WebSourceView extends FrameLayout {
         settings.setSupportZoom(false);
         settings.setGeolocationEnabled(false);
         if (Build.VERSION.SDK_INT >= 17) {
-            // Let the website choose whether to start. Do not force play()/unmute
-            // through JS; requiring a gesture makes some players fall back to
+            // Let the website choose whether to start. Requiring a gesture makes some players fall back to
             // muted autoplay even when their own volume preference is audible.
             settings.setMediaPlaybackRequiresUserGesture(false);
         }
@@ -276,6 +276,17 @@ public final class WebSourceView extends FrameLayout {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
         CookieManager.getInstance().setAcceptCookie(true);
+    }
+
+    void setMultimediaPaused(boolean paused) {
+        if(webView==null)return;
+        String script=paused
+            ? "(function(){if(window.__ntvMediaPause)return;var saved=[];function scan(d){var m=d.querySelectorAll('audio,video');for(var i=0;i<m.length;i++){var e=m[i];if(!e.__ntvPaused){e.__ntvPaused=true;saved.push([e,e.muted,!e.paused]);}e.muted=true;e.pause();}var f=d.querySelectorAll('iframe');for(var j=0;j<f.length;j++){try{if(f[j].contentDocument)scan(f[j].contentDocument);}catch(ignore){}}}var proto=window.HTMLMediaElement&&HTMLMediaElement.prototype,originalPlay=proto&&proto.play;function blockedPlay(){if(!this.__ntvPaused){this.__ntvPaused=true;saved.push([this,this.muted,true]);}else{for(var j=0;j<saved.length;j++){if(saved[j][0]===this){saved[j][2]=true;break;}}}this.muted=true;this.pause();return window.Promise?Promise.resolve():undefined;}if(proto)proto.play=blockedPlay;function apply(){scan(document);}apply();var timer=setInterval(apply,250);window.__ntvMediaPause=function(){clearInterval(timer);if(proto&&proto.play===blockedPlay)proto.play=originalPlay;for(var i=0;i<saved.length;i++){var a=saved[i];a[0].muted=a[1];delete a[0].__ntvPaused;if(a[2]){var p=a[0].play();if(p&&p.catch)p.catch(function(){});}}delete window.__ntvMediaPause;};})();"
+            : "if(window.__ntvMediaPause)window.__ntvMediaPause();";
+        if(!paused)webView.onResume();
+        if(Build.VERSION.SDK_INT>=19)webView.evaluateJavascript(script,null);
+        else webView.loadUrl("javascript:"+script);
+        if(paused)webView.onPause();
     }
 
     private void replaceWebViewForNewPage() {
@@ -377,6 +388,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private void updateDesktopViewport(int width, int height) {
+        int previousViewportWidth = viewportWidth;
         // Configuration is applied during Activity startup, before this container has
         // a measured size. The configured resolution controls the virtual width; the
         // virtual height follows the real WebView area so pages fill every aspect ratio.
@@ -400,6 +412,9 @@ public final class WebSourceView extends FrameLayout {
             viewportHeight = VIEWPORT_1080P_HEIGHT;
         } else {
             viewportHeight = VIEWPORT_720P_HEIGHT;
+        }
+        if (previousViewportWidth != viewportWidth) {
+            setInterfaceScale(loadingInterfaceScale);
         }
         updateDesktopProfile();
         if (webView == null) {
@@ -604,7 +619,7 @@ public final class WebSourceView extends FrameLayout {
 
     private void applyCastEdgeState() {
         boolean visible = pageActive && castEdgeAvailable
-                && (castCaptureActive ? castPointerVisible : castEdgeTransientVisible);
+                && !castCaptureActive && castEdgeTransientVisible;
         castEdgeController.setState(visible,
                 castEdgeCasting, castEdgeBusy, castEdgeContentName);
         if (visible) castEdgeController.bringToFront();
@@ -614,7 +629,14 @@ public final class WebSourceView extends FrameLayout {
         return castCaptureActive && hasRetainedPage() && isPageVisible() ? webView : null;
     }
 
+    private String channelPageScript = "";
+
     void open(int newRequestId, String url) {
+        open(newRequestId, url, "");
+    }
+
+    void open(int newRequestId, String url, String pageScript) {
+        channelPageScript = pageScript == null ? "" : pageScript;
         rendererRetries = 0;
         openPage(newRequestId, url);
     }
@@ -624,6 +646,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void navigateCastPage(int newRequestId, String url) {
+        channelPageScript = "";
         rendererRetries = 0;
         openPage(newRequestId, url, true);
     }
@@ -663,17 +686,27 @@ public final class WebSourceView extends FrameLayout {
         webView.loadUrl(url);
     }
 
+    private boolean pinchViewportPosted;
+    private final Runnable applyPinchViewport = new Runnable() {
+        @Override public void run() {
+            pinchViewportPosted = false;
+            if (webView == null || !pageActive || destroyed) return;
+            webView.setInitialScale(cssInitialScalePercent());
+            updateDesktopProfile();
+            applyDesktopViewport();
+        }
+    };
+
     void adjustCurrentPageScale(float factor) {
         if (webView == null || !pageActive || destroyed
                 || Float.isNaN(factor) || Float.isInfinite(factor)) return;
         float next = Math.max(0.5f, Math.min(3f, currentPageScale * factor));
-        next = Math.round(next * 100f) / 100f;
-        if (Math.abs(next - currentPageScale) < 0.01f) return;
+        if (next == currentPageScale) return;
         currentPageScale = next;
-        webView.setInitialScale(cssInitialScalePercent());
-        updateDesktopViewport(getWidth(), getHeight());
-        applyDesktopViewport();
-        scheduleDesktopViewport(120L);
+        if (!pinchViewportPosted) {
+            pinchViewportPosted = true;
+            postDelayed(applyPinchViewport, 16L);
+        }
     }
 
     private void onRendererGone(WebView failed, boolean crashed) {
@@ -714,6 +747,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void closePage() {
+        channelPageScript = "";
         if (renderDiagnostics != null) renderDiagnostics.stop("closed");
         hideFullscreenView();
         if (destroyed) {
@@ -758,12 +792,14 @@ public final class WebSourceView extends FrameLayout {
 
     /** Keep WebView pixels in the View hierarchy while it is drawn to a cast Surface. */
     void setCastCaptureActive(boolean active, int frameRate) {
+        boolean returningToPhone = castCaptureActive && !active;
         castCaptureActive = active;
         castCaptureFrameRate = active ? Math.max(1, frameRate) : 0;
         if (!active) castPointerVisible = true;
         applyCastCaptureLayer(webView);
         applyCastFrameRate(webView);
         applyCastEdgeState();
+        if (returningToPhone && pageActive) showCastEdgeTemporarily();
         updateDesktopViewport(getWidth(), getHeight());
         if (webView != null) {
             webView.setInitialScale(cssInitialScalePercent());
@@ -823,6 +859,8 @@ public final class WebSourceView extends FrameLayout {
             return;
         }
         hideFullscreenView();
+        // onPause alone does not stop a late site play() from stealing IJK audio focus.
+        setMultimediaPaused(true);
         setLoadingVisible(false);
         setVisibility(View.GONE);
         updatePageLifecycle();
@@ -835,6 +873,7 @@ public final class WebSourceView extends FrameLayout {
         setVisibility(View.VISIBLE);
         bringToFront();
         updatePageLifecycle();
+        setMultimediaPaused(false);
         webView.requestFocus();
         updateDesktopViewport(getWidth(), getHeight());
         return true;
@@ -886,6 +925,47 @@ public final class WebSourceView extends FrameLayout {
         return true;
     }
 
+    private String horizontalScrollProbeScript;
+
+    void probeHorizontalScroll(float screenX, float screenY, final android.webkit.ValueCallback<Boolean> callback) {
+        if (webView == null || !pageActive || !isPageVisible() || Build.VERSION.SDK_INT < 19) {
+            callback.onReceiveValue(true); // Unknown capability must never trigger history navigation.
+            return;
+        }
+        try {
+            if (horizontalScrollProbeScript == null) {
+                InputStream input = getResources().openRawResource(R.raw.web_horizontal_scroll_probe);
+                try {
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    byte[] buffer = new byte[4096]; int count;
+                    while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+                    horizontalScrollProbeScript = bytes.toString("UTF-8");
+                } finally { input.close(); }
+            }
+            int[] location = new int[2]; webView.getLocationOnScreen(location);
+            float x = (screenX - location[0]) / Math.max(.01f, webView.getScaleX() * webView.getScale());
+            float y = (screenY - location[1]) / Math.max(.01f, webView.getScaleY() * webView.getScale());
+            webView.evaluateJavascript(horizontalScrollProbeScript + "(" + x + "," + y + ")",
+                    value -> callback.onReceiveValue(!"false".equals(value)));
+        } catch (Exception error) { callback.onReceiveValue(true); }
+    }
+
+    boolean goForwardIfPossible() {
+        if (webView == null || !isPageVisible() || destroyed || !pageActive) return false;
+        WebBackForwardList history = webView.copyBackForwardList();
+        if (history == null) return false;
+        for (int index = history.getCurrentIndex() + 1; index < history.getSize(); index++) {
+            WebHistoryItem item = history.getItemAtIndex(index);
+            if (item != null && isWebPage(item.getUrl())) {
+                hideFullscreenView();
+                setLoadingVisible(true);
+                webView.goBackOrForward(index - history.getCurrentIndex());
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int previousWebPageIndex(WebBackForwardList history, int currentIndex) {
         if (history == null || currentIndex <= 0) {
             return -1;
@@ -914,7 +994,9 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void setInterfaceScale(float scale) {
-        float safeScale = Math.max(0.9f, Math.min(2f, scale));
+        loadingInterfaceScale = Math.max(0.9f, Math.min(2f, scale));
+        float safeScale = loadingInterfaceScale
+                * Math.max(0.5f, Math.min(1f, viewportWidth / (float) VIEWPORT_4K_WIDTH));
         // Resize each native element instead of scaling a pre-rendered card. Scaling the
         // whole hierarchy makes text and the spinner visibly soft on 4K televisions.
         loadingOverlay.setScaleX(1f);
@@ -1116,9 +1198,8 @@ public final class WebSourceView extends FrameLayout {
                 return nested;
             }
         }
-        return lower.indexOf(".m3u8") >= 0
-                || lower.indexOf("format=m3u8") >= 0
-                || lower.indexOf("type=m3u8") >= 0 ? url : null;
+        // A media URL inside an analytics query is not itself a playable resource.
+        return lower.matches(".*[?&](format|type)=m3u8(?:[&#].*)?$") ? url : null;
     }
 
     private static String decodeUrl(String value) {
@@ -1139,11 +1220,10 @@ public final class WebSourceView extends FrameLayout {
             if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
                 return false;
             }
-            // Keep redirects and links inside the same TV WebView. This also covers a
-            // source whose landing page later moves to a site-specific route.
-            pageUrl = url;
-            view.loadUrl(url);
-            return true;
+            // Let WebView commit links and redirects itself. Reissuing loadUrl here
+            // cancels the original navigation and replaces its history semantics.
+            // onPageStarted updates pageUrl when the navigation actually commits.
+            return false;
         }
 
         @Override
@@ -1156,6 +1236,8 @@ public final class WebSourceView extends FrameLayout {
             if (!url.equals(view.getUrl())) return;
             pageUrl = url;
             compatibilityInjectionCount = 0;
+            WebAudioCompatibility.apply(view);
+            if (!isPageVisible()) setMultimediaPaused(true);
             setLoadingVisible(true);
             updateDesktopViewport(getWidth(), getHeight());
             if (desktopProfile != null && !desktopProfile.hasDocumentStartProtection()) {
@@ -1184,6 +1266,18 @@ public final class WebSourceView extends FrameLayout {
             applyDesktopViewport();
             scheduleDesktopViewport(250L);
             scheduleDesktopViewport(1000L);
+            WebAudioCompatibility.apply(view);
+            // Ku9's jscode runs in the opened document, never in the resolver's
+            // hidden WebView. A document guard prevents duplicate finished events
+            // from installing repeated timers; close/open clears the channel script.
+            if (channelPageScript.length() > 0) {
+                String script = "(function(){if(window.__ntvKu9PageScript)return;"
+                        + "window.__ntvKu9PageScript=true;try{" + channelPageScript
+                        + "\n}catch(e){console.warn('Ku9 page script: '+e);}})();";
+                if (Build.VERSION.SDK_INT >= 19) view.evaluateJavascript(script, null);
+                else view.loadUrl("javascript:" + script);
+            }
+            if (!isPageVisible()) setMultimediaPaused(true);
             setLoadingVisible(false);
             if (listener != null) {
                 listener.onPageReady(requestId, url, view.getTitle());
@@ -1243,6 +1337,8 @@ public final class WebSourceView extends FrameLayout {
 
     private void injectJavascriptCompatibility(WebView view) {
         compatibilityInjectionCount++;
+        WebAudioCompatibility.apply(view);
+        if (!isPageVisible()) setMultimediaPaused(true);
         String script = javascriptCompatibilityScript();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             view.evaluateJavascript(script, null);

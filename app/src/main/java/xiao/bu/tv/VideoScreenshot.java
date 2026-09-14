@@ -46,7 +46,7 @@ final class VideoScreenshot {
 
     byte[] capture(final Source source) throws IOException {
         if (Build.VERSION.SDK_INT < 24) {
-            throw new IOException("当前设备的 Surface 视频截屏需要 Android 7.0 或以上版本");
+            return captureLegacy(source);
         }
         if (!busy.compareAndSet(false, true)) {
             throw new IOException("正在截屏，请稍后再试");
@@ -96,6 +96,65 @@ final class VideoScreenshot {
         } finally {
             bitmap.recycle();
             busy.set(false);
+        }
+    }
+
+    private static <T> T onMain(java.util.concurrent.Callable<T> action) throws IOException {
+        java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<T>(action);
+        new Handler(Looper.getMainLooper()).post(task);
+        try { return task.get(8, TimeUnit.SECONDS); }
+        catch (Exception error) { task.cancel(false); throw new IOException("截图切换输出失败", error); }
+    }
+
+    private byte[] captureLegacy(final Source source) throws IOException {
+        if (!busy.compareAndSet(false, true)) throw new IOException("正在截屏，请稍后再试");
+        LegacyVideoFrame frame = null;
+        Bitmap bitmap = null;
+        Target target = null;
+        try {
+            target = onMain(() -> source.current());
+            if (!(target.session instanceof tv.danmaku.ijk.media.player.IMediaPlayer))
+                throw new IOException("当前播放器不支持截图");
+            final Target current = target;
+            frame = new LegacyVideoFrame(target.width, target.height);
+            final android.view.Surface surface = frame.surface();
+            onMain(() -> {
+                if (source.current().session != current.session) throw new IOException("频道已切换，请重试");
+                tv.danmaku.ijk.media.player.IMediaPlayer player =
+                        (tv.danmaku.ijk.media.player.IMediaPlayer) current.session;
+                player.setDisplay(null);
+                player.setSurface(surface);
+                return null;
+            });
+            bitmap = frame.read();
+            onMain(() -> {
+                if (source.current().session != current.session) throw new IOException("频道已切换，请重试");
+                return null;
+            });
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IOException("截图图片生成失败");
+            return out.toByteArray();
+        } catch (OutOfMemoryError error) {
+            throw new IOException("内存不足，暂时无法截图");
+        } finally {
+            final Target restore = target;
+            try {
+                if (restore != null) onMain(() -> {
+                    Target active;
+                    try { active = source.current(); } catch (IOException stopped) { return null; }
+                    if (active.session == restore.session) {
+                        tv.danmaku.ijk.media.player.IMediaPlayer player =
+                                (tv.danmaku.ijk.media.player.IMediaPlayer) restore.session;
+                        player.setSurface(null);
+                        player.setDisplay(restore.view.getHolder());
+                    }
+                    return null;
+                });
+            } finally {
+                if (bitmap != null) bitmap.recycle();
+                if (frame != null) frame.close();
+                busy.set(false);
+            }
         }
     }
 

@@ -217,8 +217,9 @@ final class ChannelListAdapter extends BaseAdapter {
                     ? R.drawable.collection_fill : R.drawable.collection);
             holder.favorite.setContentDescription(favorite ? "取消收藏" : "收藏");
             holder.favorite.setSelected(favoriteFocused);
-            holder.favorite.setScaleX(favoriteFocused ? 1.08f : 1f);
-            holder.favorite.setScaleY(favoriteFocused ? 1.08f : 1f);
+            // Keep the focus border inside the measured button bounds.
+            holder.favorite.setScaleX(1f);
+            holder.favorite.setScaleY(1f);
             holder.favorite.setTag(Integer.valueOf(position));
             holder.favorite.setOnClickListener(favoriteClickListener);
             holder.favorite.setOnTouchListener(favoriteTouchListener);

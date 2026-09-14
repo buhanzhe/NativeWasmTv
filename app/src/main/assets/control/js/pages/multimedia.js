@@ -7,10 +7,22 @@ function multimediaFailure(message) {
   toast(message, true);
 }
 function beginMultimediaChoice() {
+  if (!multimediaTarget()) { multimediaFailure("请先连接电视"); return false; }
   if (multimediaUpload || document.getElementById("multimediaChoose").disabled) return false;
+  if (window.NtvDevice && typeof NtvDevice.chooseLocalMultimedia === "function") {
+    try {
+      var target = multimediaTarget();
+      if (!target) throw new Error("请先连接电视");
+      multimediaChoosing = true;
+      multimediaNotice = true;
+      showMultimediaStatus("请选择本地图片、视频或音乐");
+      NtvDevice.chooseLocalMultimedia(target, !!document.getElementById("multimediaPreserveAudio").checked);
+    } catch (error) { multimediaChoosing = false; multimediaFailure(error.message); }
+    return false;
+  }
   multimediaNotice = true;
   multimediaChoosing = true;
-  showMultimediaStatus("请选择图片或视频，选好后将开始读取文件");
+  showMultimediaStatus("请选择图片、视频或音乐，选好后将开始读取文件");
   return true;
 }
 function multimediaChooserResult(message) {
@@ -27,14 +39,14 @@ function showMultimediaStatus(text) {
   document.getElementById("multimediaStatus").textContent = text || "";
 }
 function pollMultimedia() {
-  if (document.hidden || multimediaUpload || multimediaPollFlight) return;
+  if (document.hidden || !multimediaTarget() || multimediaUpload || multimediaPollFlight) return;
   var flight = multimediaPollFlight = {};
   flight.request = api("/api/multimedia/control", { action: "state" }, function (error, result) {
     if (multimediaPollFlight !== flight) return;
     multimediaPollFlight = null;
     if (document.hidden || multimediaUpload) return;
     if (error || !result) return;
-    document.getElementById("multimediaChoose").disabled = !!result.active;
+    document.getElementById("multimediaChoose").disabled = !!result.active && !(window.NtvDevice && typeof NtvDevice.chooseLocalMultimedia === "function");
     document.getElementById("multimediaStop").style.display = result.active ? "" : "none";
     if (!multimediaNotice && !multimediaChoosing) showMultimediaStatus(result.message);
   });
@@ -42,13 +54,12 @@ function pollMultimedia() {
 function sendMultimediaFile(input) {
   var file = input.files && input.files[0], target;
   multimediaChoosing = false;
-  if (!file) { multimediaFailure("未取得文件，请重新选择图片或视频"); return; }
+  if (!file) { multimediaFailure("未取得文件，请重新选择图片、视频或音乐"); return; }
   multimediaNotice = false;
   try {
-    if (state && state.takeoverReceiverUrl) throw new Error("请先退出接管，再投送多媒体");
-    target = normalizeReceiverAddress(document.getElementById("remoteCatalogUrl").value);
-    if (!target) throw new Error("请先填写上方电视地址");
-    if (!file.size || file.size > 1024 * 1024 * 1024) throw new Error("请选择不超过 1 GB 的图片或视频");
+    target = multimediaTarget();
+    if (!target) throw new Error("请先连接电视");
+    if (!file.size || file.size > 1024 * 1024 * 1024) throw new Error("请选择不超过 1 GB 的图片、视频或音乐");
   } catch (error) { input.value = ""; multimediaFailure(error.message); return; }
   var xhr = multimediaUpload = new XMLHttpRequest();
   document.getElementById("multimediaChoose").disabled = true;
@@ -87,5 +98,44 @@ document.addEventListener("visibilitychange", function () {
     if (flight && flight.request) flight.request.abort();
   } else pollMultimedia();
 }, false);
-setInterval(pollMultimedia, 1500);
+setInterval(function () { if (!document.hidden) refresh(); pollMultimedia(); }, 1500);
 pollMultimedia();
+
+function multimediaLocalResult(error) {
+  multimediaChoosing = false;
+  multimediaNotice = false;
+  if (error) multimediaFailure(error);
+  else { showMultimediaStatus("正在读取本地文件并连接电视…"); pollMultimedia(); }
+}
+
+function multimediaTarget() {
+  if (!state || state.canInitiateTakeover !== true || !state.takeoverReceiverUrl) return "";
+  try { return normalizeReceiverAddress(state.takeoverReceiverUrl); } catch (ignored) { return ""; }
+}
+function renderMultimediaEntry() {
+  var connected = !!multimediaTarget(), button = document.getElementById("mediaMultimediaButton");
+  if (button) button.hidden = !connected;
+  if (!connected) mediaCloseMultimedia();
+}
+function renderPageState() {
+  renderMultimediaEntry();
+  if (window.NtvChannelPicker) NtvChannelPicker.update(state);
+}
+function afterStateRefresh(error) {
+  if (error) { state = null; renderMultimediaEntry(); }
+}
+function mediaOpenMultimedia() {
+  if (!multimediaTarget()) { toast("请先连接电视", true); return; }
+  mediaDismissSheet();
+  var sheet = document.getElementById("mediaMultimediaBackdrop");
+  sheet.className = "media-sheet-backdrop open";
+  sheet.setAttribute("aria-hidden", "false");
+  pollMultimedia();
+}
+function mediaCloseMultimedia() {
+  var sheet = document.getElementById("mediaMultimediaBackdrop");
+  if (!sheet) return;
+  sheet.className = "media-sheet-backdrop";
+  sheet.setAttribute("aria-hidden", "true");
+}
+startPage();

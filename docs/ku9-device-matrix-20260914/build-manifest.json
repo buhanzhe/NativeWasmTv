@@ -1,0 +1,33 @@
+{
+  "apk": [
+    {
+      "file": "app/build/outputs/apk/arm32/debug/app-arm32-debug.apk",
+      "bytes": 4485646,
+      "sha256": "8b7655176e49066c496e4b0cfd894c9e93855ed66d5c09bec22dcb54cb47029b"
+    },
+    {
+      "file": "app/build/outputs/apk/arm32/release/app-arm32-release.apk",
+      "bytes": 3297822,
+      "sha256": "3309713becb93b834f97b8f1615f2b93f8788bb02a941f1ea13052c6022cf9b7"
+    },
+    {
+      "file": "app/build/outputs/apk/androidTest/arm32/debug/app-arm32-debug-androidTest.apk",
+      "bytes": 236909,
+      "sha256": "47d68516fdf0d92417ce7beaf7efc03f7619f404957b0a6da4b67db9fe135ff3"
+    },
+    {
+      "file": "app/build/outputs/apk/androidTest/arm32/release/app-arm32-release-androidTest.apk",
+      "bytes": 125243,
+      "sha256": "c6efe8726c2ea07f53605c1259846a12bff63ca0a6a8c7075ade9f0082d56da8"
+    }
+  ],
+  "fixtureSha256": "2c26b7076d5650b7d44de20cab027e935a25d743e3d45f583ad0ecc1ab02bb80",
+  "appBaseCommit": "0ea8b028c9abc78262645a9e95bbfca9716a57bf",
+  "note": "Working tree changes are included. Frozen scripts bypass original download transport; fixture hashes identify tested bytes.",
+  "finalApi19TestApk": {
+    "file": "app/build/outputs/apk/androidTest/arm32/release/app-arm32-release-androidTest.apk",
+    "bytes": 125255,
+    "sha256": "e8cc518c045e7df4b11c2370e112a9951e53195fdaa9f2e73b144649e68d3ab9",
+    "note": "Only test cleanup moved before activity startup; production APK and assertions unchanged. Used for final Android 4.4 release regression."
+  }
+}

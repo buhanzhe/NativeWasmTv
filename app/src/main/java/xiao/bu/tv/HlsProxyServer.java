@@ -102,7 +102,11 @@ final class HlsProxyServer implements Closeable {
     private static final int CCTV_LIVE_EDGE_HOLD_BACK_SEGMENTS = 2;
     private static final int CCTV_MIN_PLAYABLE_SEGMENTS = 2;
     private static final int TS_RESOLUTION_PROBE_BYTES = 384 * 1024;
-    private static final int MAX_PREALLOCATED_RESPONSE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_PLAYLIST_RESPONSE_BYTES = 2 * 1024 * 1024;
+    // Allow room for concurrent workers, decrypt buffers and the player on small heaps.
+    // This bounds whole-response buffering, not streamed media bitrate/resolution.
+    private static final int MAX_BUFFERED_RESPONSE_BYTES = (int) Math.max(256 * 1024,
+            Math.min(16 * 1024 * 1024L, Runtime.getRuntime().maxMemory() / 16));
     private static final int STREAM_COPY_BUFFER_BYTES = 64 * 1024;
     private static final String DEFAULT_USER_AGENT = "nTv/1.0";
     private static final String CARRIER_IPTV_USER_AGENT = "okhttp/3.10.0";
@@ -630,7 +634,8 @@ final class HlsProxyServer implements Closeable {
 
             String contentType = connection.getContentType();
             byte[] body = readUpstreamFully(connection.getInputStream(),
-                    connection.getContentLength());
+                    contentLength(connection), isPlaylist(originUrl, contentType)
+                            ? MAX_PLAYLIST_RESPONSE_BYTES : MAX_BUFFERED_RESPONSE_BYTES);
             responseConsumed = true;
             if (!running) {
                 throw new SocketException("Proxy closed");
@@ -1357,6 +1362,7 @@ final class HlsProxyServer implements Closeable {
     private boolean ensureCctvStartupGate(String playlistUrl,
             List<PlaylistSegment> playable) throws IOException {
         synchronized (cctvStartupLock) {
+            if (!running) throw new IOException("Proxy closed");
             if (Boolean.TRUE.equals(cctvStartupReady.get(playlistUrl))) {
                 return false;
             }
@@ -1397,6 +1403,7 @@ final class HlsProxyServer implements Closeable {
              * request thread. Its wasm runtime is then reused by the rolling prefetch
              * tasks, avoiding a full module allocation on every channel start. */
             for (int index = 0; index < cctvStartupDecryptSegments; index++) {
+                if (!running) throw new IOException("Proxy closed");
                 PlaylistSegment segment = playable.get(index);
                 if (!isCctvSegmentReady(segment.url)) {
                     getCctvSegment(segment.url);
@@ -1592,7 +1599,7 @@ final class HlsProxyServer implements Closeable {
                 return;
             }
             String body = new String(readUpstreamFully(connection.getInputStream(),
-                    connection.getContentLength()), UTF_8);
+                    contentLength(connection), MAX_PLAYLIST_RESPONSE_BYTES), UTF_8);
             if (!playlistUrl.equals(monitoredCctvPlaylistUrl)) {
                 return;
             }
@@ -2123,7 +2130,7 @@ final class HlsProxyServer implements Closeable {
                 return new VariantCandidate(variant, false, null);
             }
             String playlist = new String(readUpstreamFully(connection.getInputStream(),
-                    connection.getContentLength()), UTF_8);
+                    contentLength(connection), MAX_PLAYLIST_RESPONSE_BYTES), UTF_8);
             responseConsumed = true;
             String firstSegment = firstMediaSegment(url, playlist);
             if (firstSegment == null) {
@@ -2701,17 +2708,19 @@ final class HlsProxyServer implements Closeable {
         }
     }
 
-    private static byte[] readFully(InputStream input) throws IOException {
-        return readFully(input, -1);
-    }
-
     long getUpstreamDownloadedBytes() {
         return upstreamDownloadedBytes.get();
     }
 
     private byte[] readUpstreamFully(InputStream input, int expectedLength)
             throws IOException {
-        return readFully(new UpstreamInputStream(input), expectedLength);
+        return readUpstreamFully(input, expectedLength, MAX_BUFFERED_RESPONSE_BYTES);
+    }
+
+    private byte[] readUpstreamFully(InputStream input, long expectedLength, int limit)
+            throws IOException {
+        return BoundedResponseReader.read(new UpstreamInputStream(input), expectedLength,
+                Math.min(limit, MAX_BUFFERED_RESPONSE_BYTES));
     }
 
     private byte[] readUpstreamAtMost(InputStream input, int limit) throws IOException {
@@ -2739,38 +2748,6 @@ final class HlsProxyServer implements Closeable {
                 upstreamDownloadedBytes.addAndGet(count);
             }
             return count;
-        }
-    }
-
-    private static byte[] readFully(InputStream input, int expectedLength) throws IOException {
-        try {
-            if (expectedLength > 0 && expectedLength <= MAX_PREALLOCATED_RESPONSE_BYTES) {
-                byte[] body = new byte[expectedLength];
-                int offset = 0;
-                while (offset < body.length) {
-                    int count = input.read(body, offset, body.length - offset);
-                    if (count == -1) {
-                        break;
-                    }
-                    offset += count;
-                }
-                if (offset == body.length) {
-                    return body;
-                }
-                return Arrays.copyOf(body, offset);
-            }
-            int initialCapacity = expectedLength > 0
-                    && expectedLength <= MAX_PREALLOCATED_RESPONSE_BYTES
-                    ? expectedLength : 256 * 1024;
-            ByteArrayOutputStream output = new ByteArrayOutputStream(initialCapacity);
-            byte[] buffer = new byte[16 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
-            }
-            return output.toByteArray();
-        } finally {
-            input.close();
         }
     }
 
@@ -2901,9 +2878,8 @@ final class HlsProxyServer implements Closeable {
         synchronized (cctvDownloadedBodies) {
             cctvDownloadedBodies.clear();
         }
-        synchronized (cctvStartupLock) {
-            cctvStartupReady.clear();
-        }
+        // Startup holds this lock across network/decryption waits. Never acquire
+        // it on close (often the UI thread). This per-proxy map dies with the proxy.
         synchronized (recordingTokens) {
             recordingTokens.clear();
         }

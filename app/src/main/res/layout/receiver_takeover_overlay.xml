@@ -5,7 +5,7 @@
     android:background="#FF000000"
     android:clickable="true"
     android:focusable="true"
-    android:focusableInTouchMode="true"
+    android:focusableInTouchMode="false"
     android:visibility="gone">
 
     <LinearLayout

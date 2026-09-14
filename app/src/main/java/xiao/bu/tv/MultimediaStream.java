@@ -12,7 +12,7 @@ import net.ypresto.androidtranscoder.engine.*;
 /** File decoder -> H.264/AAC encoder -> paced RTSP, without screen/audio capture. */
 final class MultimediaStream implements Closeable {
     interface Listener { void ended(String error); }
-    private final File file;
+    private final MultimediaInput file;
     private final int width, height, fps, bitrate;
     private final Listener listener;
     private final ArrayBlockingQueue<Packet> packets = new ArrayBlockingQueue<>(32);
@@ -22,44 +22,48 @@ final class MultimediaStream implements Closeable {
     private Thread encoderThread, senderThread;
     final RtspCastServer server;
     private final boolean image;
+    private final boolean music;
     private final MediaExtractor extractor;
     private int videoTrack = -1, audioTrack = -1;
     private MediaFormat videoFormat, audioFormat;
     private final boolean preserveAudio;
     private int rotation;
 
-    MultimediaStream(File file, int maxWidth, int maxHeight, int fps, int bitrate, boolean preserveAudio, Listener listener) throws Exception {
+    MultimediaStream(MultimediaInput file, int maxWidth, int maxHeight, int fps, int bitrate, boolean preserveAudio, Listener listener) throws Exception {
         if (Build.VERSION.SDK_INT < 18) throw new IOException("多媒体转码需要 Android 4.3 或以上的手机");
         this.preserveAudio=preserveAudio;
         this.file = file; this.listener = listener; this.fps = Math.min(60, Math.max(15, fps));
         this.bitrate = Math.min(12000000, Math.max(1000000, bitrate));
         BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(file.getPath(), bounds); image = bounds.outWidth > 0;
+        file.decode(bounds); image = bounds.outWidth > 0;
         int sourceWidth = bounds.outWidth, sourceHeight = bounds.outHeight;
         if(image) try {
-            int orientation=new ExifInterface(file.getPath()).getAttributeInt(ExifInterface.TAG_ORIENTATION,1);
+            int orientation=file.orientation();
             rotation=orientation==6?90:orientation==3?180:orientation==8?270:0;
-        } catch(IOException ignored) {}
+        } catch(RuntimeException ignored) {}
         MediaExtractor source = null;
         try {
             if (!image) {
-                source = new MediaExtractor(); source.setDataSource(file.getPath());
+                source = new MediaExtractor(); file.configure(source);
                 for (int i=0;i<source.getTrackCount();i++) {
                     MediaFormat format = source.getTrackFormat(i); String mime = format.getString(MediaFormat.KEY_MIME);
                     if (videoTrack < 0 && mime.startsWith("video/")) { videoTrack=i; videoFormat=format; }
                     if (audioTrack < 0 && mime.startsWith("audio/")) { audioTrack=i; audioFormat=format; }
                 }
-                if (videoFormat == null) throw new IOException("手机无法识别此图片或视频格式");
+                if (videoFormat == null && audioFormat == null) throw new IOException("手机无法识别此媒体格式");
+                if(videoFormat!=null) {
                 if(videoFormat.containsKey("rotation-degrees")) rotation=videoFormat.getInteger("rotation-degrees");
                 else {
                     MediaMetadataRetriever metadata=new MediaMetadataRetriever();
-                    try {metadata.setDataSource(file.getPath());String angle=metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);if(angle!=null)rotation=Integer.parseInt(angle);} finally {metadata.release();}
+                    try {file.configure(metadata);String angle=metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);if(angle!=null)rotation=Integer.parseInt(angle);} finally {metadata.release();}
                 }
                 sourceWidth = videoFormat.getInteger(MediaFormat.KEY_WIDTH); sourceHeight = videoFormat.getInteger(MediaFormat.KEY_HEIGHT);
                 if (Build.VERSION.SDK_INT >= 24 && videoFormat.containsKey("color-transfer")
                         && videoFormat.getInteger("color-transfer") >= 6)
                     throw new IOException("此 HDR 视频暂不支持正确转换为 SDR，请选择 SDR 视频");
+                } else {sourceWidth=1280;sourceHeight=720;}
             }
+            music=!image && videoFormat==null;
             if(rotation==90||rotation==270){int swap=sourceWidth;sourceWidth=sourceHeight;sourceHeight=swap;}
             if(preserveAudio && audioFormat!=null) {
                 String mime=audioFormat.getString(MediaFormat.KEY_MIME);
@@ -68,7 +72,7 @@ final class MultimediaStream implements Closeable {
             float scale = Math.min(1f, Math.min((float)maxWidth/sourceWidth, (float)maxHeight/sourceHeight));
             width = Math.max(16, Math.round(sourceWidth*scale) / 16 * 16);
             height = Math.max(16, Math.round(sourceHeight*scale) / 16 * 16);
-            server = new RtspCastServer(audioTrack >= 0, this.bitrate, "h264", image ? 2 : this.fps);
+            server = new RtspCastServer(audioTrack >= 0, this.bitrate, "h264", (image || music) ? 2 : this.fps);
             if (audioFormat != null) {
                 String audioMime=audioFormat.getString(MediaFormat.KEY_MIME);
                 if(preserveAudio && !"audio/mp4a-latm".equals(audioMime) && !"audio/ac3".equals(audioMime))
@@ -90,7 +94,7 @@ final class MultimediaStream implements Closeable {
         server.start();
         senderThread = new Thread(this::send, "multimedia-rtsp-send"); senderThread.start();
         encoderThread = new Thread(() -> {
-            try { if (image) encodeImage(); else encodeVideo(); }
+            try { if (image || music) encodeImage(); else encodeVideo(); }
             catch (Throwable failure) { if (running) { android.util.Log.e("MultimediaStream","Transcode failed",failure); error = failure.getMessage() == null ? "手机解码或编码失败" : failure.getMessage(); } }
             finally { if (extractor != null) extractor.release(); encodedEnd = true; }
         }, "multimedia-codec"); encoderThread.start();
@@ -104,7 +108,7 @@ final class MultimediaStream implements Closeable {
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, color); format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
         // Qualcomm 7.x asserts in setBFrames when configured with very low fps.
         // Configure a conventional rate; image input timestamps still run at 2 fps.
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, image ? 30 : fps); format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, image ? 0 : 1);
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, (image || music) ? 30 : fps); format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, (image || music) ? 0 : 1);
         // Some API 21-25 Qualcomm encoders reject a profile without a paired level.
         // The platform's default AVC profile is accepted by the receiver.
         return format;
@@ -148,15 +152,34 @@ final class MultimediaStream implements Closeable {
         } finally { try { video.release(); } finally { if (audio != null) audio.release(); } }
     }
     private void encodeImage() throws Exception {
-        BitmapFactory.Options options = new BitmapFactory.Options(); options.inJustDecodeBounds=true; BitmapFactory.decodeFile(file.getPath(), options);
+        BitmapFactory.Options options = new BitmapFactory.Options(); options.inJustDecodeBounds=true;
+        if(!music)file.decode(options);
         int sample=1; while (options.outWidth/sample > width*2 || options.outHeight/sample > height*2) sample*=2;
         options.inJustDecodeBounds=false; options.inSampleSize=sample;
-        Bitmap original=BitmapFactory.decodeFile(file.getPath(), options); if (original==null) throw new IOException("手机无法解码图片");
+        Bitmap original;
+        if(music) {
+            original=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
+            Canvas canvas=new Canvas(original);canvas.drawColor(Color.rgb(20,24,32));
+            Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setColor(Color.WHITE);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(height/12f);
+            canvas.drawText("正在播放音乐",width/2f,height/2f,paint);
+            paint.setTextSize(height/24f);canvas.drawText("按返回继续之前的网页",width/2f,height*0.65f,paint);
+        } else original=file.decode(options); if (original==null) throw new IOException("手机无法解码图片");
         if(rotation!=0){Matrix matrix=new Matrix();matrix.postRotate(rotation);Bitmap rotated=Bitmap.createBitmap(original,0,0,original.getWidth(),original.getHeight(),matrix,true);if(rotated!=original)original.recycle();original=rotated;}
         Bitmap scaled=Bitmap.createScaledBitmap(original,width,height,true); if(scaled!=original) original.recycle();
         int[] pixels=new int[width*height]; scaled.getPixels(pixels,0,width,0,0,width,height); scaled.recycle();
         MediaCodec codec=MediaCodec.createEncoderByType("video/avc");
+        AudioTrackTranscoder musicAudio=null;
+        ByteBuffer rawAudio=music && preserveAudio?ByteBuffer.allocate(256*1024):null;
+        long audioPts=0;
         try {
+            if(music) {
+                if(preserveAudio)extractor.selectTrack(audioTrack);
+                else {
+                    MediaFormat aac=MediaFormat.createAudioFormat("audio/mp4a-latm",audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE),Math.min(2,audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)));
+                    aac.setInteger(MediaFormat.KEY_AAC_PROFILE,MediaCodecInfo.CodecProfileLevel.AACObjectLC);aac.setInteger(MediaFormat.KEY_BIT_RATE,128000);
+                    musicAudio=new AudioTrackTranscoder(extractor,audioTrack,aac,new QueuedMuxer(sink));musicAudio.setup();
+                }
+            }
             int color=0;
             for(int candidate:codec.getCodecInfo().getCapabilitiesForType("video/avc").colorFormats)
                 if(candidate==21 || candidate==19) { color=candidate; break; }
@@ -166,7 +189,18 @@ final class MultimediaStream implements Closeable {
             ByteBuffer[] inputs=codec.getInputBuffers(), outputs=codec.getOutputBuffers();
             MediaCodec.BufferInfo info=new MediaCodec.BufferInfo(); long frame=0;
             while(running) {
-                int index=codec.dequeueInputBuffer(1000);
+                if(music) {
+                    if(musicAudio!=null) {
+                        musicAudio.stepPipeline();audioPts=musicAudio.getWrittenPresentationTimeUs();
+                        if(musicAudio.isFinished())break;
+                    } else {
+                        rawAudio.clear();int size=extractor.readSampleData(rawAudio,0);
+                        if(size<0)break;
+                        audioPts=extractor.getSampleTime();MediaCodec.BufferInfo ai=new MediaCodec.BufferInfo();ai.set(0,size,audioPts,0);
+                        sink.sample(QueuedMuxer.SampleType.AUDIO,rawAudio,ai);extractor.advance();
+                    }
+                }
+                int index=(!music || frame*500000L<=audioPts+500000L)?codec.dequeueInputBuffer(1000):-1;
                 if(index>=0) { inputs[index].clear(); inputs[index].put(yuv); codec.queueInputBuffer(index,0,yuv.length,frame++*500000L,0); }
                 while(running) {
                     int out=codec.dequeueOutputBuffer(info,1000);
@@ -176,7 +210,7 @@ final class MultimediaStream implements Closeable {
                     else break;
                 }
             }
-        } finally { try { codec.stop(); } catch(Exception ignored) {} codec.release(); }
+        } finally { if(musicAudio!=null)musicAudio.release();try { codec.stop(); } catch(Exception ignored) {} codec.release(); }
     }
     static byte[] toYuv(int[] pixels,int width,int height,boolean semi) {
         int area=width*height, uv=area, u=area, v=area+area/4; byte[] result=new byte[area*3/2];

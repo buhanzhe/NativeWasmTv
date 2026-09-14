@@ -1116,7 +1116,10 @@ final class PlaylistManager {
                 }
                 String name = line.substring(0, comma).trim();
                 String value = line.substring(comma + 1).trim();
-                if ("#genre#".equalsIgnoreCase(value)) {
+                // Accept empty CSV fields produced by PHP/TXT playlist generators.
+                // Preserve every character inside a real URL (including query commas).
+                value = value.replaceFirst("(?i)^(?:,\\s*)+(?=(?:https?|rtmps?|rtmpt|rtsp|webview)://)", "");
+                if (value.matches("(?i)#genre#(?:\\s*,\\s*)*")) {
                     currentGroup = name.length() == 0 ? "在线频道" : name;
                 } else if (isStreamUrl(value)) {
                     add(groups, currentGroup, name, value, null, null, count++);

@@ -66,8 +66,8 @@ public final class ManagementActivity extends Activity {
     static final String EXTRA_URL = "management_url";
     static final String EXTRA_TAKEOVER = "takeover_mode";
     private static final int FILE_CHOOSER_REQUEST = 4601;
-    private static final int SCREENSHOT_SAVE_REQUEST = 4602;
-    private byte[] pendingScreenshot;
+    private static final int SCREENSHOT_PERMISSION_REQUEST = 4602;
+    private boolean screenshotPermissionPending;
     private boolean screenshotBusy;
     private WebView webView;
     private String managementUrl;
@@ -179,6 +179,7 @@ public final class ManagementActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != webView) return;
+                if (!sidebarDevice) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
                 if (isLocalControlPage(url)) currentPageUrl = url;
                 cancelLocalPointer();
                 // This bridge is only for our bundled touchpad, never a media website.
@@ -330,6 +331,9 @@ public final class ManagementActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(flags);
     }
 
+    private String localMultimediaTarget;
+    private boolean localMultimediaPreserveAudio;
+
     private void launchFileChooser(String[] accepted) {
         try {
             Intent chooser = fileChooserIntent(accepted);
@@ -380,37 +384,29 @@ public final class ManagementActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == SCREENSHOT_SAVE_REQUEST) {
-            final byte[] image = pendingScreenshot;
-            pendingScreenshot = null;
-            final Uri destination = data == null ? null : data.getData();
-            if (resultCode != RESULT_OK || image == null || destination == null) {
-                screenshotBusy = false;
-                return;
-            }
-            new Thread(new Runnable() {
-                @Override public void run() {
-                    String message = "截屏已保存";
-                    try {
-                        OutputStream output = getContentResolver().openOutputStream(destination);
-                        if (output == null) throw new IOException("无法打开保存位置");
-                        try { output.write(image); } finally { output.close(); }
-                    } catch (Exception error) {
-                        message = "截屏保存失败：" + error.getMessage();
-                    }
-                    final String result = message;
-                    runOnUiThread(new Runnable() {
-                        @Override public void run() {
-                            screenshotBusy = false;
-                            Toast.makeText(ManagementActivity.this, result, Toast.LENGTH_LONG).show();
-                        }
-                    });
-                }
-            }, "save-video-screenshot").start();
-            return;
-        }
         if (requestCode != FILE_CHOOSER_REQUEST) {
             super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+        if(localMultimediaTarget != null) {
+            String target=localMultimediaTarget;localMultimediaTarget=null;
+            Uri[] selected=Build.VERSION.SDK_INT>=16?ModernResultParser.resultUris(data):null;
+            Uri uri=selected!=null && selected.length>0?selected[0]:data==null?null:data.getData();
+            String error="";
+            try {
+                if(resultCode!=RESULT_OK || uri==null)throw new java.io.IOException("已取消选择文件");
+                if(Build.VERSION.SDK_INT>=19 && (data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0)
+                    try {getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);} catch(SecurityException ignored) {}
+                MainActivity owner=CastKeepAliveService.localInputOwner();
+                if(owner==null)throw new java.io.IOException("播放器未就绪，请重新打开应用");
+                String name="本地多媒体";
+                try(android.database.Cursor cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)) {
+                    if(cursor!=null && cursor.moveToFirst())name=cursor.getString(0);
+                }
+                owner.openLocalMultimedia(target,uri,name,localMultimediaPreserveAudio);
+                android.util.Log.i("ManagementActivity","Local media URI opened without upload");
+            } catch(Exception failure) {error=failure.getMessage();}
+            notifyLocalMultimedia(error);
             return;
         }
         Uri[] values = null;
@@ -435,6 +431,13 @@ public final class ManagementActivity extends Activity {
             android.util.Log.w("ManagementActivity", "File chooser callback failed", error);
             notifyFileChooser("文件回传失败，请重新打开投屏页面后重试");
         }
+    }
+
+    private void notifyLocalMultimedia(String error) {
+        if(webView==null)return;
+        String script="window.multimediaLocalResult&&window.multimediaLocalResult("+org.json.JSONObject.quote(error==null?"无法打开文件":error)+")";
+        if(Build.VERSION.SDK_INT>=19)webView.evaluateJavascript(script,null);
+        else webView.loadUrl("javascript:"+script);
     }
 
     private void notifyFileChooser(String message) {
@@ -514,6 +517,12 @@ public final class ManagementActivity extends Activity {
     }
 
     private void navigateBack() {
+        MainActivity owner=CastKeepAliveService.localInputOwner();
+        if(owner!=null && owner.backFromMultimedia())return;
+        if(owner!=null && owner.returnToRetainedWebPage()) {
+            if (!owner.isLocalCastPointerActive()) finish();
+            return;
+        }
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
             return;
@@ -521,7 +530,65 @@ public final class ManagementActivity extends Activity {
         finish();
     }
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != SCREENSHOT_PERMISSION_REQUEST) return;
+        screenshotPermissionPending = false;
+        if (results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            nativeDeviceBridge.saveVideoScreenshot();
+        } else {
+            Toast.makeText(this, "未允许存储权限，无法保存截图到相册", Toast.LENGTH_LONG).show();
+        }
+    }
+
     private final class NativeDeviceBridge implements SensorEventListener {
+        @JavascriptInterface
+        public boolean returnFromSniffedResource() {
+            MainActivity owner = CastKeepAliveService.localInputOwner();
+            if (owner == null || !owner.hasRetainedWebPlayback() || !isLocalControlPage(currentPageUrl)) return false;
+            runOnUiThread(() -> {
+                if (owner.returnToRetainedWebPage() && !owner.isLocalCastPointerActive()) finish();
+            });
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean returnFromMultimedia() {
+            MainActivity owner=CastKeepAliveService.localInputOwner();
+            if(owner==null || !owner.hasActiveMultimedia() || !isLocalControlPage(currentPageUrl))return false;
+            runOnUiThread(() -> owner.backFromMultimedia());return true;
+        }
+        @JavascriptInterface
+        public void chooseLocalMultimedia(final String target, final boolean preserveAudio) {
+            runOnUiThread(() -> {
+                if(webView==null || isFinishing() || !isLocalControlPage(webView.getUrl())
+                        || !"/pages/media.html".equals(Uri.parse(webView.getUrl()).getPath()))return;
+                if(localMultimediaTarget!=null)return;
+                localMultimediaTarget=target;localMultimediaPreserveAudio=preserveAudio;
+                try {
+                    Intent intent=fileChooserIntent(new String[]{"image/*","video/*","audio/*"});
+                    intent.putExtra(Intent.EXTRA_LOCAL_ONLY,true);
+                    startActivityForResult(intent,FILE_CHOOSER_REQUEST);
+                } catch(RuntimeException failure) {
+                    localMultimediaTarget=null;notifyLocalMultimedia("无法打开系统文件选择器");
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setKeyboardLandscape(final boolean landscape) {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    if (webView == null || isFinishing() || sidebarDevice
+                            || !isLocalControlPage(webView.getUrl())
+                            || !"/pages/flymouse.html".equals(Uri.parse(webView.getUrl()).getPath())) return;
+                    setRequestedOrientation(landscape
+                            ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                }
+            });
+        }
         @JavascriptInterface
         public void navigateBackAfterSheet() {
             runOnUiThread(new Runnable() {
@@ -591,9 +658,14 @@ public final class ManagementActivity extends Activity {
                                 || "/pages/media.html".equals(Uri.parse(webView.getUrl()).getPath()))) {
                         return;
                     }
-                    if (Build.VERSION.SDK_INT < 19) {
-                        Toast.makeText(ManagementActivity.this, "请使用手机浏览器保存截屏",
-                                Toast.LENGTH_LONG).show();
+                    if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 28
+                            && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        if (!screenshotPermissionPending) {
+                            screenshotPermissionPending = true;
+                            requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                                    SCREENSHOT_PERMISSION_REQUEST);
+                        }
                         return;
                     }
                     screenshotBusy = true;
@@ -604,28 +676,15 @@ public final class ManagementActivity extends Activity {
                         @Override public void run() {
                             try {
                                 final byte[] image = VideoScreenshot.download(url);
+                                ScreenshotGallery.save(getApplicationContext(), image);
                                 runOnUiThread(new Runnable() {
                                     @Override public void run() {
-                                        if (isFinishing() || webView == null) {
-                                            screenshotBusy = false;
-                                            return;
-                                        }
-                                        pendingScreenshot = image;
-                                        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                                                .addCategory(Intent.CATEGORY_OPENABLE).setType("image/png")
-                                                .putExtra(Intent.EXTRA_TITLE, "nTv-" + new SimpleDateFormat(
-                                                        "yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".png");
-                                        try {
-                                            startActivityForResult(intent, SCREENSHOT_SAVE_REQUEST);
-                                        } catch (RuntimeException error) {
-                                            pendingScreenshot = null;
-                                            screenshotBusy = false;
-                                            Toast.makeText(ManagementActivity.this,
-                                                    "系统没有文件保存组件，请使用手机浏览器截屏", Toast.LENGTH_LONG).show();
-                                        }
+                                        screenshotBusy = false;
+                                        Toast.makeText(ManagementActivity.this, "截图已保存到相册 Pictures/nTv",
+                                                Toast.LENGTH_LONG).show();
                                     }
                                 });
-                            } catch (final IOException error) {
+                            } catch (final Exception error) {
                                 runOnUiThread(new Runnable() {
                                     @Override public void run() {
                                         screenshotBusy = false;
@@ -835,7 +894,6 @@ public final class ManagementActivity extends Activity {
         pendingRendererRecovery = false;
         cancelLocalPointer();
         localPointerPage = false;
-        pendingScreenshot = null;
         cancelFileChooser();
         if (nativeDeviceBridge != null) {
             nativeDeviceBridge.stopSensors();

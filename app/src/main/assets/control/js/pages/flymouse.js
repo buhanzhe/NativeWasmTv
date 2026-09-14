@@ -1,3 +1,33 @@
+function fitFlyViewport() {
+  var viewport = window.visualViewport;
+  var height = viewport ? viewport.height : window.innerHeight;
+  if (height > 0) document.getElementById("flyMousePage").style.height = Math.floor(height) + "px";
+}
+function updateFlyFullscreen() {
+  var active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  var button = document.getElementById("flyFullscreen");
+  button.textContent = active ? "⛶ 退出全屏" : "⛶ 全屏";
+  button.setAttribute("aria-label", active ? "退出全屏" : "进入全屏");
+  button.setAttribute("aria-pressed", String(active));
+  fitFlyViewport();
+}
+function toggleFlyFullscreen() {
+  var active = document.fullscreenElement || document.webkitFullscreenElement;
+  var target = active ? document : document.documentElement;
+  var method = active ? (document.exitFullscreen || document.webkitExitFullscreen)
+    : (target.requestFullscreen || target.webkitRequestFullscreen);
+  if (!method) { toast("当前浏览器不支持全屏，仍可直接使用飞鼠", true); return; }
+  try {
+    var result = method.call(target);
+    if (result && result.catch) result.catch(function () { toast("无法进入或退出全屏，请重试", true); });
+  } catch (error) { toast("无法进入或退出全屏，请重试", true); }
+}
+window.addEventListener("resize", fitFlyViewport, false);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", fitFlyViewport, false);
+document.addEventListener("fullscreenchange", updateFlyFullscreen, false);
+document.addEventListener("webkitfullscreenchange", updateFlyFullscreen, false);
+fitFlyViewport();
+
 var pointerScale = 1,
   pointerApiBase = "",
   pointerDirectRetryAt = 0,
@@ -132,7 +162,8 @@ function pointerButtonAction(action) {
   pointerQueue.push({ action: action });
 }
 
-function switchControlMode(mode) {
+function switchControlMode(mode, userInitiated) {
+  if (mode !== "keyboard" || userInitiated) autoInputKeyboard = false;
   var names = ["Touch", "Keyboard", "Gamepad"];
   for (var i = 0; i < names.length; i++) {
     var active = names[i].toLowerCase() === mode;
@@ -152,8 +183,87 @@ function switchControlMode(mode) {
           : "像遥控器一样握持；移动、指向或旋转手机控制光标。",
       false
     );
-  if ((mode === "keyboard" || mode === "gamepad") && innerHeight > innerWidth)
+  setFullKeyboardVisible(false);
+  var input = document.getElementById("remoteText");
+  if (mode === "keyboard" && userInitiated) input.blur();
+  else if (mode !== "keyboard") input.blur();
+  if (mode === "gamepad" && innerHeight > innerWidth)
     toast("旋转手机横屏，操作空间更大");
+}
+
+function setFullKeyboardVisible(visible) {
+  document.getElementById("fullKeyboard").style.display = visible ? "" : "none";
+  var button = document.getElementById("fullKeyboardToggle");
+  button.textContent = visible ? "竖向键盘 ↔" : "横向全键盘 ↔";
+  button.setAttribute("aria-expanded", visible ? "true" : "false");
+  document.getElementById("simpleKeyboard").style.display = visible ? "none" : "";
+  try {
+    if (window.NtvDevice && NtvDevice.setKeyboardLandscape)
+      NtvDevice.setKeyboardLandscape(visible);
+    else if (visible && innerHeight > innerWidth)
+      toast("请横放手机使用全键盘，也可左右滑动按键区域");
+  } catch (error) {}
+  remoteModifiers.shift = remoteModifiers.ctrl = remoteModifiers.alt = false;
+  updateModifierButtons();
+}
+
+function toggleFullKeyboard() {
+  var visible = document.getElementById("fullKeyboard").style.display === "none";
+  setFullKeyboardVisible(visible);
+  var input = document.getElementById("remoteText");
+  if (visible) input.blur();
+  else input.blur();
+}
+
+var phoneSymbols = false, phoneShift = false;
+function phoneCharacter(value) {
+  api("/api/pointer", { action: "text", text: value }, function (error) {
+    if (error) toast(error.message, true);
+  });
+  if (phoneShift) { phoneShift = false; renderPhoneKeyboard(); }
+}
+function togglePhoneSymbols() {
+  phoneSymbols = !phoneSymbols;
+  phoneShift = false;
+  renderPhoneKeyboard();
+}
+function renderPhoneKeyboard() {
+  var container = document.getElementById("phoneKeyRows");
+  if (!container) return;
+  container.innerHTML = "";
+  var rows = phoneSymbols ? ["1234567890", "@#%&*()-+", "!?/:;,'\""]
+    : ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+  function key(row, label, action, wide) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "key" + (wide ? " wide" : "");
+    button.textContent = label;
+    button.onclick = action;
+    row.appendChild(button);
+    return button;
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var row = document.createElement("div");
+    row.className = "keyboard-row phone-keyboard-row";
+    if (i === 2) {
+      var shift = key(row, phoneSymbols ? "ABC" : "⇧", function () {
+        if (phoneSymbols) phoneSymbols = false;
+        else phoneShift = !phoneShift;
+        renderPhoneKeyboard();
+      }, true);
+      shift.setAttribute("aria-label", "切换大小写或字母");
+      shift.setAttribute("aria-pressed", phoneShift ? "true" : "false");
+    }
+    for (var j = 0; j < rows[i].length; j++) {
+      (function (value) {
+        key(row, value, function () { phoneCharacter(value); });
+      })(phoneShift ? rows[i].charAt(j).toUpperCase() : rows[i].charAt(j));
+    }
+    if (i === 2) key(row, "⌫", function () { remoteKey("backspace"); }, true)
+      .setAttribute("aria-label", "删除");
+    container.appendChild(row);
+  }
+  document.getElementById("phoneSymbols").textContent = phoneSymbols ? "ABC" : "123";
 }
 
 function updateModifierButtons() {
@@ -205,10 +315,11 @@ function sendRemoteText() {
 }
 
 function setupRemoteControls() {
+  renderPhoneKeyboard();
   var input = document.getElementById("remoteText");
   if (input)
     input.addEventListener("keydown", function (event) {
-      if (event.key === "Enter") {
+      if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault();
         sendRemoteText();
       }
@@ -680,11 +791,19 @@ function setupTouchpad() {
     multiBlocked = false,
     twoFingerActive = false,
     gestureWebPage = false,
-    pinchFactor = 1,
+    horizontalGestureId = "",
+    horizontalStarted = false,
     holding = false,
     mouseDown = false,
     holdTimer = null,
+    twoFingerTap = false,
+    twoFingerTapAt = 0,
+    twoFingerOrigins = {},
     trackpadGesture = new NtvTrackpadGesture();
+  window.addEventListener("pagehide", function () {
+    twoFingerTap = false;
+    releaseHold(true);
+  }, false);
   function now() {
     return window.performance && typeof window.performance.now === "function"
       ? window.performance.now()
@@ -725,7 +844,6 @@ function setupTouchpad() {
     multi = false;
     multiBlocked = false;
     twoFingerActive = false;
-    pinchFactor = 1;
     pad.className = "touchpad active";
     armHold();
   }
@@ -734,12 +852,18 @@ function setupTouchpad() {
       (state.cast && state.cast.webPageActive === true)));
   }
   function beginTwoFinger(touches) {
+    twoFingerTap = !multi && !holding && !moved && (!holdTimer || now() - lastAt <= 180);
+    twoFingerTapAt = now();
+    twoFingerOrigins = {};
+    for (var i = 0; i < touches.length; i++)
+      twoFingerOrigins[touches[i].identifier] = { x: touches[i].clientX, y: touches[i].clientY };
     releaseHold(true);
     multi = true;
     moved = true;
     twoFingerActive = false;
     gestureWebPage = controlsWebPage();
-    pinchFactor = 1;
+    horizontalGestureId = Date.now().toString(36) + ":" + Math.random().toString(36).slice(2);
+    horizontalStarted = false;
     cancelQueuedScroll();
     trackpadGesture.begin(touches, now());
     pad.className = "touchpad active";
@@ -752,35 +876,46 @@ function setupTouchpad() {
   function cancelQueuedScroll() {
     pointerQueue.cancelScroll();
   }
+  function checkTwoFingerTap(touches) {
+    for (var i = 0; i < touches.length; i++) {
+      var origin = twoFingerOrigins[touches[i].identifier];
+      if (!origin || Math.abs(touches[i].clientX - origin.x) > 10
+          || Math.abs(touches[i].clientY - origin.y) > 10) twoFingerTap = false;
+    }
+  }
   function updateTwoFinger(touches) {
+    checkTwoFingerTap(touches);
     if (touches.length !== 2) {
       twoFingerActive = false;
       return;
     }
     var value = trackpadGesture.update(touches, now(), pointerScale);
     if (!value) return;
+    twoFingerTap = false;
     if (!twoFingerActive) ntvVibrate(6);
     twoFingerActive = true;
     if (!gestureWebPage) return;
     if (value.type === "pinch") {
-      pinchFactor *= value.factor;
+      pointerQueue.push({ action: "zoom", zoomFactor: value.factor });
       pad.className = "touchpad active holding";
-    } else queueScroll(value);
+    } else {
+      var summary = trackpadGesture.summary(null);
+      if (Math.abs(summary.dy) >= Math.abs(summary.dx)) {
+        queueScroll({ scrollY: value.scrollY });
+      } else if (value.scrollX) {
+        horizontalStarted = true;
+        pointerQueue.push({ action: "webSwipe", gestureId: horizontalGestureId, scrollX: value.scrollX });
+      }
+    }
   }
-  function finishChannelGesture(summary) {
-    if (!summary || summary.mode !== "scroll") return;
-    var x = summary.dx, y = summary.dy,
-      threshold = Math.max(28, Math.min(pad.clientWidth, pad.clientHeight) * 0.07),
-      action = "";
-    if (Math.abs(y) >= threshold && Math.abs(y) > Math.abs(x) * 1.15)
-      action = y < 0 ? "next" : "previous";
-    else if (Math.abs(x) >= threshold && Math.abs(x) > Math.abs(y) * 1.15)
-      action = x < 0 ? "sourceNext" : "sourcePrevious";
-    if (!action) return;
-    api("/api/control", { action: action }, function (error) {
-      if (error) toast(error.message, true);
-      else setTimeout(refresh, 420);
-    });
+  function finishHistoryGesture(summary, cancelled) {
+    if (!horizontalStarted) return;
+    var x = summary ? summary.dx : 0, y = summary ? summary.dy : 0,
+      threshold = Math.max(36, Math.min(pad.clientWidth, pad.clientHeight) * 0.1),
+      direction = !cancelled && Math.abs(x) >= threshold && Math.abs(x) > Math.abs(y) * 1.5
+        ? (x > 0 ? -1 : 1) : 0;
+    pointerQueue.push({ action: "webSwipe", gestureId: horizontalGestureId, end: true, direction: direction });
+    horizontalStarted = false;
   }
   function move(x, y) {
     var time = now(),
@@ -807,21 +942,22 @@ function setupTouchpad() {
     var wasHolding = holding,
       gestureSummary = multi ? trackpadGesture.summary(null) : null;
     releaseHold(cancelled);
-    if (cancelled) cancelQueuedScroll();
-    else if (multi && gestureWebPage && gestureSummary && gestureSummary.mode === "pinch"
-        && Math.abs(pinchFactor - 1) >= 0.015)
-      pointerQueue.push({ action: "zoom", zoomFactor: Math.max(0.5, Math.min(2, pinchFactor)) });
-    else if (multi && !gestureWebPage) finishChannelGesture(gestureSummary);
+    if (cancelled) { cancelQueuedScroll(); finishHistoryGesture(gestureSummary, true); }
+    else if (multi && twoFingerTap && now() - twoFingerTapAt <= 350) {
+      pointerAction("rightclick");
+      ntvVibrate(16);
+    }
+    else if (multi) finishHistoryGesture(gestureSummary);
     pad.className = "touchpad";
     filteredSpeed = 0;
     if (!cancelled && !wasHolding && !moved && !multi) {
       pointerAction("click");
       ntvVibrate(8);
     }
+    twoFingerTap = false;
     multi = false;
     multiBlocked = false;
     twoFingerActive = false;
-    pinchFactor = 1;
     moved = false;
   }
   pad.addEventListener(
@@ -829,6 +965,7 @@ function setupTouchpad() {
     function (e) {
       if (e.touches.length === 2 && !multiBlocked) beginTwoFinger(e.touches);
       else if (e.touches.length > 2) {
+        twoFingerTap = false;
         releaseHold(true);
         multi = true;
         multiBlocked = true;
@@ -855,6 +992,13 @@ function setupTouchpad() {
   pad.addEventListener(
     "touchend",
     function (e) {
+      if (multi && !multiBlocked) {
+        var finalTouches = [], i;
+        for (i = 0; i < e.touches.length; i++) finalTouches.push(e.touches[i]);
+        for (i = 0; i < e.changedTouches.length; i++) finalTouches.push(e.changedTouches[i]);
+        if (finalTouches.length === 2) updateTwoFinger(finalTouches);
+      }
+      if (multi) checkTwoFingerTap(e.changedTouches);
       if (multi && e.touches.length > 0) {
         multiBlocked = true;
         twoFingerActive = false;
@@ -910,8 +1054,8 @@ function renderPageState() {
   var webPage = state && ((state.current && state.current.webPageActive === true) ||
       (state.cast && state.cast.webPageActive === true));
   document.getElementById("touchpad").textContent = webPage
-    ? "单指移动 · 长按拖动 · 双指滚动 · 捏合缩放网页"
-    : "单指移动 · 双指上下切频道 · 双指左右切线路";
+    ? "单击左键 · 双指轻点右键 · 长按拖动 · 双指滚动 · 无横向滚动时左右前进/后退 · 捏合缩放"
+    : "单指移动 · 单击左键 · 双指轻点右键";
   if (state.settings.flyMouseEnabled !== true) {
     state.settings.flyMouseEnabled = true;
     api("/api/settings", { flyMouseEnabled: true }, function (error) {

@@ -323,6 +323,7 @@ final class LocalControlServer implements Closeable {
     private void handleTakeoverSession(Socket socket, BufferedInputStream input) {
         String sessionId = "";
         boolean opened = false;
+        CastCursorChannel.Receiver cursor = null;
         try {
             socket.setSoTimeout(18000);
             BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
@@ -346,8 +347,12 @@ final class LocalControlServer implements Closeable {
                     try { previous.close(); } catch (IOException ignored) { }
                 }
             }
+            try {
+                cursor = new CastCursorChannel.Receiver(socket.getInetAddress(), sessionId,
+                        state -> listener.takeoverSessionMessage(state));
+            } catch (Exception ignored) { /* video-embedded cursor remains compatible */ }
             writeTakeoverLine(output, new JSONObject().put("ok", true)
-                    .put("protocol", 1));
+                    .put("protocol", 1).put("cursorPort", cursor == null ? 0 : cursor.port()));
             while (running && !socket.isClosed()) {
                 String line = readLine(input);
                 if (line == null) {
@@ -365,6 +370,7 @@ final class LocalControlServer implements Closeable {
                 Log.i(TAG, "Takeover session ended: " + error.getMessage());
             }
         } finally {
+            if (cursor != null) cursor.close();
             synchronized (takeoverOutputLock) {
                 if (takeoverSocket == socket) {
                     takeoverSocket = null;

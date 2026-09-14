@@ -27,9 +27,13 @@ final class MouseButtonCompat {
     static boolean supported() { return setter != null; }
 
     static boolean setPrimary(MotionEvent event) {
+        return setButton(event, MotionEvent.BUTTON_PRIMARY);
+    }
+
+    static boolean setButton(MotionEvent event, int button) {
         if (setter == null) return false;
         try {
-            setter.invoke(event, MotionEvent.BUTTON_PRIMARY);
+            setter.invoke(event, button);
             return true;
         } catch (Exception unavailable) {
             setter = null;

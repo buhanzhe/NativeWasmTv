@@ -78,6 +78,17 @@ final class RemoteCatalogClient {
         return lastTakeoverResponseAt;
     }
     private Socket takeoverSessionSocket;
+    private volatile CastCursorChannel.Sender cursorSender;
+
+    boolean receiverCursorReady() {
+        CastCursorChannel.Sender sender = cursorSender;
+        return sender != null && sender.ready();
+    }
+
+    void sendCursor(JSONObject state) {
+        CastCursorChannel.Sender sender = cursorSender;
+        if (sender != null) sender.offer(state);
+    }
     private static volatile int[][] hardwareAvcCastProfiles;
     private static volatile int[][] hardwareHevcCastProfiles;
     private static volatile Boolean hardwareHevcDecoder;
@@ -278,65 +289,27 @@ final class RemoteCatalogClient {
         if (normalizedReceiverUrl.length() > 0) {
             command.put("receiverUrl", normalizedReceiverUrl);
         }
-        // Tell the phone how much video this receiver can consume. The sender keeps
-        // the user's selected quality, capped by hardware decoder capabilities.
-        // KitKat/low-RAM receivers stay at 1080p: several old
-        // Qualcomm decoders abort (and then exhaust memory through software fallback)
-        // when handed a 2160p H.264 stream.
-        int landscapeWidth = Math.max(receiverWidth, receiverHeight);
-        int landscapeHeight = Math.min(receiverWidth, receiverHeight);
-        int castWidth;
-        int castHeight;
-        if (lowResourceReceiver) {
-            castWidth = 1920;
-            castHeight = 1080;
-        } else if (landscapeHeight <= 720) {
-            castWidth = 1280;
-            castHeight = 720;
-        } else if (landscapeHeight <= 1080) {
-            castWidth = 1920;
-            castHeight = 1080;
-        } else if (landscapeHeight <= 1440) {
-            castWidth = 2560;
-            castHeight = 1440;
-        } else {
-            castWidth = 3840;
-            castHeight = 2160;
-        }
-        // Old/low-RAM receivers in practice top out near 25 decoded frames per
-        // second at 720p. Sending 30 fps fills their UDP/socket queue by roughly
-        // four frames every second and turns a healthy 20 ms link into 500+ ms
-        // pointer lag. Modern receivers still advertise 30/60/120 fps profiles.
-        int castFps = lowResourceReceiver ? 25 : 30;
-        if (!lowResourceReceiver) {
-            int[] limit = hardwareCastLimit();
-            if (limit[0] > 0) {
-                castWidth = limit[0];
-                castHeight = limit[1];
-                castFps = limit[2];
-            }
-        }
-        int castBitrate = lowResourceReceiver ? 4_000_000 : 3_000_000;
-        command.put("castWidth", castWidth);
-        command.put("castHeight", castHeight);
-        command.put("castFps", castFps);
-        command.put("castH265", !lowResourceReceiver && hasHardwareHevcDecoder());
-        if (!lowResourceReceiver) command.put("castProfiles", hardwareCastProfilesJson());
-        command.put("castBitrate", castBitrate);
-        command.put("castLowResource", lowResourceReceiver);
+        command.put("castH265", hasHardwareHevcDecoder());
+        checkResolveCancelled();
         JSONObject accepted = postJson(source.baseUrl + "/api/control", command);
         if (!accepted.optBoolean("ok", false)) {
             throw new IOException(accepted.optString("message", "手机拒绝播放频道"));
         }
         final int acceptedRequestId = accepted.optInt("playRequestId", -1);
 
-        long deadline = System.currentTimeMillis() + RESOLVE_TIMEOUT_MS;
-        while (System.currentTimeMillis() < deadline) {
+        long deadline = SystemClock.elapsedRealtime() + RESOLVE_TIMEOUT_MS;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            checkResolveCancelled();
             JSONObject state;
             try {
-                state = getJson(source.baseUrl + "/api/playback");
+                state = requestJson(source.baseUrl + "/api/playback", "GET", null, 1500, 2500);
             } catch (IOException unavailable) {
-                state = getJson(source.baseUrl + "/api/state");
+                checkResolveCancelled();
+                state = requestJson(source.baseUrl + "/api/state", "GET", null, 1500, 2500);
+            }
+            checkResolveCancelled();
+            if (acceptedRequestId >= 0 && state.optInt("playRequestId", -1) > acceptedRequestId) {
+                throw new IOException("Remote playback request superseded");
             }
             JSONObject current = state.optJSONObject("current");
             JSONObject playback = state.optJSONObject("remotePlayback");
@@ -352,7 +325,8 @@ final class RemoteCatalogClient {
                 if ("cast".equals(mode)) {
                     String castUrl = playback.optString("sourceUrl", "").trim();
                     if (castUrl.length() > 0) {
-                        return new Result(castUrl, true, playback.optString("castTransport", "tcp"));
+                        return new Result(castUrl, true, playback.optString("castTransport", "tcp"),
+                                playback.optString("castSessionId", ""));
                     }
                 }
                 if ("direct".equals(mode)) {
@@ -368,13 +342,18 @@ final class RemoteCatalogClient {
                 return new Result(absoluteUrl(source.baseUrl, path), true);
             }
             try {
-                Thread.sleep(80L);
+                Thread.sleep(250L);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IOException("等待手机解析时已取消");
             }
         }
         throw new IOException("等待手机解析频道超时");
+    }
+
+    private static void checkResolveCancelled() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted())
+            throw new java.io.InterruptedIOException("Remote channel resolve cancelled");
     }
 
     private static void detachPhonePlayer(String baseUrl) {
@@ -512,6 +491,7 @@ final class RemoteCatalogClient {
         final Socket socket;
         final BufferedReader input;
         final BufferedWriter output;
+        int cursorPort;
         SessionConnection(Socket socket) throws IOException {
             this.socket = socket;
             input = new BufferedReader(new InputStreamReader(socket.getInputStream(), "UTF-8"));
@@ -538,7 +518,7 @@ final class RemoteCatalogClient {
                     .put("previousHostUrl", previousHostUrl);
             connection.output.write("NTV-TAKEOVER/1\r\n" + hello.toString() + "\r\n");
             connection.output.flush();
-            requireSessionAck(connection.input);
+            connection.cursorPort = requireSessionAck(connection.input).optInt("cursorPort", 0);
             accepted = startTakeoverSession(receiverUrl, hostUrl, provider,
                     nextSessionId, connection, expectedSessionId);
             return accepted;
@@ -586,11 +566,17 @@ final class RemoteCatalogClient {
                             connection.output.write(sessionMessage(stateProvider, "hello", sessionId, hostBase).toString());
                             connection.output.write("\r\n");
                             connection.output.flush();
-                            requireSessionAck(connection.input);
+                            connection.cursorPort = requireSessionAck(connection.input).optInt("cursorPort", 0);
                         }
                         synchronized (takeoverSessionLock) {
                             if (generation != takeoverSessionGeneration) { socket.close(); return; }
                             takeoverSessionSocket = socket;
+                            if (connection.cursorPort > 0 && connection.cursorPort <= 65535) {
+                                try {
+                                    cursorSender = new CastCursorChannel.Sender(socket.getInetAddress(),
+                                            connection.cursorPort, sessionId);
+                                } catch (Exception ignored) { cursorSender = null; }
+                            }
                         }
                         BufferedReader input = connection.input;
                         BufferedWriter output = connection.output;
@@ -645,6 +631,8 @@ final class RemoteCatalogClient {
                         synchronized (takeoverSessionLock) {
                             if (takeoverSessionSocket == socket) {
                                 takeoverSessionSocket = null;
+                                if (cursorSender != null) cursorSender.close();
+                                cursorSender = null;
                             }
                         }
                         closeQuietly(socket);
@@ -693,6 +681,8 @@ final class RemoteCatalogClient {
     }
 
     private void closeTakeoverSessionLocked() {
+        if (cursorSender != null) cursorSender.close();
+        cursorSender = null;
         closeQuietly(takeoverSessionSocket);
         takeoverSessionSocket = null;
     }
@@ -725,7 +715,7 @@ final class RemoteCatalogClient {
         return message;
     }
 
-    private static void requireSessionAck(BufferedReader input)
+    private static JSONObject requireSessionAck(BufferedReader input)
             throws IOException, JSONException {
         String line = input.readLine();
         if (line == null) {
@@ -735,6 +725,7 @@ final class RemoteCatalogClient {
         if (!ack.optBoolean("ok", false)) {
             throw new IOException(ack.optString("message", "接管会话被拒绝"));
         }
+        return ack;
     }
 
     private static void closeQuietly(Socket socket) {
@@ -975,12 +966,18 @@ final class RemoteCatalogClient {
         final String url;
         final boolean directDataSource;
         final String castTransport;
+        final String castSessionId;
 
         Result(String url, boolean directDataSource) {
             this(url, directDataSource, "tcp");
         }
 
         Result(String url, boolean directDataSource, String transport) {
+            this(url, directDataSource, transport, "");
+        }
+
+        Result(String url, boolean directDataSource, String transport, String session) {
+            this.castSessionId = session;
             this.castTransport = "udp".equals(transport) ? "udp" : "tcp";
             this.url = url;
             this.directDataSource = directDataSource;

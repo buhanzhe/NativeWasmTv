@@ -14,7 +14,7 @@ if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
 def releaseSigningProperties = new Properties()
 def configuredTargetSdk = 25
 def configuredVersionCode = project.hasProperty('versionCodeOverride')
-        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 6
+        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 7
 if (releaseSigningAvailable) {
     releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
     ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
@@ -53,7 +53,7 @@ android {
         targetSdkVersion configuredTargetSdk
         manifestPlaceholders = [localNetworkPermissionMaxSdk: configuredTargetSdk >= 37 ? "2147483647" : "1"]
         versionCode configuredVersionCode
-        versionName '1.6.0'
+        versionName '1.7.0'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',
                 project.findProperty('castLatencyTrace') == 'true' ? 'true' : 'false'
         testInstrumentationRunner project.hasProperty('testRunner')

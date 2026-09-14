@@ -1,4 +1,5 @@
 html[data-theme="dark"], html[data-theme="dark"] body { background: #111113; color: #f2f2f7; }
+html[data-theme="dark"] .phone-keyboard { background: #19191b; }
 html[data-theme="dark"] .channel-config-page .top { background: #111113; color: #f2f2f7; }
 html[data-theme="dark"] .channel-config-page section:not(.config-hero),
 html[data-theme="dark"] .switch-row { border-color: #38383a; }
@@ -93,6 +94,7 @@ html[data-theme="dark"] .media-now > span { color: #64adff; }
 html[data-theme="dark"] .source-delete { color: #ff6961; background: transparent; }
 html[data-theme="dark"] .source-item.good .source-state { color: #30d158; }
 html[data-theme="dark"] .source-item.bad .source-state { color: #ff6961; }
+html[data-theme="dark"] .playlist-format-errors b { color: #ff6961; }
 html[data-theme="dark"] .source-item.loading .source-state { color: #64adff; }
 html[data-theme="dark"] .system-info-row > span,
 html[data-theme="dark"] .config-stat,

@@ -134,6 +134,10 @@ public final class CastExperienceInstrumentation extends Instrumentation {
                 WebView control=manager==null||manager.isFinishing()?null:(WebView)field(manager,"webView");
                 result.put("pageLayer",page.getLayerType()).put("controlLayer",control==null?-1:control.getLayerType())
                         .put("pageSize",page.getWidth()+"x"+page.getHeight());
+                FlyMouseCursorView cursor=(FlyMouseCursorView)field(activity,"flyMouseCursor");
+                result.put("cursorSuppressed",field(cursor,"drawSuppressed"))
+                        .put("cursorX",cursor.cursorX()).put("cursorY",cursor.cursorY())
+                        .put("cursorWidth",cursor.getWidth()).put("cursorHeight",cursor.getHeight());
                 Object cast=field(activity,"webViewCastManager");
                 result.put("pageIdentity",System.identityHashCode(page))
                         .put("encoderIdentity",System.identityHashCode(field(cast,"videoEncoder")))

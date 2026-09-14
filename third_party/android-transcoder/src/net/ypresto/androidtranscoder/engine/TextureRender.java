@@ -30,7 +30,7 @@ import java.nio.FloatBuffer;
 /**
  * Code for rendering a texture onto a surface using OpenGL ES 2.0.
  */
-class TextureRender {
+public class TextureRender {
     private static final String TAG = "TextureRender";
     private static final int FLOAT_SIZE_BYTES = 4;
     private static final int TRIANGLE_VERTICES_DATA_STRIDE_BYTES = 5 * FLOAT_SIZE_BYTES;

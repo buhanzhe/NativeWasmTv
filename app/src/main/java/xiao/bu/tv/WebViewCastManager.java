@@ -40,6 +40,8 @@ import java.util.Locale;
 /** Owns the main TV screen -> MediaCodec -> RTSP cast pipeline. */
 final class WebViewCastManager implements Closeable {
     private static final String TAG = "WebViewCastManager";
+    private String streamSessionId = "";
+    String streamSessionId() { return streamSessionId; }
     private static final long CODEC_TIMEOUT_US = 10000L;
     private static final int AUDIO_SAMPLE_RATE = 48000;
     private static final int AUDIO_CHANNELS = 2;
@@ -113,6 +115,7 @@ final class WebViewCastManager implements Closeable {
             throw new IOException("网页投送仅支持 Android 5.0 及以上");
         }
         stop();
+        streamSessionId = java.util.UUID.randomUUID().toString();
         config = requested;
         this.includeVideoLayer = includeVideoLayer;
         frameTiming = new CastFrameTiming();
