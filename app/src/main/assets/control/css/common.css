@@ -1080,22 +1080,6 @@ a.settings-entry {
 .source-item.bad .source-state {
   color: #ff3b30;
 }
-.playlist-format-errors {
-  margin: 12px 0;
-  padding: 12px;
-  border: 1px solid #ff3b30;
-  border-radius: 12px;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  word-wrap: break-word;
-  -webkit-user-select: text;
-  user-select: text;
-}
-.playlist-format-errors b { color: #d02b22; }
-.playlist-format-errors p { margin: 8px 0; }
 .source-item.loading .source-state {
   color: #007aff;
 }

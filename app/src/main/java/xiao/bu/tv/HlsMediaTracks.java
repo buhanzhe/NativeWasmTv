@@ -16,7 +16,7 @@ final class HlsMediaTracks {
     static final int VIDEO_BASE = 2000000;
     private static final Pattern ATTRIBUTE = Pattern.compile("([A-Z0-9-]+)=(?:\"([^\"]*)\"|([^,]*))");
     private static final Pattern CUE = Pattern.compile(
-        "((?:\\d+:)?\\d{2}:\\d{2}\\.\\d{3})\\s+-->\\s+((?:\\d+:)?\\d{2}:\\d{2}\\.\\d{3})"
+        "((?:\\d+:)?\\d{2}:\\d{2}[.,]\\d{3})\\s+-->\\s+((?:\\d+:)?\\d{2}:\\d{2}[.,]\\d{3})"
     );
 
     static final class Track {
@@ -256,7 +256,7 @@ final class HlsMediaTracks {
 
     static long timeMs(String timestamp) {
         double seconds = 0;
-        for (String part : timestamp.split(":")) seconds = seconds * 60 + Double.parseDouble(part);
+        for (String part : timestamp.split(":")) seconds = seconds * 60 + Double.parseDouble(part.replace(',', '.'));
         return Math.round(seconds * 1000);
     }
 

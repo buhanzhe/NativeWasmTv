@@ -40,7 +40,7 @@
     }
     function schedule() {
       if (busy || !queue.length) return;
-      if (queue[0].body.action !== "move" && queue[0].body.action !== "scroll" && queue[0].body.action !== "zoom" && (queue[0].body.action !== "webSwipe" || queue[0].body.end)) { pump(); return; }
+      if (queue[0].body.action !== "move" && queue[0].body.action !== "scroll" && queue[0].body.action !== "zoom") { pump(); return; }
       if (scheduled) return;
       scheduled = true;
       frame(function () { scheduled = false; pump(); });
@@ -59,9 +59,6 @@
           oldX * nextX < 0 ? nextX : oldX + nextX));
         tail.body.scrollY = Math.max(-1440, Math.min(1440,
           oldY * nextY < 0 ? nextY : oldY + nextY));
-      } else if (!done && tail && !tail.done && body.action === "webSwipe" && tail.body.action === "webSwipe"
-          && !body.end && !tail.body.end && body.gestureId === tail.body.gestureId) {
-        tail.body.scrollX = Math.max(-1440, Math.min(1440, tail.body.scrollX + body.scrollX));
       } else if (!done && tail && !tail.done && body.action === "zoom" && tail.body.action === "zoom") {
         // Relative scales compose by multiplication, preserving small pinch samples.
         tail.body.zoomFactor = Math.max(0.1, Math.min(10, tail.body.zoomFactor * body.zoomFactor));
@@ -189,12 +186,12 @@
       var totalX = value.x - startX, totalY = value.y - startY,
         pan = Math.sqrt(totalX * totalX + totalY * totalY),
         pinch = Math.abs(value.distance - startDistance), activated = false,
-        pinchThreshold = Math.max(4, startDistance * 0.025),
+        pinchThreshold = Math.max(20, startDistance * 0.12),
         pinchCandidate = pinch >= pinchThreshold && pinch > pan * 1.4;
       if (!mode) {
-        // Spacing must dominate translation, but no second sample or 12px dead zone.
+        // Ignore spacing jitter; retain continuous fractional zoom after activation.
         if (pinchCandidate) mode = "pinch";
-        else if (pan >= 5) mode = "scroll";
+        else if (pan >= 5 && pan >= pinch * 0.7) mode = "scroll";
         else { lastX = value.x; lastY = value.y; lastDistance = value.distance; return null; }
         activated = true;
       }

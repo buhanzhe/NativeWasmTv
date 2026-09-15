@@ -791,8 +791,6 @@ function setupTouchpad() {
     multiBlocked = false,
     twoFingerActive = false,
     gestureWebPage = false,
-    horizontalGestureId = "",
-    horizontalStarted = false,
     holding = false,
     mouseDown = false,
     holdTimer = null,
@@ -862,8 +860,6 @@ function setupTouchpad() {
     moved = true;
     twoFingerActive = false;
     gestureWebPage = controlsWebPage();
-    horizontalGestureId = Date.now().toString(36) + ":" + Math.random().toString(36).slice(2);
-    horizontalStarted = false;
     cancelQueuedScroll();
     trackpadGesture.begin(touches, now());
     pad.className = "touchpad active";
@@ -899,23 +895,8 @@ function setupTouchpad() {
       pointerQueue.push({ action: "zoom", zoomFactor: value.factor });
       pad.className = "touchpad active holding";
     } else {
-      var summary = trackpadGesture.summary(null);
-      if (Math.abs(summary.dy) >= Math.abs(summary.dx)) {
-        queueScroll({ scrollY: value.scrollY });
-      } else if (value.scrollX) {
-        horizontalStarted = true;
-        pointerQueue.push({ action: "webSwipe", gestureId: horizontalGestureId, scrollX: value.scrollX });
-      }
+      queueScroll(value);
     }
-  }
-  function finishHistoryGesture(summary, cancelled) {
-    if (!horizontalStarted) return;
-    var x = summary ? summary.dx : 0, y = summary ? summary.dy : 0,
-      threshold = Math.max(36, Math.min(pad.clientWidth, pad.clientHeight) * 0.1),
-      direction = !cancelled && Math.abs(x) >= threshold && Math.abs(x) > Math.abs(y) * 1.5
-        ? (x > 0 ? -1 : 1) : 0;
-    pointerQueue.push({ action: "webSwipe", gestureId: horizontalGestureId, end: true, direction: direction });
-    horizontalStarted = false;
   }
   function move(x, y) {
     var time = now(),
@@ -939,15 +920,13 @@ function setupTouchpad() {
     pointerMove(dx * gain * pointerScale, dy * gain * pointerScale);
   }
   function end(cancelled) {
-    var wasHolding = holding,
-      gestureSummary = multi ? trackpadGesture.summary(null) : null;
+    var wasHolding = holding;
     releaseHold(cancelled);
-    if (cancelled) { cancelQueuedScroll(); finishHistoryGesture(gestureSummary, true); }
+    if (cancelled) cancelQueuedScroll();
     else if (multi && twoFingerTap && now() - twoFingerTapAt <= 350) {
       pointerAction("rightclick");
       ntvVibrate(16);
     }
-    else if (multi) finishHistoryGesture(gestureSummary);
     pad.className = "touchpad";
     filteredSpeed = 0;
     if (!cancelled && !wasHolding && !moved && !multi) {

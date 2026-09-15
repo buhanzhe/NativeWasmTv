@@ -1,15 +1,33 @@
 var mediaSniffedKey = null, mediaSniffedBusy = false;
 
-function mediaResourceDescription(url) {
+function mediaResourceDescription(url, resource) {
+  resource = resource || {};
   var path = String(url || "").split(/[?#]/)[0];
   var match = path.match(/\.([a-z0-9]+)$/i);
   var extension = match ? match[1].toUpperCase() : "";
   if (!extension && /[?&](?:format|type)=m3u8(?:[&#]|$)/i.test(url)) extension = "M3U8";
-  var audio = /^(MP3|M4A|FLAC|WAV|OGG|OGA|OPUS)$/.test(extension);
-  var type = extension ? (audio ? "音频 · " : "视频 · ") + extension : "媒体";
+  var kind = resource.type === "live" ? "直播" : resource.type === "video" ? "视频"
+    : resource.type === "audio" ? "音乐" : resource.probeStatus === "unavailable" ? "类型未知" : "待探测";
+  var type = kind + (extension ? " · " + extension : "");
+  var info = [];
+  if (resource.type === "video" || resource.type === "audio") {
+    var seconds = Math.floor(Number(resource.durationMs) / 1000);
+    info.push(seconds > 0 ? "时长 " + (seconds >= 3600 ? Math.floor(seconds / 3600) + ":" : "")
+      + (seconds >= 3600 && Math.floor(seconds / 60) % 60 < 10 ? "0" : "")
+      + Math.floor(seconds / 60) % 60 + ":" + (seconds % 60 < 10 ? "0" : "") + seconds % 60 : "时长未知");
+  }
+  if (resource.type === "live" || resource.type === "video")
+    info.push(resource.width > 0 && resource.height > 0 ? resource.width + "×" + resource.height : "分辨率未知");
+  if (resource.type === "live" || resource.type === "video" || resource.type === "audio") {
+    var bitrate = Number(resource.bitrate);
+    info.push(bitrate > 0 ? (resource.bitrateEstimated ? "约 " : "") + (bitrate >= 1000000 ? (bitrate / 1000000).toFixed(2) + " Mbps"
+      : Math.round(bitrate / 1000) + " kbps") : "码率未知");
+  }
+  if (resource.probeStatus === "pending") info.push("后台探测中…");
+  else if (resource.probeStatus === "unavailable") info.push("未能获取完整信息，可尝试播放");
   // Drop signed query parameters only in the label; playback keeps the original URL.
   var shortUrl = path.length > 64 ? path.slice(0, 26) + "…" + path.slice(-37) : path;
-  return { type: type, url: shortUrl };
+  return { type: type, url: shortUrl, info: info.join(" · ") };
 }
 
 function renderMediaSources(data) {
@@ -38,7 +56,7 @@ function renderMediaSources(data) {
       button.type = "button";
       button.className = "media-sniffed-item" + (selected ? " selected" : "");
       button.setAttribute("aria-current", selected ? "true" : "false");
-      var description = web ? mediaResourceDescription(resources[index].url) : null;
+      var description = web ? mediaResourceDescription(resources[index].url, resources[index]) : null;
       title.textContent = web ? "资源 " + (index + 1) + " · " + description.type : "线路 " + (index + 1) + (selected ? " · 当前播放" : "");
       detail.textContent = web ? description.url : "点击播放此线路";
       detail.title = web ? resources[index].url || "" : detail.textContent;
@@ -47,6 +65,11 @@ function renderMediaSources(data) {
         detail.style.wordBreak = "break-all";
       }
       button.appendChild(title); button.appendChild(detail);
+      if (web && description.info) {
+        var metadata = document.createElement("span");
+        metadata.textContent = description.info;
+        button.appendChild(metadata);
+      }
       button.onclick = function () {
         if (web) playMediaSniffedResource(resources[index], button);
         else if (selected) mediaCloseSniffed();
@@ -140,14 +163,27 @@ function mediaPreviewHasInvalidGreen(image) {
 
 function mediaUpdatePreview(ready) {
   var image = document.getElementById("mediaBackdropImage");
+  if (mediaState.audioOnly) { image.hidden = true; mediaPreviewKey = ""; return; }
   var key = (mediaState.group || "") + "|" + (mediaState.name || "");
   if (key !== mediaPreviewKey) image.hidden = true;
   if (!ready || mediaState.lowResource || key === mediaPreviewKey) return;
   mediaPreviewKey = key;
-  image.onload = function () { image.hidden = mediaPreviewHasInvalidGreen(image); };
+  image.onload = function () { image.hidden = !!mediaState.audioOnly || key !== mediaPreviewKey || mediaPreviewHasInvalidGreen(image); };
   image.onerror = function () { image.hidden = true; };
   // A single still per channel, never a screenshot polling loop.
   image.src = "/api/recording/screenshot?t=" + Date.now();
+}
+
+function mediaUpdateArtwork() {
+  var image = document.getElementById("mediaArtwork");
+  var key = mediaState.audioOnly && mediaState.prepared ? mediaState.artworkKey || "" : "";
+  if (image.artworkKey === key) return;
+  image.artworkKey = key;
+  image.hidden = true;
+  if (!key) { image.src = ""; return; }
+  image.onload = function () { if (image.artworkKey === key) image.hidden = false; };
+  image.onerror = function () { image.hidden = true; };
+  image.src = "/api/media/artwork?key=" + encodeURIComponent(key);
 }
 
 function mediaCloseShot(event) {
@@ -158,7 +194,7 @@ function mediaCloseShot(event) {
 }
 
 function mediaCaptureScreenshot() {
-  if (mediaShotBusy || !mediaControllerOpen) return;
+  if (mediaShotBusy || !mediaControllerOpen || !mediaState || mediaState.screenshotAvailable !== true) return;
   if (window.NtvDevice && typeof NtvDevice.saveVideoScreenshot === "function") {
     NtvDevice.saveVideoScreenshot();
     return;
@@ -353,9 +389,9 @@ function buildMediaController(data) {
   body.innerHTML =
     '<section class="media-player-card">' +
     '<div id="mediaVolumeControl" class="media-volume-control"><span id="mediaVolumeValue">--</span><div class="media-volume-range"><div class="media-volume-track"><i id="mediaVolumeFill"></i><i id="mediaVolumeKnob"></i></div><input id="mediaVolume" type="range" min="0" max="15" value="0" step="1" aria-label="播放设备音量" aria-orientation="vertical" oninput="mediaVolumePreview(this)" onchange="mediaVolumeCommit(this)" onblur="mediaVolumeCancel()" ontouchcancel="mediaVolumeCancel()"></div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4 6 8H3v8h3l5 4V4Z M15 8a6 6 0 0 1 0 8 M18 5a10 10 0 0 1 0 14"/></svg></div>' +
-    '<div class="media-scene"><span id="mediaLiveBadge" class="media-live-badge">正在播放</span><div class="media-scene-actions"><button id="mediaScreenshot" class="media-circle-action" type="button" aria-label="截图" onclick="mediaCaptureScreenshot()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="4"/></svg></button><button id="mediaMultimediaButton" class="media-circle-action" type="button" hidden aria-label="投送图片、视频或音乐" title="多媒体投送" aria-haspopup="dialog" onclick="mediaOpenMultimedia()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M3 12a9 9 0 0 1 9 9M3 16a5 5 0 0 1 5 5M3 20v1h1M11 7l6 4-6 4Z"/></svg></button></div></div>' +
+    '<div class="media-scene"><img id="mediaArtwork" class="media-artwork" alt="专辑封面" hidden><span id="mediaLiveBadge" class="media-live-badge">正在播放</span><div class="media-scene-actions"><button id="mediaScreenshot" class="media-circle-action" type="button" hidden aria-label="截图" onclick="mediaCaptureScreenshot()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="4"/></svg></button><button id="mediaMultimediaButton" class="media-circle-action" type="button" hidden aria-label="投送图片、视频或音乐" title="多媒体投送" aria-haspopup="dialog" onclick="mediaOpenMultimedia()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3M3 12a9 9 0 0 1 9 9M3 16a5 5 0 0 1 5 5M3 20v1h1M11 7l6 4-6 4Z"/></svg></button></div></div>' +
     '<div class="media-now"><span id="mediaGroup">当前频道</span><b id="mediaTitle">当前节目</b><small id="mediaStatus">正在读取播放状态…</small></div>' +
-    '<div class="media-progress"><div id="mediaSeekBar" class="media-seekbar"><div class="media-seek-track"><i id="mediaSeekFill"></i><i id="mediaSeekKnob"></i></div><input id="mediaProgress" type="range" min="0" max="1" value="0" step="250" aria-label="播放进度" oninput="mediaProgressPreview(this)" onchange="mediaSeekCommit(this)"></div><div class="media-time"><span id="mediaPosition">--:--</span><span id="mediaDuration">直播</span></div></div>' +
+    '<div id="mediaProgressSection" class="media-progress"><div id="mediaSeekBar" class="media-seekbar"><div class="media-seek-track"><i id="mediaSeekFill"></i><i id="mediaSeekKnob"></i></div><input id="mediaProgress" type="range" min="0" max="1" value="0" step="250" aria-label="播放进度" oninput="mediaProgressPreview(this)" onchange="mediaSeekCommit(this)"></div><div class="media-time"><span id="mediaPosition">--:--</span><span id="mediaDuration">直播</span></div></div>' +
     '<div class="media-transport"><button id="mediaPrevious" type="button" aria-label="上一个频道" onclick="mediaCommand(\'previous\')">' + previous + '<span>上一个</span></button>' +
     '<button id="mediaToggle" class="media-play-button" type="button" aria-label="播放" onclick="mediaCommand(\'toggle\')">' + play + pause + '</button>' +
     '<button id="mediaNext" type="button" aria-label="下一个频道" onclick="mediaCommand(\'next\')">' + next + '<span>下一个</span></button></div>' +
@@ -398,9 +434,14 @@ function renderMediaController(data) {
   favoriteButton.className = "media-favorite" + (favorite ? " selected" : "");
   favoriteButton.disabled = mediaState.favoriteAvailable === false;
   document.getElementById("mediaLiveBadge").textContent = !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
-  document.getElementById("mediaScreenshot").disabled = !available || !prepared || mediaShotBusy;
+  var screenshotAvailable = available && prepared && !mediaState.audioOnly && mediaState.screenshotAvailable === true;
+  var screenshotButton = document.getElementById("mediaScreenshot");
+  screenshotButton.hidden = !screenshotAvailable;
+  screenshotButton.disabled = !screenshotAvailable || mediaShotBusy;
   if (typeof renderMultimediaEntry === "function") renderMultimediaEntry();
-  mediaUpdatePreview(available && prepared);
+  mediaUpdatePreview(screenshotAvailable);
+  mediaUpdateArtwork();
+  document.getElementById("mediaProgressSection").hidden = !!mediaState.audioOnly && !(duration > 0);
   var progress = document.getElementById("mediaProgress");
   progress.max = String(Math.max(1, duration));
   progress.disabled = mediaState.seekable !== true;

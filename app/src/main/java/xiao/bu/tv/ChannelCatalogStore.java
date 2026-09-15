@@ -22,7 +22,7 @@ import java.util.List;
 final class ChannelCatalogStore extends SQLiteOpenHelper {
     private static final String TAG = "ChannelCatalogStore";
     private static final String DATABASE_NAME = "channel-catalog.db";
-    private static final int DATABASE_VERSION = 2;
+    private static final int DATABASE_VERSION = 3;
 
     private static final String CREATE_GROUPS = "CREATE TABLE catalog_groups ("
             + "_id INTEGER PRIMARY KEY, position INTEGER NOT NULL, "
@@ -32,7 +32,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
             + "position INTEGER NOT NULL, number TEXT, name TEXT NOT NULL, "
             + "stream_id TEXT, ysp_pid TEXT, ysp_stream_id TEXT, "
             + "ysp_max_definition TEXT, epg_id TEXT, catalog_source INTEGER NOT NULL, "
-            + "favorite_key TEXT, logo_url TEXT)";
+            + "favorite_key TEXT, logo_url TEXT, subtitle_urls TEXT)";
     private static final String CREATE_URLS = "CREATE TABLE catalog_urls ("
             + "channel_id INTEGER NOT NULL, position INTEGER NOT NULL, url TEXT NOT NULL, "
             + "PRIMARY KEY(channel_id, position))";
@@ -57,6 +57,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase database, int oldVersion, int newVersion) {
+        if (oldVersion < 3) database.execSQL("ALTER TABLE catalog_channels ADD COLUMN subtitle_urls TEXT");
         if (oldVersion < 2) database.execSQL("ALTER TABLE catalog_channels ADD COLUMN logo_url TEXT");
     }
 
@@ -73,7 +74,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
         }
         String sql = "SELECT g._id,g.title,g.source,c._id,c.number,c.name,c.stream_id,"
                 + "c.ysp_pid,c.ysp_stream_id,c.ysp_max_definition,c.epg_id,"
-                + "c.catalog_source,c.favorite_key,u.url,c.logo_url "
+                + "c.catalog_source,c.favorite_key,u.url,c.logo_url,c.subtitle_urls "
                 + "FROM catalog_groups g "
                 + "LEFT JOIN catalog_channels c ON c.group_id=g._id "
                 + "LEFT JOIN catalog_urls u ON u.channel_id=c._id "
@@ -166,8 +167,8 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
                     + "(_id,position,title,source) VALUES(?,?,?,?)");
             insertChannel = database.compileStatement("INSERT INTO catalog_channels"
                     + "(_id,group_id,position,number,name,stream_id,ysp_pid,ysp_stream_id,"
-                    + "ysp_max_definition,epg_id,catalog_source,favorite_key,logo_url) "
-                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    + "ysp_max_definition,epg_id,catalog_source,favorite_key,logo_url,subtitle_urls) "
+                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
             insertUrl = database.compileStatement("INSERT INTO catalog_urls"
                     + "(channel_id,position,url) VALUES(?,?,?)");
             long groupId = 1L;
@@ -198,6 +199,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
                         insertChannel.bindLong(11, channel.catalogSource);
                         bindText(insertChannel, 12, channel.favoriteKey);
                         bindText(insertChannel, 13, channel.logoUrl);
+                        bindText(insertChannel, 14, channel.subtitleUrlsText());
                         insertChannel.executeInsert();
                         for (int sourcePosition = 0;
                                 sourcePosition < channel.urls.length; sourcePosition++) {
@@ -321,6 +323,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
         final String yangshipinMaxDefinition;
         final String epgId;
         final String logoUrl;
+        final String subtitleUrls;
         final int catalogSource;
         final String favoriteKey;
         final List<String> urls = new ArrayList<String>();
@@ -334,6 +337,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
             yangshipinMaxDefinition = cursor.getString(9);
             epgId = cursor.getString(10);
             logoUrl = cursor.getString(14);
+            subtitleUrls = cursor.getString(15);
             catalogSource = cursor.getInt(11);
             favoriteKey = cursor.getString(12);
         }
@@ -341,7 +345,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
         Channel build() {
             Channel result = new Channel(number, name, streamId,
                     urls.toArray(new String[urls.size()]), yangshipinPid,
-                    yangshipinStreamId, yangshipinMaxDefinition, epgId).withLogo(logoUrl);
+                    yangshipinStreamId, yangshipinMaxDefinition, epgId).withLogo(logoUrl).withSubtitles(subtitleUrls);
             if (favoriteKey != null && favoriteKey.length() > 0) {
                 return result.asFavorite(favoriteKey, catalogSource);
             }

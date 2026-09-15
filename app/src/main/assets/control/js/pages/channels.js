@@ -29,7 +29,12 @@ function saveChannelDraft() {
       "ntv.channelDraft",
       JSON.stringify({
         baseSources: channelBaseSources,
-        sources: playlistSources,
+        sources: playlistSources.map(function (source) {
+          var saved = {};
+          for (var key in source) if (Object.prototype.hasOwnProperty.call(source, key)) saved[key] = source[key];
+          if (saved._kind === "loading") { saved._kind = "bad"; saved._status = "上次操作未完成，请重试"; }
+          return saved;
+        }),
         baseEpg: channelBaseEpg,
         epg: document.getElementById("epgUrl").value
       })
@@ -133,7 +138,7 @@ function addRecommendedSource(source) {
 }
 
 function removePlaylistSource(index) {
-  if (mergeBusy) return;
+  if (mergeBusy || playlistFileBusy) return;
   playlistSources.splice(index, 1);
   renderPlaylistSources();
 }
@@ -155,7 +160,7 @@ function renderPlaylistSources() {
   if (!playlistSources.length) {
     var empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "还没有频道来源，可添加网络地址或推荐源。";
+    empty.textContent = "还没有频道来源，可添加源地址或推荐源。";
     list.appendChild(empty);
     updateConfigStats();
     return;
@@ -252,63 +257,93 @@ function updateMergedConfigStatsFromGroups() {
     total += Number(playlistGroups[i].channelCount) || 0;
   updateConfigStats(playlistGroups.length, total);
 }
-var playlistFileTarget = null;
+var playlistFileTarget = null, playlistFileBusy = false;
 
 function choosePlaylistFile(source) {
-  playlistFileTarget = source;
+  if (playlistFileBusy || mergeBusy) { toast("请等待当前操作完成", true); return; }
+  playlistFileTarget = source.id;
   var picker = document.getElementById("playlistFilePicker");
   picker.value = "";
   picker.click();
 }
 
 function playlistFileSelected(picker) {
-  var file = picker.files && picker.files[0],
-    source = playlistFileTarget;
+  var file = picker.files && picker.files[0], source = null, id = playlistFileTarget;
   playlistFileTarget = null;
-  if (!file || !source) return;
-  source._status = "正在保存 " + file.name;
-  source._kind = "loading";
-  renderPlaylistSources();
-  var request = new XMLHttpRequest(),
-    url =
-      "/api/playlist/upload?id=" +
-      encodeURIComponent(source.id || "") +
-      "&name=" +
-      encodeURIComponent(file.name || "本地频道源");
-  request.open("POST", url, true);
-  request.setRequestHeader("Content-Type", "application/octet-stream");
-  request.onreadystatechange = function () {
-    if (request.readyState !== 4) return;
-    var data;
+  if (!file || playlistFileBusy) return;
+  // Polling may have replaced source objects while the system picker was open.
+  for (var i = 0; i < playlistSources.length; i++)
+    if (playlistSources[i].id === id) { source = playlistSources[i]; break; }
+  if (!source) { toast("该频道源已移除，请重新选择", true); return; }
+  if (!file.size) { toast("所选文件为空，请重新选择", true); return; }
+  if (file.size > 64 * 1024 * 1024) { toast("频道文件不能超过 64 MB", true); return; }
+  playlistFileBusy = true;
+  var request = null, reader = null, finished = false, timer;
+  function status(text) {
+    source._status = text; source._kind = "loading"; renderPlaylistSources();
+  }
+  function complete(error, data) {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    playlistFileBusy = false;
+    if (error) {
+      source._status = error; source._kind = "bad";
+    } else {
+      source.location = data.location;
+      if (!source.name || /^频道源\s+\d+$/.test(source.name))
+        source.name = String(data.name || file.name).replace(/\.(m3u8?|txt)$/i, "");
+      source._status = "文件已就绪，等待手机合并"; source._kind = "good";
+    }
+    renderPlaylistSources();
+    saveChannelDraft();
+    toast(error || "本地文件已添加", !!error);
+  }
+  function deadline(ms, message) {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      complete(message);
+      if (request) request.abort();
+      if (reader && reader.readyState === 1) reader.abort();
+    }, ms);
+  }
+  function upload(body) {
+    if (finished) return;
+    status("正在保存 " + file.name);
+    deadline(60000, "保存超时，请检查手机与电视的连接后重新选择文件");
     try {
-      data = JSON.parse(request.responseText);
-    } catch (e) {
-      source._status = "电视返回了无效数据";
-      source._kind = "bad";
-      renderPlaylistSources();
-      return;
-    }
-    if (request.status < 200 || request.status >= 300 || data.ok === false) {
-      source._status = data.message || "本地文件保存失败";
-      source._kind = "bad";
-      renderPlaylistSources();
-      return;
-    }
-    source.location = data.location || "";
-    if (!source.name || /^频道源\s+\d+$/.test(source.name)) {
-      source.name = String(data.name || file.name).replace(/\.(m3u8?|txt)$/i, "");
-    }
-    source._status = "文件已就绪，等待手机合并";
-    source._kind = "good";
-    renderPlaylistSources();
-    toast("本地文件已添加");
-  };
-  request.onerror = function () {
-    source._status = "无法把文件发送到电视";
-    source._kind = "bad";
-    renderPlaylistSources();
-  };
-  request.send(file);
+      request = new XMLHttpRequest();
+      request.open("POST", "/api/playlist/upload?id=" + encodeURIComponent(source.id || "")
+        + "&name=" + encodeURIComponent(file.name || "本地频道源"), true);
+      request.timeout = 60000;
+      request.setRequestHeader("Content-Type", "application/octet-stream");
+      request.onreadystatechange = function () {
+        if (request.readyState !== 4 || request.status === 0 || finished) return;
+        var data;
+        try { data = JSON.parse(request.responseText); }
+        catch (error) { complete("电视返回了无效数据，请重试"); return; }
+        if (!data || request.status < 200 || request.status >= 300 || data.ok === false) {
+          complete(data && data.message || "本地文件保存失败：HTTP " + request.status); return;
+        }
+        if (!data.location) { complete("电视未返回文件保存位置，请重试"); return; }
+        complete(null, data);
+      };
+      request.onerror = function () { complete("无法把文件发送到电视，请检查局域网连接"); };
+      request.ontimeout = function () { complete("保存超时，请检查局域网连接后重试"); };
+      request.onabort = function () { complete("文件保存已取消，请重新选择"); };
+      request.send(body);
+    } catch (error) { complete("无法发送所选文件：" + error.message); }
+  }
+  status("正在读取 " + file.name);
+  deadline(30000, "读取文件超时，请将文件下载到手机后重新选择");
+  if (typeof FileReader === "undefined") { upload(file); return; }
+  try {
+    reader = new FileReader();
+    reader.onload = function () { upload(reader.result); };
+    reader.onerror = function () { complete("无法读取所选文件，请检查文件访问权限后重新选择"); };
+    reader.onabort = function () { complete("文件读取已取消，请重新选择"); };
+    reader.readAsArrayBuffer(file);
+  } catch (error) { complete("无法读取所选文件：" + error.message); }
 }
 
 function chooseKu9JsFile() {
@@ -464,57 +499,82 @@ function playlistAddressProblem(value, sourceLocation) {
   return ""; // M3U files may use paths relative to the playlist URL.
 }
 
-function showPlaylistFormatError(error) {
-  var panel = document.getElementById("playlistFormatErrors"),
-    item = document.createElement("p");
-  item.textContent = error.message;
-  document.getElementById("playlistFormatErrorItems").appendChild(item);
-  panel.style.display = "block";
-}
-
-function githubProxySourceUrl(value) {
+var githubWorkingPrefix = "", githubWorkingUntil = 0, githubFailedUntil = {}, githubRouteSetting = "";
+function githubSourceRoutes(value) {
   var url = String(value || "").replace(/^\s+|\s+$/g, ""),
-    fallback = "https://gh-proxy.com/",
-    prefix = state && state.settings && state.settings.githubProxyBaseUrl || fallback;
-  if (url.indexOf(prefix) === 0) url = url.substring(prefix.length);
-  else if (url.indexOf(fallback) === 0) url = url.substring(fallback.length);
-  var anchor = document.createElement("a");
-  anchor.href = url;
+    settings = state && state.settings || {},
+    prefix = settings.githubProxyBaseUrl || "https://gh-proxy.org/",
+    known = [prefix, "https://gh-proxy.org/", "https://gh-proxy.com/",
+      "https://ghfile.geekertao.top/", "https://github-proxy.memory-echoes.cn/", "https://github.tbap.top/"],
+    setting = prefix + ":" + (settings.githubProxyEnabled !== false), now = Date.now();
+  if (setting !== githubRouteSetting) {
+    githubRouteSetting = setting; githubWorkingPrefix = ""; githubFailedUntil = {};
+  }
+  for (var i = 0; i < known.length; i++)
+    if (url.indexOf(known[i]) === 0) { url = url.substring(known[i].length); break; }
+  var anchor = document.createElement("a"); anchor.href = url;
   var host = String(anchor.hostname || "").toLowerCase();
-  return /^https?:\/\//i.test(url) && (host === "github.com" || host === "raw.githubusercontent.com" ||
-    host === "objects.githubusercontent.com" || host === "release-assets.githubusercontent.com")
-    ? prefix + url : value;
+  var github = /^https?:\/\//i.test(url) && (host === "github.com" || host === "raw.githubusercontent.com" ||
+    host === "objects.githubusercontent.com" || host === "release-assets.githubusercontent.com");
+  if (!github) return [{url:value, prefix:""}];
+  if (settings.githubProxyEnabled === false) return [{url:url, prefix:""}];
+  if (githubWorkingPrefix && githubWorkingUntil > now) known.unshift(githubWorkingPrefix);
+  var routes = [], seen = {};
+  for (var j = 0; j < known.length; j++) {
+    var route = known[j];
+    if (seen[route]) continue;
+    seen[route] = true;
+    if (githubFailedUntil[route] > now) continue;
+    routes.push({url:route + url, prefix:route});
+  }
+  return routes;
+}
+function githubProxySourceUrl(value) {
+  var routes = githubSourceRoutes(value);
+  return routes.length ? routes[0].url : value;
 }
 
 function requestPlaylistText(source, done) {
-  var effective = githubProxySourceUrl(source.location),
-    direct = !isLocalPlaylistLocation(effective) && /^https?:\/\//i.test(effective);
-  function load(url, fallback) {
-    var request = new XMLHttpRequest();
-    request.open("GET", url, true);
-    request.onreadystatechange = function () {
-      if (request.readyState !== 4) return;
-      if (request.status >= 200 && request.status < 300) {
-        done(null, request.responseText || "");
-        return;
+  var routes = githubSourceRoutes(source.location), index = 0;
+  function next() {
+    if (index < routes.length && !isLocalPlaylistLocation(routes[index].url) && /^https?:\/\//i.test(routes[index].url))
+      load(routes[index++], true);
+    else load({url:"/api/playlist/source?location=" + encodeURIComponent(source.location), prefix:""}, false);
+  }
+  function load(route, fallback) {
+    var request = new XMLHttpRequest(), settled = false;
+    function complete(error) {
+      if (settled) return;
+      settled = true;
+      if (!error) {
+        if (route.prefix) {
+          githubWorkingPrefix = route.prefix; githubWorkingUntil = Date.now() + 300000;
+          delete githubFailedUntil[route.prefix];
+        }
+        done(null, request.responseText || ""); return;
       }
       if (fallback) {
-        load("/api/playlist/source?location=" + encodeURIComponent(source.location), false);
-        return;
-      }
-      done(new Error("读取失败：HTTP " + request.status));
-    };
-    request.onerror = function () {
-      if (fallback)
-        load("/api/playlist/source?location=" + encodeURIComponent(source.location), false);
-      else done(new Error("无法读取频道源"));
-    };
-    request.send();
+        var status = request.status || 0;
+        if (route.prefix && (!status || status === 403 || status === 408 || status === 429 || status >= 500)) {
+          githubFailedUntil[route.prefix] = Date.now() + 60000;
+        } else index = routes.length;
+        next();
+      } else done(error);
+    }
+    try {
+      request.open("GET", route.url, true);
+      request.timeout = fallback ? 8000 : 60000;
+      request.onreadystatechange = function () {
+        if (request.readyState !== 4 || request.status === 0) return;
+        complete(request.status >= 200 && request.status < 300 ? null : new Error("读取失败：HTTP " + request.status));
+      };
+      request.onerror = function () { complete(new Error("无法读取频道源")); };
+      request.ontimeout = function () { complete(new Error("读取频道源超时，请检查连接或切换 GitHub 直连")); };
+      request.onabort = function () { complete(new Error("频道源读取已取消")); };
+      request.send();
+    } catch (error) { complete(error); }
   }
-  load(
-    direct ? effective : "/api/playlist/source?location=" + encodeURIComponent(source.location),
-    direct
-  );
+  next();
 }
 
 function playlistAttribute(line, name) {
@@ -542,16 +602,26 @@ function parsePlaylistOnPhone(text, source) {
     pending = null,
     entries = [],
     epg = "",
-    pendingLine = 0;
+    pendingLine = 0,
+    warningCount = 0,
+    firstWarning = "";
   function invalid(lineNumber, raw, reason) {
-    throw playlistFormatError(source, lineNumber, raw, reason);
+    warningCount++;
+    if (!firstWarning) firstWarning = playlistFormatError(source, lineNumber, raw, reason).message;
   }
   function stream(value, lineNumber, raw) {
     var problem = playlistAddressProblem(value, false);
-    if (problem) invalid(lineNumber, raw, problem);
+    if (problem) { invalid(lineNumber, raw, problem); return ""; }
     var result = playlistStreamUrl(value, source.location);
     if (!result) invalid(lineNumber, raw, "无法解析频道地址；本地列表中的频道请使用完整网址");
     return result;
+  }
+  function subtitle(value, lineNumber) {
+    value = String(value || "").replace(/^\s+|\s+$/g, "").replace(/^(["'])(.*)\1$/, "$2");
+    if (!value) return;
+    var url = playlistStreamUrl(value, source.location);
+    if (!/^https?:\/\//i.test(url)) { invalid(lineNumber, value, "字幕需要 HTTP/HTTPS 地址，本地列表请填写完整网址"); return; }
+    if (pending.subtitleUrls.indexOf(url) < 0 && pending.subtitleUrls.length < 16) pending.subtitleUrls.push(url);
   }
   if (lines.length && /^#EXTM3U/i.test(lines[0]))
     epg = playlistAttribute(lines[0], "x-tvg-url") || playlistAttribute(lines[0], "url-tvg");
@@ -568,25 +638,36 @@ function parsePlaylistOnPhone(text, source) {
             ? line.substring(comma + 1).replace(/^\s+|\s+$/g, "")
             : playlistAttribute(line, "tvg-name"),
         group: playlistAttribute(line, "group-title") || group,
-        epgId: playlistAttribute(line, "tvg-id")
+        epgId: playlistAttribute(line, "tvg-id"),
+        logoUrl: playlistAttribute(line, "tvg-logo"),
+        subtitleUrls: [],
+        radio: /^(true|1)$/i.test(playlistAttribute(line, "radio"))
       };
+      subtitle(playlistAttribute(line, "subtitles") || playlistAttribute(line, "subtitle"), i + 1);
       continue;
     }
+    if (pending && /^#EXTVLCOPT:sub-file=/i.test(line)) subtitle(line.substring(20), i + 1);
     if (line.charAt(0) === "#") continue;
     var url;
     if (pending) {
       url = stream(line, i + 1, lines[i]);
-      entries.push({
+      if (url) entries.push({
         name: pending.name || "未命名频道",
         group: pending.group || group,
         epgId: pending.epgId || "",
+        logoUrl: pending.logoUrl || "",
+        radio: pending.radio,
+        subtitleUrls: pending.subtitleUrls,
         url: url
       });
       pending = null;
       continue;
     }
     var split = line.indexOf(",");
-    if (split <= 0) invalid(i + 1, lines[i], "需要“频道名称,播放地址”，或 M3U 的 #EXTINF 与地址两行格式");
+    if (split <= 0) {
+      invalid(i + 1, lines[i], "需要“频道名称,播放地址”，或 M3U 的 #EXTINF 与地址两行格式");
+      continue;
+    }
     var name = line.substring(0, split).replace(/^\s+|\s+$/g, ""),
       value = line.substring(split + 1).replace(/^\s+|\s+$/g, "");
     // Some TXT generators leave empty CSV columns after group markers.
@@ -606,8 +687,8 @@ function parsePlaylistOnPhone(text, source) {
       });
   }
   if (pending) invalid(pendingLine, lines[pendingLine - 1], "#EXTINF 后缺少频道播放地址");
-  if (!entries.length) throw playlistFormatError(source, 0, source.location, "没有找到可播放频道，请检查文件内容是否为 TXT 或 M3U 频道列表");
-  return { entries: entries, epg: epg };
+  if (!entries.length && !warningCount) invalid(0, source.location, "没有找到可播放频道，请检查文件内容是否为 TXT 或 M3U 频道列表");
+  return { entries: entries, epg: epg, warningCount: warningCount, firstWarning: firstWarning };
 }
 
 function canonicalPlaylistText(value) {
@@ -644,12 +725,20 @@ function mergePhoneEntries(results) {
           name: item.name,
           group: group,
           epgId: item.epgId || "",
+          logoUrl: item.logoUrl || "",
+          radio: !!item.radio,
+          subtitleUrls: [],
           urls: []
         };
         merged.push(target);
         byName[nameKey] = target;
       }
       var duplicate = false;
+      if (!target.logoUrl && item.logoUrl) target.logoUrl = item.logoUrl;
+      if (item.radio) target.radio = true;
+      var subtitles = item.subtitleUrls || [];
+      for (var sub = 0; sub < subtitles.length; sub++)
+        if (target.subtitleUrls.length < 16 && target.subtitleUrls.indexOf(subtitles[sub]) < 0) target.subtitleUrls.push(subtitles[sub]);
       for (var u = 0; u < target.urls.length; u++)
         if (canonicalPlaylistUrl(target.urls[u]) === canonicalPlaylistUrl(item.url)) {
           duplicate = true;
@@ -682,11 +771,16 @@ function buildMergedM3u(merged) {
           escapePlaylistAttribute(item.epgId) +
           '" tvg-name="' +
           escapePlaylistAttribute(item.name) +
+          '" tvg-logo="' +
+          escapePlaylistAttribute(item.logoUrl) +
+          (item.radio ? '" radio="true' : '') +
           '" group-title="' +
           escapePlaylistAttribute(item.group) +
           '",' +
           item.name.replace(/[\r\n]/g, " ")
       );
+      var subtitles = item.subtitleUrls || [];
+      for (var sub = 0; sub < subtitles.length; sub++) lines.push("#EXTVLCOPT:sub-file=" + subtitles[sub].replace(/[\r\n]/g, ""));
       lines.push(item.urls[u]);
     }
   }
@@ -699,14 +793,11 @@ function buildMergedM3u(merged) {
 }
 
 function mergeAndPushPlaylistSources() {
-  if (mergeBusy) return;
-  document.getElementById("playlistFormatErrors").style.display = "none";
-  document.getElementById("playlistFormatErrorItems").innerHTML = "";
+  if (mergeBusy || playlistFileBusy) return;
   var cleaned;
   try {
     cleaned = cleanPlaylistSources();
   } catch (error) {
-    if (error.playlistFormat) showPlaylistFormatError(error);
     toast(error.message, true);
     return;
   }
@@ -723,24 +814,21 @@ function mergeAndPushPlaylistSources() {
   setMergeUi("手机正在整理", "读取 0 / " + enabled.length + " 个来源", "working");
   var results = [],
     failures = [],
-    formatFailures = 0,
+    warningCount = 0,
+    firstWarning = "",
     index = 0;
   function finish(error) {
-    mergeBusy = false;
-    document.getElementById("mergeButton").disabled = false;
     if (error) {
+      mergeBusy = false;
+      document.getElementById("mergeButton").disabled = false;
       setMergeUi("刷新未完成", error.message || String(error), "");
       toast(error.message || String(error), true);
       renderPlaylistSources();
       return;
     }
-    if (formatFailures) {
-      finish(new Error("有 " + formatFailures + " 个来源格式不正确，请修改错误详情后重试；电视频道未更新"));
-      return;
-    }
     var merged = mergePhoneEntries(results);
     if (!merged.channels.length) {
-      finish(new Error("所有来源都读取失败，没有可刷新的频道"));
+      finish(new Error("没有可刷新的频道，已保留电视频道列表" + (firstWarning ? "\n" + firstWarning : "")));
       return;
     }
     var built = buildMergedM3u(merged);
@@ -772,7 +860,7 @@ function mergeAndPushPlaylistSources() {
             Number(response.groupCount) || built.groupCount,
             Number(response.channelCount) || built.channelCount
           );
-          toast(detail);
+          toast(detail + (warningCount ? "；已跳过 " + warningCount + " 条格式错误\n" + firstWarning : ""), warningCount > 0);
           setTimeout(refresh, 700);
         }
         var epgValue = document.getElementById("epgUrl").value.replace(/^\s+|\s+$/g, "");
@@ -804,13 +892,15 @@ function mergeAndPushPlaylistSources() {
       }
       try {
         var parsed = parsePlaylistOnPhone(text, source);
-        results.push(parsed);
-        setSourceState(source, "已解析 " + parsed.entries.length + " 个频道", "good");
+        warningCount += parsed.warningCount;
+        if (!firstWarning) firstWarning = parsed.firstWarning;
+        if (parsed.entries.length) results.push(parsed);
+        else failures.push(source.name);
+        setSourceState(source, "已解析 " + parsed.entries.length + " 个频道"
+          + (parsed.warningCount ? " · 跳过 " + parsed.warningCount + " 条格式错误" : ""),
+          parsed.entries.length ? "good" : "bad");
       } catch (parseError) {
-        if (parseError.playlistFormat) {
-          formatFailures++;
-          showPlaylistFormatError(parseError);
-        }
+        if (!firstWarning) firstWarning = parseError.message;
         failures.push(source.name);
         setSourceState(source, parseError.message, "bad");
       }
@@ -843,7 +933,7 @@ function saveEpg() {
   });
 }
 function renderPageState() {
-  if (mergeBusy) return;
+  if (mergeBusy || playlistFileBusy) return;
   saveChannelDraft();
   var draft = readChannelDraft();
   var s = state.settings;
@@ -875,7 +965,7 @@ window.addEventListener(
   "beforeunload",
   function (event) {
     saveChannelDraft();
-    if (mergeBusy) {
+    if (mergeBusy || playlistFileBusy) {
       event.preventDefault();
       event.returnValue = "正在整理频道，离开会中断刷新";
       return event.returnValue;

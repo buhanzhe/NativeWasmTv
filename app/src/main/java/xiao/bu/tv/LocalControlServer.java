@@ -56,6 +56,7 @@ final class LocalControlServer implements Closeable {
         String mergePlaylist(JSONObject request) throws Exception;
         Resource recording(String token) throws Exception;
         Resource screenshot(boolean localOnly) throws Exception;
+        Resource artwork(String key, boolean localOnly) throws Exception;
         Resource page(String path) throws Exception;
     }
 
@@ -507,6 +508,10 @@ final class LocalControlServer implements Closeable {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.mergePlaylist(new JSONObject(new String(body, "UTF-8")))
                             .getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/media/artwork".equals(path)) {
+            Resource resource = listener.artwork(queryParameter(requestTarget, "key"),
+                    "1".equals(queryParameter(requestTarget, "local")));
+            send(socket, 200, resource.contentType, resource.body);
         } else if ("GET".equals(method) && VideoScreenshot.PATH.equals(path)) {
             Resource resource = listener.screenshot("1".equals(
                     queryParameter(requestTarget, "local")));

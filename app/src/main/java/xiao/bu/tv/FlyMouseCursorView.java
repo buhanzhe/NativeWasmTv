@@ -44,6 +44,8 @@ public final class FlyMouseCursorView extends View {
     }
 
     private static final long CURSOR_IDLE_TIMEOUT_MS = 5000L;
+    private static final float ENLARGE_SPEED_DP_PER_SECOND = 1100f;
+    private static final long ENLARGE_SUSTAINED_MS = 280L;
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path cursorPath = new Path();
@@ -133,12 +135,12 @@ public final class FlyMouseCursorView extends View {
         long now = SystemClock.uptimeMillis();
         long elapsed = now - lastMoveAt;
         float unit = getResources().getDisplayMetrics().density * castVisualScale;
-        float minimumDistance = 650f * Math.max(.1f, unit) * elapsed / 1000f;
+        float minimumDistance = ENLARGE_SPEED_DP_PER_SECOND * Math.max(.1f, unit) * elapsed / 1000f;
         // Require sustained fast movement, not a single coalesced network packet.
         if (!drawSuppressed && lastMoveAt > 0 && elapsed > 0 && elapsed <= 160L
                 && dx * dx + dy * dy >= minimumDistance * minimumDistance) {
             fastMotionMs += Math.min(elapsed, 60L);
-            if (fastMotionMs >= 120L) {
+            if (fastMotionMs >= ENLARGE_SUSTAINED_MS) {
                 updateFeedback(now);
                 enlargedUntil = now + 240L;
                 animateScaleTo(2f, now, 140L);

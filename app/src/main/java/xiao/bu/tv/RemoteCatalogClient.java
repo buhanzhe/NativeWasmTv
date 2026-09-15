@@ -257,7 +257,7 @@ final class RemoteCatalogClient {
                 channels.add(new Channel(number, name,
                         "remote_" + groupIndex + "_" + channelIndex,
                         sources, null, null, null,
-                        jsonChannel.optString("epgId", null)).withLogo(jsonChannel.optString("logoUrl", "")));
+                        jsonChannel.optString("epgId", null)).withLogo(jsonChannel.optString("logoUrl", "")).withSubtitles(jsonChannel.optString("subtitleUrls", "")));
             }
             if (!channels.isEmpty()) {
                 groups.add(new ChannelCatalog.Group(groupName,

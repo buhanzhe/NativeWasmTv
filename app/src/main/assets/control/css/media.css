@@ -92,3 +92,8 @@ body.media-page-shell { background: #202529; color: #fff; }
   #mediaControllerBody .media-scene-actions { margin-right: 0; }
   #mediaControllerBody .media-now { padding-right: 0; }
 }
+
+/* Album art stays within the flexible scene, leaving transport controls visible. */
+#mediaControllerBody .media-scene { position: relative; }
+#mediaControllerBody .media-artwork { position: absolute; left: 50%; top: calc(50% - 24px); transform: translate(-50%,-50%); max-width: 80%; max-height: calc(100% - 64px); width: auto; height: auto; border-radius: 12px; }
+#mediaControllerBody .media-artwork[hidden], #mediaProgressSection[hidden] { display: none; }

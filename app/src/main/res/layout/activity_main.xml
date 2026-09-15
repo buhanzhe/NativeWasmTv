@@ -14,6 +14,12 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <xiao.bu.tv.AudioArtworkView
+        android:id="@+id/audio_artwork"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <xiao.bu.tv.WebSourceView
         android:id="@+id/web_source"
         android:layout_width="match_parent"

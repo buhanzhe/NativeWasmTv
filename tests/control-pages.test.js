@@ -60,11 +60,11 @@ test('GitHub setting preserves edits across polls and submits custom/empty prefi
   assert.equal(input.value, 'https://other.example/path/');
   c.saveGithubProxy();
   const save = b.requests.find(r => r.url === '/api/settings');
-  assert.deepEqual(JSON.parse(save.body), {githubProxyBaseUrl:'https://other.example/path/'});
+  assert.deepEqual(JSON.parse(save.body), {githubProxyBaseUrl:'https://other.example/path/',githubProxyEnabled:true});
   save.respond({ok:true});
   input.value = ''; c.saveGithubProxy();
   const saves = b.requests.filter(r => r.url === '/api/settings');
-  assert.deepEqual(JSON.parse(saves[1].body), {githubProxyBaseUrl:''});
+  assert.deepEqual(JSON.parse(saves[1].body), {githubProxyBaseUrl:'',githubProxyEnabled:true});
 });
 
 test('browser playlist downloads use the configured GitHub accelerator', () => {
@@ -77,13 +77,133 @@ test('browser playlist downloads use the configured GitHub accelerator', () => {
   assert.equal(c.githubProxySourceUrl('http://192.168.1.8/live.m3u8'), 'http://192.168.1.8/live.m3u8');
 });
 
-test('channel source format errors remain visible and block requests', () => {
+test('GitHub direct mode preserves custom acceleration and survives state polls', () => {
+  const b = browser('advanced'), c = b.context;
+  b.requests[0].respond({settings:{githubProxyBaseUrl:'https://mirror.example/',githubProxyEnabled:true}});
+  const mode=b.elements.get('githubConnectionMode'), input=b.elements.get('githubProxyUrl');
+  mode.value='direct';c.changeGithubConnectionMode();c.renderPageState();
+  assert.equal(mode.value,'direct');assert.equal(input.disabled,true);
+  c.saveGithubProxy();
+  const save=b.requests.find(r=>r.url==='/api/settings');
+  assert.deepEqual(JSON.parse(save.body),{githubProxyEnabled:false});
+  save.respond({ok:true});
+  assert.equal(c.state.settings.githubProxyEnabled,false);
+  assert.equal(input.value,'https://mirror.example/');
+  const channels=browser('channels').context;
+  channels.state={settings:{githubProxyEnabled:false,githubProxyBaseUrl:'https://mirror.example/'}};
+  const raw='https://raw.githubusercontent.com/a/b/main/list.txt?token=a%2Bb&x=1,2';
+  for(const prefix of ['', 'https://mirror.example/', 'https://gh-proxy.com/', 'https://gh-proxy.org/', 'https://ghfile.geekertao.top/', 'https://github-proxy.memory-echoes.cn/', 'https://github.tbap.top/'])
+    assert.equal(channels.githubProxySourceUrl(prefix+raw),raw);
+  assert.equal(channels.githubProxySourceUrl('https://cdn.example/stream'), 'https://cdn.example/stream');
+});
+
+function localFileFixture() {
+  const b=browser('channels'),c=b.context, stored=new Map();
+  c.sessionStorage={setItem:(k,v)=>stored.set(k,v),getItem:k=>stored.get(k)};
+  b.requests[0].respond({settings:{playlistSources:[{id:'local',name:'频道源 1',location:'',enabled:true}]}});
+  c.playlistFileTarget='local';
+  c.renderPageState(); // The system picker is open during a state poll.
+  let reader;
+  c.FileReader=class { constructor(){ reader=this; } readAsArrayBuffer(file){this.file=file;this.readyState=1;} abort(){this.readyState=2;this.onabort();} };
+  c.playlistFileSelected({files:[{name:'JoyPage.txt',size:200}]});
+  return {b,c,reader,stored};
+}
+test('local playlist upload retains its target through polls and saves the draft', () => {
+  const {b,c,reader}=localFileFixture();
+  assert.equal(c.playlistFileBusy,true);
+  const source=c.playlistSources[0];
+  c.renderPageState(); assert.equal(c.playlistSources[0],source);
+  assert.equal(source._status,'正在读取 JoyPage.txt');
+  reader.result=new Uint8Array([65,66]).buffer;reader.onload();
+  const upload=b.requests.find(r=>r.url.startsWith('/api/playlist/upload'));
+  assert.equal(upload.body,reader.result);
+  assert.equal(upload.timeout,60000);
+  c.renderPageState();assert.equal(c.playlistSources[0],source);
+  c.mergeAndPushPlaylistSources();assert.equal(b.requests.filter(r=>r.url==='/api/playlist/merge').length,0);
+  upload.respond({ok:true,location:'file:///saved/local.playlist',name:'JoyPage.txt'});
+  assert.equal(c.playlistFileBusy,false);
+  c.renderPageState();
+  assert.equal(c.playlistSources[0].location,'file:///saved/local.playlist');
+  assert.equal(c.playlistSources[0].name,'JoyPage');
+  assert.equal(c.playlistSources[0]._kind,'good');
+  upload.onerror();assert.equal(c.playlistSources[0]._kind,'good');
+});
+test('file read/upload failures and missing callbacks always end loading and allow retry', () => {
+  for(const failure of ['read', 'readTimeout', 'send', 'timeout', 'network', 'abort', 'badJson', 'missingPath', 'http']) {
+    const {b,c,reader}=localFileFixture();
+    if(failure==='read')reader.onerror();
+    else if(failure==='readTimeout')b.runTimers(30000);
+    else {
+      if(failure==='send')c.XMLHttpRequest=class {open(){throw new Error('read permission denied')}};
+      reader.result=new ArrayBuffer(2);reader.onload();
+      if(failure!=='send') {
+        const upload=b.requests.find(r=>r.url.startsWith('/api/playlist/upload'));
+        if(failure==='timeout')b.runTimers(60000);
+        else if(failure==='network')upload.onerror();
+        else if(failure==='abort')upload.onabort();
+        else if(failure==='badJson'){upload.readyState=4;upload.status=200;upload.responseText='no';upload.onreadystatechange();}
+        else if(failure==='missingPath')upload.respond({ok:true});
+        else upload.respond({ok:false,message:'磁盘已满'},500);
+      }
+    }
+    assert.equal(c.playlistFileBusy,false,failure);
+    assert.equal(c.playlistSources[0]._kind,'bad',failure);
+    assert.equal(c.playlistSources[0].location,'',failure);
+    assert.ok(b.elements.get('message').textContent, failure);
+  }
+});
+test('source download failures fall back once and timeouts terminate refresh', () => {
+  const b=browser('channels'),c=b.context;
+  c.state={settings:{githubProxyEnabled:false}};
+  let calls=0,error;
+  c.requestPlaylistText({location:'https://gh-proxy.com/https://raw.githubusercontent.com/a/b/main/list.txt'},e=>{calls++;error=e;});
+  const request=b.requests[b.requests.length-1];
+  assert.equal(request.url,'https://raw.githubusercontent.com/a/b/main/list.txt');
+  request.readyState=4;request.status=0;request.onreadystatechange();request.onerror();request.ontimeout();
+  const fallbacks=b.requests.filter(r=>r.url.startsWith('/api/playlist/source'));
+  assert.equal(fallbacks.length,1);
+  fallbacks[0].ontimeout();fallbacks[0].onerror();
+  assert.equal(calls,1);assert.ok(error.message.includes('超时'));
+});
+
+test('GitHub defaults to org, retries com on failure and reuses the healthy route', () => {
+  const b=browser('channels'),c=b.context, raw='https://raw.githubusercontent.com/a/b/main/list.txt?token=a%2Bb';
+  c.state={settings:{}};
+  assert.equal(c.githubProxySourceUrl(raw),'https://gh-proxy.org/'+raw);
+  let calls=0,result;
+  c.requestPlaylistText({location:'https://gh-proxy.com/'+raw}, (error,text)=>{assert.equal(error,null);calls++;result=text;});
+  const first=b.requests[b.requests.length-1];
+  assert.equal(first.url,'https://gh-proxy.org/'+raw);
+  first.readyState=4;first.status=500;first.onreadystatechange();first.onerror();
+  const second=b.requests[b.requests.length-1];
+  assert.equal(second.url,'https://gh-proxy.com/'+raw);
+  second.readyState=4;second.status=200;second.responseText='频道,http://example.com/live';second.onreadystatechange();
+  assert.equal(calls,1);assert.ok(result.includes('频道'));
+  assert.equal(c.githubProxySourceUrl(raw),'https://gh-proxy.com/'+raw);
+  assert.equal(b.requests.filter(r=>r.url.startsWith('/api/playlist/source')).length,0);
+  c.state.settings.githubProxyEnabled=false;
+  assert.equal(c.githubProxySourceUrl(raw),raw);
+});
+test('all browser accelerators failing reach the native fallback only once', () => {
+  const b=browser('channels'),c=b.context;
+  c.state={settings:{}};let calls=0;
+  c.requestPlaylistText({location:'https://raw.githubusercontent.com/a/b/main/list.txt'}, ()=>calls++);
+  for(const prefix of ['https://gh-proxy.org/','https://gh-proxy.com/',
+    'https://ghfile.geekertao.top/','https://github-proxy.memory-echoes.cn/','https://github.tbap.top/']) {
+    const request=b.requests[b.requests.length-1];
+    assert.ok(request.url.startsWith(prefix));request.ontimeout();request.onerror();
+  }
+  const fallbacks=b.requests.filter(r=>r.url.startsWith('/api/playlist/source'));
+  assert.equal(fallbacks.length,1);fallbacks[0].ontimeout();assert.equal(calls,1);
+});
+
+test('invalid source addresses show a toast before any request', () => {
   const b = browser('channels'), c = b.context;
   const bad = 'https://example.com/channels.txt#genre#,';
   c.playlistSources = [{id:'bad', name:'错误源', location:bad, enabled:true}];
   c.mergeAndPushPlaylistSources();
-  assert.equal(b.elements.get('playlistFormatErrors').style.display, 'block');
-  const message = b.elements.get('playlistFormatErrorItems').children[0].textContent;
+  const message = b.elements.get('message').textContent;
+  assert.equal(b.elements.has('playlistFormatErrors'), false);
   assert.ok(message.includes(bad));
   assert.ok(message.includes('分组标记'));
   assert.equal(c.mergeBusy, false);
@@ -103,7 +223,7 @@ test('playlist validation preserves supported streams, signed URLs and relative 
   assert.equal(c.playlistAddressProblem('file:///storage/频道 列表.txt', true), '');
 });
 
-test('playlist validation reports original line and does not silently ignore broken rows', () => {
+test('playlist validation skips broken rows and keeps their original line in the warning', () => {
   const c = browser('channels').context;
   c.URL = URL;
   const source = {name:'本地测试',location:'https://example.com/channels.txt'};
@@ -111,13 +231,17 @@ test('playlist validation reports original line and does not silently ignore bro
     '坏频道,[视频](https://example.com/live)', '坏频道,https://example.com/a b',
     '坏频道,https://example.com/%GG', '坏频道,http://example.com/1.m3u8?mode=1&$8M FHD',
     '这一行漏了逗号', '#EXTINF:-1,缺少地址']) {
-    assert.throws(() => c.parsePlaylistOnPhone('分组,#genre#\n' + bad, source), error => {
-      assert.equal(error.playlistFormat, true);
-      assert.ok(error.message.includes('第 2 行'));
-      assert.ok(error.message.includes(bad));
-      return true;
-    });
+    const parsed = c.parsePlaylistOnPhone('分组,#genre#\n' + bad + '\n#EXTINF:-1,有效频道\nhttps://example.com/good.m3u8', source);
+    assert.equal(parsed.entries.length, 1);
+    assert.equal(parsed.entries[0].name, '有效频道');
+    assert.equal(parsed.warningCount, 1);
+    assert.ok(parsed.firstWarning.includes('第 2 行'));
+    assert.ok(parsed.firstWarning.includes(bad));
   }
+  const parsed = c.parsePlaylistOnPhone('#EXTM3U\n#EXTINF:-1,坏频道\nhttps://example.com/a b\n#EXTINF:-1,好频道\nhttps://example.com/good.m3u8\n#EXTINF:-1,末尾缺失', source);
+  assert.equal(parsed.entries.length, 1);
+  assert.equal(parsed.entries[0].name, '好频道');
+  assert.equal(parsed.warningCount, 2);
 });
 
 test('PHP TXT channel lists accept empty CSV columns without changing URL parameters', () => {
@@ -129,25 +253,47 @@ test('PHP TXT channel lists accept empty CSV columns without changing URL parame
   assert.equal(parsed.entries[0].group, '港台');
   assert.equal(parsed.entries[0].url, 'http://example.com/live.php?id=中文&x=1,2');
   assert.equal(parsed.entries[1].group, '广东');
-  assert.throws(() => c.parsePlaylistOnPhone('坏频道,http://example.com/live.php#genre#,', source),
-    error => error.playlistFormat === true);
+  assert.equal(c.parsePlaylistOnPhone('坏频道,http://example.com/live.php#genre#,', source).warningCount, 1);
 });
 
-test('a malformed imported source cannot cause a partial catalog replacement', () => {
+test('malformed programs and sources do not block valid channels or repeat a pending merge', () => {
   const b = browser('channels'), c = b.context;
   c.URL = URL;
   c.playlistSources = [
     {id:'good',name:'正确源',location:'https://example.com/good.txt',enabled:true},
     {id:'bad',name:'错误源',location:'https://example.com/bad.txt',enabled:true}];
-  const badLine = '频道,https://example.com/live#genre#,';
+  const badLine = '坏频道,https://example.com/live#genre#,';
   c.requestPlaylistText = (source, done) => done(null,
-    source.id === 'good' ? '频道,https://example.com/live.m3u8' : badLine);
+    source.id === 'good' ? '好频道,https://example.com/live.m3u8\n' + badLine + '\n另一个频道,https://example.com/next.m3u8' : badLine);
   c.mergeAndPushPlaylistSources();
+  assert.equal(c.mergeBusy, true);
+  assert.equal(b.elements.get('mergeButton').disabled, true);
+  c.mergeAndPushPlaylistSources();
+  const requests = b.requests.filter(r => r.url === '/api/playlist/merge');
+  assert.equal(requests.length, 1);
+  const playlist = JSON.parse(requests[0].body).playlist;
+  assert.ok(playlist.includes('live.m3u8'));
+  assert.ok(playlist.includes('next.m3u8'));
+  assert.ok(!playlist.includes('坏频道'));
+  requests[0].respond({ok:true});
+  b.requests.find(r => r.url === '/api/settings').respond({ok:true});
   assert.equal(c.mergeBusy, false);
   assert.equal(b.elements.get('mergeButton').disabled, false);
-  assert.ok(b.elements.get('mergeDetail').textContent.includes('电视频道未更新'));
-  assert.ok(b.elements.get('playlistFormatErrorItems').children[0].textContent.includes(badLine));
+  assert.ok(b.elements.get('message').textContent.includes('已跳过 2 条格式错误'));
+  assert.ok(b.elements.get('message').textContent.includes(badLine));
+  assert.equal(b.elements.has('playlistFormatErrors'), false);
+});
+
+test('all-invalid playlists preserve the existing television list and show the bad entry', () => {
+  const b = browser('channels'), c = b.context;
+  c.URL = URL;
+  c.playlistSources = [{id:'bad', name:'错误源',location:'https://example.com/bad.txt',enabled:true}];
+  c.requestPlaylistText = (source, done) => done(null, '坏频道,https://example.com/a b');
+  c.mergeAndPushPlaylistSources();
   assert.equal(b.requests.filter(r => r.url === '/api/playlist/merge').length, 0);
+  assert.ok(b.elements.get('message').textContent.includes('已保留电视频道列表'));
+  assert.ok(b.elements.get('message').textContent.includes('坏频道'));
+  assert.equal(c.mergeBusy, false);
 });
 
 test('APK upload always targets the current web server, regardless of takeover state', () => {
@@ -318,7 +464,7 @@ test('media sniffed resources preserve unchanged rows and send the exact selecte
   const list = b.elements.get('mediaSniffedList'), button = list.children[0];
   assert.equal(button.children[1].textContent, 'https://example.com/master.m3u8');
   assert.equal(button.children[1].title, url);
-  assert.equal(button.children[0].textContent, '资源 1 · 视频 · M3U8');
+  assert.equal(button.children[0].textContent, '资源 1 · 待探测 · M3U8');
   const writes = b.writes();
   c.renderMediaSources({ webPage: true, sniffedResources: [{ url }] });
   assert.equal(b.writes(), writes);
@@ -332,6 +478,27 @@ test('media sniffed resources preserve unchanged rows and send the exact selecte
   c.renderMediaSources({ webPage: true, sniffedResources: [] });
   assert.equal(b.elements.get('mediaSniffedButton').hidden, true);
   assert.equal(list.children.length, 0);
+});
+
+test('sniffed metadata updates display type, duration, dimensions and bitrate without changing playback URL', () => {
+  const b=browser('media'),c=b.context,url='https://example.com/video.mp4?token=keep';
+  const render=resource=>{c.renderMediaSources({webPage:true,sniffedResources:[{url,...resource}]});return b.elements.get('mediaSniffedList').children[0];};
+  let row=render({probeStatus:'pending'});
+  assert.ok(row.children[2].textContent.includes('后台探测'));
+  row=render({probeStatus:'ready',type:'video',durationMs:3661000,width:1920,height:1080,bitrate:3500000});
+  assert.equal(row.children[0].textContent,'资源 1 · 视频 · MP4');
+  assert.equal(row.children[2].textContent,'时长 1:01:01 · 1920×1080 · 3.50 Mbps');
+  assert.equal(row.children[1].title,url);
+  row=render({probeStatus:'ready',type:'audio',durationMs:65000,bitrate:192000});
+  assert.equal(row.children[2].textContent,'时长 1:05 · 192 kbps');
+  assert.ok(row.children[0].textContent.includes('音乐'));
+  row=render({probeStatus:'ready',type:'live',width:1280,height:720,bitrate:2000000});
+  assert.equal(row.children[2].textContent,'1280×720 · 2.00 Mbps');
+  row=render({probeStatus:'unavailable',type:'unknown'});
+  assert.ok(row.children[0].textContent.includes('类型未知'));
+  assert.ok(!row.children[2].textContent.includes('0 kbps'));
+  c.renderMediaSources({webPage:true,sniffedResources:[]});
+  assert.equal(b.elements.get('mediaSniffedList').children.length,0);
 });
 
 test('channel sources and web resources use distinct visibility, labels and exact actions', () => {
@@ -533,6 +700,90 @@ test('cancelled volume gesture restores receiver state including mute', () => {
   assert.equal(input.getAttribute('aria-valuetext'),'静音');
   input.value='20';c.mediaVolumePreview(input);c.mediaVolumeCancel();
   assert.equal(input.value,'0');assert.equal(c.mediaVolumeEditing,false);
+});
+
+test('screenshot entry follows current receiver capability across channel changes', () => {
+  const b = browser('media'), c = b.context;
+  const state = {available:true, prepared:true, lowResource:true};
+  c.renderMediaController({...state, screenshotAvailable:true});
+  const button = b.elements.get('mediaScreenshot');
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, false);
+  c.renderMediaController({...state, audioOnly:true, screenshotAvailable:false});
+  assert.equal(button.hidden, true);
+  c.mediaControllerOpen = true;
+  const requests = b.requests.length;
+  c.mediaCaptureScreenshot();
+  assert.equal(b.requests.length, requests);
+  c.renderMediaController({...state, screenshotAvailable:false});
+  assert.equal(button.hidden, true);
+  c.renderMediaController(state); // capability has not arrived yet
+  assert.equal(button.hidden, true);
+  c.renderMediaController({...state, screenshotAvailable:true});
+  assert.equal(button.hidden, false);
+  c.mediaShotBusy = true;
+  c.renderMediaController({...state, screenshotAvailable:true});
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, true);
+});
+
+test('media cover refreshes after async artwork arrival and clears on a new audio/video session', () => {
+  const b = browser('media'), c = b.context;
+  c.mediaState = { audioOnly:true, prepared:true, artworkKey:'' };
+  c.mediaUpdateArtwork();
+  const image = b.elements.get('mediaArtwork');
+  assert.equal(image.hidden, true);
+  c.mediaState.artworkKey = 'session:cover1'; c.mediaUpdateArtwork();
+  assert.equal(image.src, '/api/media/artwork?key=session%3Acover1');
+  image.onload(); assert.equal(image.hidden, false);
+  const loaded = image.onload;
+  c.mediaState.artworkKey = ''; c.mediaUpdateArtwork(); loaded();
+  assert.equal(image.hidden, true);
+  c.mediaState = { audioOnly:false, prepared:true }; c.mediaUpdateArtwork();
+  assert.equal(image.hidden, true);
+  c.mediaState = { audioOnly:true, lowResource:true };
+  c.mediaUpdatePreview(true);
+  assert.equal(b.elements.get('mediaBackdropImage').hidden, true);
+});
+
+test('SomaFM radio M3U retains all 10 streams and artwork through phone merge', () => {
+  const c = browser('channels').context;
+  const text = fs.readFileSync(path.join(__dirname, 'fixtures/somafm.m3u'), 'utf8');
+  const source = {location: 'http://example.test/radio.m3u', name: 'SomaFM'};
+  const parsed = c.parsePlaylistOnPhone(text, source);
+  assert.equal(parsed.entries.length, 10);
+  assert.equal(parsed.warningCount, 0);
+  assert.equal(parsed.entries[0].name, 'Groove Salad');
+  assert.equal(parsed.entries[0].epgId, 'somafm.groovesalad');
+  assert.equal(parsed.entries[0].url, 'https://ice5.somafm.com/groovesalad-128-mp3');
+  assert.equal(parsed.entries[3].logoUrl, 'https://somafm.com/logos/400/lush400.jpg');
+  const merged = c.mergePhoneEntries([parsed, parsed]);
+  assert.equal(merged.channels.length, 10);
+  const roundTrip = c.parsePlaylistOnPhone(c.buildMergedM3u(merged).text, source);
+  assert.equal(roundTrip.warningCount, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(roundTrip.entries)), JSON.parse(JSON.stringify(parsed.entries)));
+  for (const item of roundTrip.entries) {
+    assert.equal(item.group, 'SomaFM MP3');
+    assert.equal(item.radio, true);
+    assert.ok(item.logoUrl.startsWith('https://somafm.com/logos/400/'));
+  }
+});
+
+test('M3U sidecars survive phone merge and invalid subtitles do not reject videos', () => {
+  const b = browser('channels'), c = b.context;
+  c.URL = URL;
+  const source = {location:'https://example.test/list/tv.m3u', name:'subtitle test'};
+  const text = '#EXTM3U\n#EXTINF:-1 subtitles="zh.srt",Movie\n#EXTVLCOPT:sub-file="en.vtt"\nhttps://example.test/movie.mp4\n#EXTINF:-1,Plain\nhttps://example.test/plain.mp4\n#EXTINF:-1,Bad subtitle\n#EXTVLCOPT:sub-file=javascript:alert(1)\nhttps://example.test/ok.mp4\n';
+  const parsed = c.parsePlaylistOnPhone(text, source);
+  assert.equal(parsed.entries.length, 3);
+  assert.equal(parsed.warningCount, 1);
+  assert.deepEqual(Array.from(parsed.entries[0].subtitleUrls), ['https://example.test/list/zh.srt','https://example.test/list/en.vtt']);
+  assert.equal(parsed.entries[1].subtitleUrls.length, 0);
+  assert.equal(parsed.entries[2].subtitleUrls.length, 0);
+  const merged = c.mergePhoneEntries([parsed, parsed]);
+  assert.equal(merged.channels[0].subtitleUrls.length, 2);
+  const round = c.parsePlaylistOnPhone(c.buildMergedM3u(merged).text, source);
+  assert.deepEqual(Array.from(round.entries[0].subtitleUrls), Array.from(parsed.entries[0].subtitleUrls));
 });
 
 console.log('All ' + passed + ' control-page regression scenarios passed.');

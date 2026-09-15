@@ -94,7 +94,6 @@ html[data-theme="dark"] .media-now > span { color: #64adff; }
 html[data-theme="dark"] .source-delete { color: #ff6961; background: transparent; }
 html[data-theme="dark"] .source-item.good .source-state { color: #30d158; }
 html[data-theme="dark"] .source-item.bad .source-state { color: #ff6961; }
-html[data-theme="dark"] .playlist-format-errors b { color: #ff6961; }
 html[data-theme="dark"] .source-item.loading .source-state { color: #64adff; }
 html[data-theme="dark"] .system-info-row > span,
 html[data-theme="dark"] .config-stat,

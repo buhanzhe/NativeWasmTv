@@ -55,6 +55,7 @@ public final class WebSourceView extends FrameLayout {
                     + "(KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1";
     interface Listener {
         void onPageStarted(int requestId, String url);
+        default void onResourcesReset(int requestId, String url) { }
         void onPageReady(int requestId, String url, String title);
         void onPageError(int requestId, String message);
         void onStreamDiscovered(int requestId, String streamUrl, String pageUrl,
@@ -80,6 +81,7 @@ public final class WebSourceView extends FrameLayout {
     private Listener listener;
     private volatile int requestId = -1;
     private volatile String pageUrl;
+    private volatile long resourceNavigation;
     private final LinkedHashSet<String> discoveredStreamUrls =
             new LinkedHashSet<String>();
     private volatile boolean pageActive;
@@ -99,6 +101,7 @@ public final class WebSourceView extends FrameLayout {
     private String compatibilityBundleUrl;
     private byte[] compatibilityBundle;
     private boolean castCaptureActive;
+    private boolean remoteMouseHoverDispatch;
     private int castCaptureFrameRate;
     private boolean hostResumed;
     private int rendererRetries;
@@ -212,6 +215,26 @@ public final class WebSourceView extends FrameLayout {
         private Boolean pageResumed;
         CastWebView(Context context) { super(context); }
 
+        @Override public boolean onHoverEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (remoteMouseHoverDispatch && Build.VERSION.SDK_INT >= 19
+                    && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+                    && (action == MotionEvent.ACTION_HOVER_MOVE
+                        || action == MotionEvent.ACTION_HOVER_EXIT)) {
+                // Chromium can consume HOVER_MOVE in its accessibility hit tester
+                // before Blink sees it, even without touch exploration enabled.
+                // A button-free native mouse MOVE reaches the document normally.
+                // Keep ViewGroup's transformed coordinates and native iframe hit testing;
+                // real accessibility hover events never enter this scoped path.
+                MotionEvent mouseMove = MotionEvent.obtain(event);
+                mouseMove.setAction(MotionEvent.ACTION_MOVE);
+                if (action == MotionEvent.ACTION_HOVER_EXIT) mouseMove.setLocation(-1f, -1f);
+                try { return super.onHoverEvent(mouseMove); }
+                finally { mouseMove.recycle(); }
+            }
+            return super.onHoverEvent(event);
+        }
+
         @Override public int getWindowVisibility() {
             return isCastPage(this) ? View.VISIBLE : super.getWindowVisibility();
         }
@@ -238,6 +261,13 @@ public final class WebSourceView extends FrameLayout {
     private boolean isCastPage(WebView candidate) {
         return castCaptureActive && !destroyed && pageActive
                 && candidate == webView && isPageVisible();
+    }
+
+    boolean dispatchRemoteMouseHover(View dispatchRoot, MotionEvent event) {
+        boolean previous = remoteMouseHoverDispatch;
+        remoteMouseHoverDispatch = true;
+        try { return dispatchRoot.dispatchGenericMotionEvent(event); }
+        finally { remoteMouseHoverDispatch = previous; }
     }
 
     @Override public void dispatchWindowVisibilityChanged(int visibility) {
@@ -683,6 +713,8 @@ public final class WebSourceView extends FrameLayout {
         updatePageLifecycle();
         updateDesktopViewport(getWidth(), getHeight());
         webView.setInitialScale(cssInitialScalePercent());
+        resetResourcePage(url);
+        sourceClient.expectDocument(url);
         webView.loadUrl(url);
     }
 
@@ -925,31 +957,6 @@ public final class WebSourceView extends FrameLayout {
         return true;
     }
 
-    private String horizontalScrollProbeScript;
-
-    void probeHorizontalScroll(float screenX, float screenY, final android.webkit.ValueCallback<Boolean> callback) {
-        if (webView == null || !pageActive || !isPageVisible() || Build.VERSION.SDK_INT < 19) {
-            callback.onReceiveValue(true); // Unknown capability must never trigger history navigation.
-            return;
-        }
-        try {
-            if (horizontalScrollProbeScript == null) {
-                InputStream input = getResources().openRawResource(R.raw.web_horizontal_scroll_probe);
-                try {
-                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                    byte[] buffer = new byte[4096]; int count;
-                    while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
-                    horizontalScrollProbeScript = bytes.toString("UTF-8");
-                } finally { input.close(); }
-            }
-            int[] location = new int[2]; webView.getLocationOnScreen(location);
-            float x = (screenX - location[0]) / Math.max(.01f, webView.getScaleX() * webView.getScale());
-            float y = (screenY - location[1]) / Math.max(.01f, webView.getScaleY() * webView.getScale());
-            webView.evaluateJavascript(horizontalScrollProbeScript + "(" + x + "," + y + ")",
-                    value -> callback.onReceiveValue(!"false".equals(value)));
-        } catch (Exception error) { callback.onReceiveValue(true); }
-    }
-
     boolean goForwardIfPossible() {
         if (webView == null || !isPageVisible() || destroyed || !pageActive) return false;
         WebBackForwardList history = webView.copyBackForwardList();
@@ -1131,6 +1138,12 @@ public final class WebSourceView extends FrameLayout {
         destroyCurrentWebView();
     }
 
+    private void resetResourcePage(String url) {
+        resourceNavigation++;
+        discoveredStreamUrls.clear();
+        if (listener != null) listener.onResourcesReset(requestId, url);
+    }
+
     private void observeResource(final WebView origin, final SourceClient client, String url) {
         if (origin != webView || client != sourceClient || !pageActive || requestId < 0) {
             return;
@@ -1140,12 +1153,13 @@ public final class WebSourceView extends FrameLayout {
             return;
         }
         final int observedRequestId = requestId;
+        final long observedNavigation = resourceNavigation;
         final String observedUrl = streamUrl;
         post(new Runnable() {
             @Override
             public void run() {
                 if (destroyed || !pageActive || origin != webView || client != sourceClient
-                        || observedRequestId != requestId || listener == null
+                        || observedRequestId != requestId || observedNavigation != resourceNavigation || listener == null
                         || discoveredStreamUrls.contains(observedUrl)) {
                     return;
                 }
@@ -1211,6 +1225,24 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private final class SourceClient extends WebViewClient {
+        private String pendingDocument;
+        private String documentCookies;
+
+        void expectDocument(String url) {
+            // KitKat CookieManager can deadlock Chromium's intercept/IO thread.
+            String cookies = LegacyWebHttp.enabled() && url != null ? CookieManager.getInstance().getCookie(url) : null;
+            synchronized (this) {
+                pendingDocument = url == null ? null : url.split("#", 2)[0];
+                documentCookies = cookies;
+            }
+        }
+
+        private synchronized String claimDocument(String url) {
+            if (url == null || !url.split("#", 2)[0].equals(pendingDocument)) return null;
+            pendingDocument = null;
+            return documentCookies == null ? "" : documentCookies;
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
             if (this != sourceClient || view != webView || !pageActive || requestId < 0 || url == null) {
@@ -1235,6 +1267,7 @@ public final class WebSourceView extends FrameLayout {
             // loadUrl just replaced, including to the newly assigned client.
             if (!url.equals(view.getUrl())) return;
             pageUrl = url;
+            resetResourcePage(url);
             compatibilityInjectionCount = 0;
             WebAudioCompatibility.apply(view);
             if (!isPageVisible()) setMultimediaPaused(true);
@@ -1304,7 +1337,16 @@ public final class WebSourceView extends FrameLayout {
             if (compatible != null) {
                 return compatible;
             }
-            return super.shouldInterceptRequest(view, url);
+            String cookies = claimDocument(url);
+            if (cookies == null) return null; // API 14-20 cannot identify arbitrary subrequest methods.
+            return LegacyWebHttp.intercept(url, activeUserAgent, cookies,
+                    (cookieUrl, value) -> view.post(() -> CookieManager.getInstance().setCookie(cookieUrl, value)),
+                    target -> view.post(() -> {
+                        if (this != sourceClient || view != webView || !pageActive
+                                || !url.equals(view.getUrl())) return;
+                        expectDocument(target);
+                        view.loadUrl(target);
+                    }));
         }
 
         @Override
@@ -1327,6 +1369,7 @@ public final class WebSourceView extends FrameLayout {
             if (this == sourceClient && view == webView && pageActive && requestId >= 0 && !isBlankPage(url)) {
                 // Keep the current address in sync for redirects and single-page sites
                 // that move from one route to another without reopening the channel.
+                if (!url.equals(pageUrl)) resetResourcePage(url);
                 pageUrl = url;
                 scheduleDesktopViewport(0L);
                 scheduleDesktopViewport(300L);

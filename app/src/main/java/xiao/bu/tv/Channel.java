@@ -13,6 +13,7 @@ final class Channel {
     final String yangshipinMaxDefinition;
     final String epgId;
     final String logoUrl;
+    final String[] subtitleUrls;
     final int catalogSource;
     final String favoriteKey;
 
@@ -55,6 +56,13 @@ final class Channel {
             String yangshipinPid, String yangshipinStreamId,
             String yangshipinMaxDefinition, String epgId, int catalogSource,
             String favoriteKey, String logoUrl) {
+        this(number, name, streamId, urls, yangshipinPid, yangshipinStreamId,
+                yangshipinMaxDefinition, epgId, catalogSource, favoriteKey, logoUrl, new String[0]);
+    }
+
+    private Channel(String number, String name, String streamId, String[] urls,
+            String yangshipinPid, String yangshipinStreamId, String yangshipinMaxDefinition,
+            String epgId, int catalogSource, String favoriteKey, String logoUrl, String[] subtitleUrls) {
         this.number = number;
         this.name = name;
         this.streamId = streamId;
@@ -65,6 +73,7 @@ final class Channel {
         this.yangshipinMaxDefinition = yangshipinMaxDefinition;
         this.epgId = epgId;
         this.logoUrl = logoUrl == null ? "" : logoUrl.trim();
+        this.subtitleUrls = subtitleUrls.clone();
         this.catalogSource = catalogSource;
         this.favoriteKey = favoriteKey;
     }
@@ -84,7 +93,7 @@ final class Channel {
         combined[urls.length] = candidate;
         return new Channel(number, name, streamId, combined,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                catalogSource, favoriteKey, logoUrl);
+                catalogSource, favoriteKey, logoUrl, subtitleUrls);
     }
 
     static boolean sameSourceUrl(String first, String second) {
@@ -214,19 +223,51 @@ final class Channel {
     Channel asFavorite(String key, int source) {
         return new Channel(number, name, streamId, urls,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                source, key, logoUrl);
+                source, key, logoUrl, subtitleUrls);
     }
 
     Channel withCatalogSource(int source) {
         return new Channel(number, name, streamId, urls,
                 yangshipinPid, yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                source, favoriteKey, logoUrl);
+                source, favoriteKey, logoUrl, subtitleUrls);
     }
 
     Channel withLogo(String url) {
         return new Channel(number, name, streamId, urls, yangshipinPid,
                 yangshipinStreamId, yangshipinMaxDefinition, epgId,
-                catalogSource, favoriteKey, url);
+                catalogSource, favoriteKey, url, subtitleUrls);
+    }
+
+    Channel withSubtitles(String values) {
+        java.util.LinkedHashSet<String> result = new java.util.LinkedHashSet<String>();
+        java.util.Collections.addAll(result, subtitleUrls);
+        if (values != null) for (String value : values.split("\\n")) {
+            String url = resolveSubtitleUrl(value, "");
+            if (!url.isEmpty() && result.size() < 16) result.add(url);
+        }
+        return new Channel(number, name, streamId, urls, yangshipinPid,
+                yangshipinStreamId, yangshipinMaxDefinition, epgId, catalogSource,
+                favoriteKey, logoUrl, result.toArray(new String[result.size()]));
+    }
+
+    String subtitleUrlsText() {
+        StringBuilder result = new StringBuilder();
+        for (String url : subtitleUrls) { if (result.length() > 0) result.append('\n'); result.append(url); }
+        return result.toString();
+    }
+
+    static String resolveSubtitleUrl(String value, String base) {
+        if (value == null) return "";
+        value = value.trim();
+        if (value.length() > 1 && ((value.startsWith("\"") && value.endsWith("\""))
+                || (value.startsWith("'") && value.endsWith("'")))) value = value.substring(1, value.length()-1);
+        if (value.isEmpty() || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) return "";
+        try {
+            java.net.URL url = base == null || base.isEmpty() ? new java.net.URL(value)
+                    : new java.net.URL(new java.net.URL(base), value);
+            return "http".equalsIgnoreCase(url.getProtocol()) || "https".equalsIgnoreCase(url.getProtocol())
+                    ? url.toString().replace(" ", "%20") : "";
+        } catch (Exception ignored) { return ""; }
     }
 
     int sourceCount() {

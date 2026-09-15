@@ -58,15 +58,28 @@
         <p class="hint">切换后会重新建立当前播放连接。</p>
       </section>
       <section>
-        <h2>GitHub 加速</h2>
+        <h2>GitHub 连接</h2>
         <div class="field">
-          <label for="githubProxyUrl">加速站网址</label>
-          <input id="githubProxyUrl" type="url" inputmode="url" maxlength="1024"
-            autocapitalize="off" spellcheck="false" placeholder="https://gh-proxy.com/" />
+          <label for="githubConnectionMode">连接方式</label>
+          <select id="githubConnectionMode" onchange="changeGithubConnectionMode()">
+            <option value="https://gh-proxy.org/">gh-proxy.org（默认）</option>
+            <option value="https://gh-proxy.com/">gh-proxy.com</option>
+            <option value="https://ghfile.geekertao.top/">ghfile.geekertao.top</option>
+            <option value="https://github-proxy.memory-echoes.cn/">github-proxy.memory-echoes.cn</option>
+            <option value="https://github.tbap.top/">github.tbap.top</option>
+            <option value="direct">直连 GitHub</option>
+            <option value="custom">自定义…</option>
+          </select>
         </div>
-        <div class="actions"><button onclick="saveGithubProxy()">保存</button></div>
-        <p class="hint">支持 HTTP/HTTPS 加速站，完整 GitHub 地址会拼接在网址后。留空恢复默认；保存后新请求生效。</p>
-        <p class="hint">用于 GitHub 频道源、节目单、脚本、插件与应用更新。</p>
+        <div id="githubProxyCustom" style="display:none">
+          <div class="field">
+            <label for="githubProxyUrl">自定义网址</label>
+            <input id="githubProxyUrl" type="url" inputmode="url" maxlength="1024"
+              autocapitalize="off" spellcheck="false" placeholder="https://gh-proxy.org/" />
+          </div>
+          <div class="actions"><button id="githubProxySave" onclick="saveGithubProxy()">保存</button></div>
+        </div>
+        <p class="hint">选择后自动保存，加速站连接失败时自动尝试备用站。</p>
       </section>
       <section>
         <h2>解码兼容</h2>

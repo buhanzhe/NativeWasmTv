@@ -49,3 +49,11 @@ The Ku9 script compatibility runtime embeds [JSEncrypt](https://github.com/travi
 compatibility with the JavaScript engine shipped on Android 5.0.
 
 License: MIT. See `third_party/jsencrypt.LICENSE`.
+
+## Vinyl record artwork
+
+`app/src/main/res/drawable-nodpi/vinyl_record.png` is **45 rpm record** by
+Paul Sherman / WP ClipArt, published in the public domain.
+Source: https://commons.wikimedia.org/wiki/File:45_rpm_record.png
+Original: https://upload.wikimedia.org/wikipedia/commons/8/88/45_rpm_record.png
+The MP3 album cover is drawn over the center at runtime.

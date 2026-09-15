@@ -13,23 +13,25 @@ function fixture(web=true){
  return{c,sent,fire(name,touches,changed=[]){time+=16;handlers[name]({touches,changedTouches:changed,preventDefault(){}})}};
 }
 function points(dx=0,dy=0,gap=100){return[{identifier:1,clientX:180-gap/2+dx,clientY:150+dy},{identifier:2,clientX:180+gap/2+dx,clientY:150+dy}]}
-for(const [dx,action] of [[60,'webBack'],[-60,'webForward']]){
+for(const dx of [60,-60]){
  const f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(dx/2));f.fire('touchend',[],points(dx));
- assert(f.sent.every(x=>x.action==='webSwipe'));
- assert.equal(f.sent[f.sent.length-1].direction,action==='webBack'?-1:1);
- assert.equal(f.sent[f.sent.length-1].end,true);
+ assert.equal(f.sent.length,2, 'final touch sample must also scroll');
+ assert(f.sent.every(x=>x.action==='scroll' && Math.sign(x.scrollX)===-Math.sign(dx)));
 }
 let f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(0,-40));f.fire('touchend',[],points(0,-60));
 assert(f.sent.length>0&&f.sent.every(x=>x.action==='scroll'&&x.scrollY>0));
 f=fixture();f.fire('touchstart',points());f.fire('touchend',[],points());assert.equal(f.sent[0].action,'rightclick');
 f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(0,0,105));
-assert.equal(f.sent[0].action,'zoom');assert(f.sent[0].zoomFactor>1.05);
-f.fire('touchmove',points(0,0,105.1));assert.equal(f.sent.length,2);assert(f.sent[1].zoomFactor>1);
-f.fire('touchend',[],points(0,0,110));assert(f.sent.every(x=>x.action==='zoom'));assert.equal(f.sent.length,3);
+assert.equal(f.sent.length,0, '5px spacing jitter must not zoom');
+f.fire('touchmove',points(0,0,119));assert.equal(f.sent.length,0);
+f.fire('touchmove',points(0,0,122));assert.equal(f.sent[0].action,'zoom');assert(f.sent[0].zoomFactor>1.22);
+f.fire('touchmove',points(0,0,122.1));assert.equal(f.sent.length,2);assert(f.sent[1].zoomFactor>1);
+f.fire('touchend',[],points(0,0,126));assert(f.sent.every(x=>x.action==='zoom'));assert.equal(f.sent.length,3);
 for(const movement of [points(80),points(0,80),points(0,0,150)]){
  f=fixture(false);f.fire('touchstart',points());f.fire('touchmove',movement);f.fire('touchend',[],movement);assert.equal(f.sent.length,0);
 }
-f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(70));f.fire('touchcancel',[],points(70));assert.equal(f.sent[f.sent.length-1].direction,0);assert.equal(f.sent[f.sent.length-1].end,true);
+f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(70));f.fire('touchcancel',[],points(70));assert(f.sent.every(x=>x.action==='scroll'));
+assert.equal(f.sent.length,1, 'cancellation must not generate a navigation command');
 // Held network requests merge relative scale samples rather than dropping or summing them.
 const frames=[],sent=[];let done;
 const c={setTimeout:fn=>frames.push(fn),requestAnimationFrame:fn=>frames.push(fn)};c.window=c;
@@ -39,20 +41,10 @@ q.push({action:'zoom',zoomFactor:1.1});frames.shift()();
 q.push({action:'zoom',zoomFactor:1.2});q.push({action:'zoom',zoomFactor:.9});q.push({action:'webBack'});
 done(null,{});frames.shift()();assert(Math.abs(sent[1].zoomFactor-1.08)<1e-9);
 done(null,{});assert.equal(sent[2].action,'webBack');
-console.log('PASS history directions/threshold, final touch sample, vertical scroll, right click, live fractional pinch, no channel/source changes, cancellation and zoom queue ordering');
-
-const probe=fs.readFileSync('app/src/main/res/raw/web_horizontal_scroll_probe.js','utf8');
-function scrollProbe(overflow,width,client,rootWidth=500){
- const root={clientWidth:500,scrollWidth:rootWidth,overflow:'visible'};
- const el={tagName:'DIV',clientWidth:client,scrollWidth:width,overflow,parentElement:root};
- const body={overflow:'visible'};
- const doc={scrollingElement:root,body,elementFromPoint:()=>el,defaultView:{getComputedStyle:e=>({overflowX:e.overflow})}};
- return vm.runInNewContext(probe+'(10,10)',{document:doc});
-}
-assert.equal(scrollProbe('auto',800,200),true);
-assert.equal(scrollProbe('scroll',800,200),true);
-assert.equal(scrollProbe('hidden',800,200),false);
-assert.equal(scrollProbe('visible',800,200),false);
-assert.equal(scrollProbe('auto',200,200),false);
-assert.equal(scrollProbe('visible',200,200,900),true);
-console.log('PASS horizontal overflow detection for nested scrollers, page overflow, hidden overflow and no overflow');
+console.log('PASS horizontal/vertical scrolling, final samples, right click, pinch threshold and continuous zoom, no channel/history changes, cancellation and queue ordering');
+// A larger initial finger gap requires proportionally more spacing change.
+f=fixture();f.fire('touchstart',points(0,0,200));f.fire('touchmove',points(0,0,222));assert.equal(f.sent.length,0);
+f.fire('touchmove',points(0,0,226));assert.equal(f.sent[0].action,'zoom');
+// Slight center drift while pinching must not lock the gesture into scrolling.
+f=fixture();f.fire('touchstart',points());f.fire('touchmove',points(5,0,108));assert.equal(f.sent.length,0);
+f.fire('touchmove',points(5,0,122));assert.equal(f.sent[0].action,'zoom');

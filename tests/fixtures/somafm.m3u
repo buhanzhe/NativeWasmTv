@@ -1,0 +1,21 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="somafm.groovesalad" tvg-name="Groove Salad" tvg-logo="https://somafm.com/logos/400/groovesalad400.png" group-title="SomaFM MP3" radio="true",Groove Salad
+https://ice5.somafm.com/groovesalad-128-mp3
+#EXTINF:-1 tvg-id="somafm.dronezone" tvg-name="Drone Zone" tvg-logo="https://somafm.com/logos/400/dronezone400.png" group-title="SomaFM MP3" radio="true",Drone Zone
+https://ice5.somafm.com/dronezone-128-mp3
+#EXTINF:-1 tvg-id="somafm.deepspaceone" tvg-name="Deep Space One" tvg-logo="https://somafm.com/logos/400/deepspaceone400.png" group-title="SomaFM MP3" radio="true",Deep Space One
+https://ice5.somafm.com/deepspaceone-128-mp3
+#EXTINF:-1 tvg-id="somafm.lush" tvg-name="Lush" tvg-logo="https://somafm.com/logos/400/lush400.jpg" group-title="SomaFM MP3" radio="true",Lush
+https://ice5.somafm.com/lush-128-mp3
+#EXTINF:-1 tvg-id="somafm.indiepop" tvg-name="Indie Pop Rocks!" tvg-logo="https://somafm.com/logos/400/indiepop400.png" group-title="SomaFM MP3" radio="true",Indie Pop Rocks!
+https://ice5.somafm.com/indiepop-128-mp3
+#EXTINF:-1 tvg-id="somafm.folkfwd" tvg-name="Folk Forward" tvg-logo="https://somafm.com/logos/400/folkfwd400.jpg" group-title="SomaFM MP3" radio="true",Folk Forward
+https://ice5.somafm.com/folkfwd-128-mp3
+#EXTINF:-1 tvg-id="somafm.sonicuniverse" tvg-name="Sonic Universe" tvg-logo="https://somafm.com/logos/400/sonicuniverse400.png" group-title="SomaFM MP3" radio="true",Sonic Universe
+https://ice5.somafm.com/sonicuniverse-128-mp3
+#EXTINF:-1 tvg-id="somafm.u80s" tvg-name="Underground 80s" tvg-logo="https://somafm.com/logos/400/u80s400.png" group-title="SomaFM MP3" radio="true",Underground 80s
+https://ice5.somafm.com/u80s-128-mp3
+#EXTINF:-1 tvg-id="somafm.bootliquor" tvg-name="Boot Liquor" tvg-logo="https://somafm.com/logos/400/bootliquor400.png" group-title="SomaFM MP3" radio="true",Boot Liquor
+https://ice5.somafm.com/bootliquor-128-mp3
+#EXTINF:-1 tvg-id="somafm.beatblender" tvg-name="Beat Blender" tvg-logo="https://somafm.com/logos/400/beatblender400.png" group-title="SomaFM MP3" radio="true",Beat Blender
+https://ice5.somafm.com/beatblender-128-mp3

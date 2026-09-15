@@ -24,6 +24,18 @@ public final class GithubProxyTest {
         }
         GithubProxy.setBaseUrl("http://192.168.1.8:8080/proxy/");
         eq(GithubProxy.apply(raw),"http://192.168.1.8:8080/proxy/"+raw);
+        GithubProxy.setEnabled(false);
+        eq(GithubProxy.apply(raw),raw);
+        eq(GithubProxy.apply(GithubProxy.baseUrl()+raw),raw);
+        eq(GithubProxy.apply(GithubProxy.DEFAULT_BASE_URL+raw),raw);
+        eq(GithubProxy.apply("https://gh-proxy.org/"+raw),raw);
+        eq(GithubProxy.apply("https://ghfile.geekertao.top/"+raw),raw);
+        eq(GithubProxy.apply("https://github-proxy.memory-echoes.cn/"+raw),raw);
+        eq(GithubProxy.apply("https://github.tbap.top/"+raw),raw);
+
+        eq(GithubProxy.apply("https://cdn.example/video.ts"),"https://cdn.example/video.ts");
+        GithubProxy.setEnabled(true);
+        eq(GithubProxy.apply(raw),GithubProxy.baseUrl()+raw);
         GithubProxy.setBaseUrl("");
         eq(GithubProxy.baseUrl(),GithubProxy.DEFAULT_BASE_URL);
         System.out.println("GitHub proxy routing and validation passed");

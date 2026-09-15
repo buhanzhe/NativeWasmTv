@@ -331,6 +331,11 @@ final class HlsProxyServer implements Closeable {
         Log.i(TAG, "Proxy started port=" + serverSocket.getLocalPort());
     }
 
+    /** Media identified by its response MIME type may have no filename extension. */
+    String mediaUrl(String originUrl) {
+        return proxyUrl(originUrl).replace("/proxy/", "/media/");
+    }
+
     String proxyUrl(String originUrl) {
         if (CarrierNetworkRoute.isCarrierIptvUrl(originUrl)) {
             carrierIptvSession = true;
@@ -488,7 +493,8 @@ final class HlsProxyServer implements Closeable {
 
             int pathEnd = requestLine.indexOf(' ', 4);
             String path = pathEnd < 0 ? "" : requestLine.substring(4, pathEnd);
-            String prefix = "/proxy/";
+            boolean directMedia = path.startsWith("/media/");
+            String prefix = directMedia ? "/media/" : "/proxy/";
             if (!path.startsWith(prefix)) {
                 writeError(output, 404, "Not found");
                 return;
@@ -496,7 +502,7 @@ final class HlsProxyServer implements Closeable {
 
             String token = path.substring(prefix.length());
             String originUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
-            if (!needsCjsTransform(originUrl) && canStreamWithoutRewrite(originUrl)
+            if (!needsCjsTransform(originUrl) && (directMedia || canStreamWithoutRewrite(originUrl))
                     && !hasAesSegmentKey(originUrl)
                     && !hasGenericSegmentTask(originUrl)) {
                 streamUpstream(originUrl, rangeHeader, output);

@@ -35,16 +35,8 @@
           <a href="/pages/groups.html">管理频道分组 ›</a>
         </div>
         <div id="playlistSources" class="source-list"></div>
-        <div id="playlistFormatErrors" class="playlist-format-errors" role="status" aria-live="polite" style="display:none">
-          <b>频道来源格式不正确</b>
-          <div id="playlistFormatErrorItems"></div>
-          <p>地址填写示例：https://example.com/channels.txt</p>
-          <p>TXT 格式：<br />分组名称,#genre#<br />频道名称,https://example.com/live.m3u8</p>
-          <p>M3U 格式：<br />#EXTM3U<br />#EXTINF:-1,频道名称<br />https://example.com/live.m3u8</p>
-          <p>修改后重新刷新。错误内容可长按选中复制。</p>
-        </div>
         <div class="config-actions">
-          <button onclick="addPlaylistSource()">添加网络地址</button
+          <button onclick="addPlaylistSource()">添加源地址</button
           ><button onclick="openRecommendedSourcePicker()">添加推荐源</button>
         </div>
         <div id="mergePanel" class="merge-panel">

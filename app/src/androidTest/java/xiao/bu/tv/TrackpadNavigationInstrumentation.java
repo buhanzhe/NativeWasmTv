@@ -39,9 +39,9 @@ public final class TrackpadNavigationInstrumentation extends Instrumentation {
             Field enabled=MainActivity.class.getDeclaredField("flyMouseEnabled");enabled.setAccessible(true);enabled.setBoolean(activity,true);
             dispatch.invoke(activity,new org.json.JSONObject().put("action","webBack"));SystemClock.sleep(350);
             String back=js("location.pathname");
-            check(back.contains("a.html"),"Swipe back failed: "+back+" visible="+source.isPageVisible()+" retained="+source.hasRetainedPage());
+            check(back.contains("a.html"),"Back button failed: "+back+" visible="+source.isPageVisible()+" retained="+source.hasRetainedPage());
             dispatch.invoke(activity,new org.json.JSONObject().put("action","webForward"));SystemClock.sleep(350);
-            check(js("location.pathname").contains("b.html"),"Swipe forward failed");
+            check(js("location.pathname").contains("b.html"),"Forward button failed");
             check(js("document.getElementById('entry').value").contains("edited"),"History lost form state");
             float before=(Float)field(source,"currentPageScale");
             for(int i=0;i<12;i++)dispatch.invoke(activity,new org.json.JSONObject().put("action","zoom").put("zoomFactor",1.003));
@@ -67,9 +67,9 @@ public final class TrackpadNavigationInstrumentation extends Instrumentation {
             dispatch.invoke(activity,new org.json.JSONObject().put("action","webSwipe").put("gestureId","plain").put("scrollX",240));
             dispatch.invoke(activity,new org.json.JSONObject().put("action","webSwipe").put("gestureId","plain").put("end",true).put("direction",-1));
             SystemClock.sleep(250);
-            check(js("location.pathname").contains("a.html"),"Non-scrollable page did not navigate");
+            check(js("location.pathname").contains("b.html"),"Legacy swipe navigated a non-scrollable page");
             runOnMainSync(()->source.closePage());
-            out.putString("stream","PASS Android WebView scroll-first horizontal gestures including edge, non-scrollable history, preserved form and fractional zoom: "+before+" -> "+after+"\n");
+            out.putString("stream","PASS Android WebView horizontal scrolling without swipe navigation, explicit history buttons, preserved form and fractional zoom: "+before+" -> "+after+"\n");
         }catch(Throwable error){code=0;out.putString("stream",android.util.Log.getStackTraceString(error));}
         finish(code,out);
     }

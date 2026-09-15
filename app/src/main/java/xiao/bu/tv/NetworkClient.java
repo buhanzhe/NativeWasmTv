@@ -71,6 +71,11 @@ final class NetworkClient {
     }
 
     static HttpURLConnection open(URL url) throws IOException {
+        String github = GithubProxy.githubSource(url.toString());
+        if (github != null) {
+            if (!GithubProxy.isEnabled()) return factory().open(new URL(github));
+            return new GithubConnection(url, target -> factory().open(target));
+        }
         return factory().open(url);
     }
 

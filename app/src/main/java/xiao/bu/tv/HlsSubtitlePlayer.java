@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Small, cancellable sidecar for HLS WebVTT, which FFmpeg 3.4 does not demux. */
+/** Shared cancellable renderer for HLS WebVTT and M3U SRT/WebVTT sidecars. */
 final class HlsSubtitlePlayer {
     // disconnect() can send a TLS close-notify on Android 7; never do it on the UI thread.
     private static final ExecutorService CONNECTION_CLEANUP = Executors.newSingleThreadExecutor();
@@ -22,6 +22,7 @@ final class HlsSubtitlePlayer {
     interface Output {
         long positionMs();
         void text(String value);
+        default void error() {}
     }
 
     private final String url, headers;
@@ -34,7 +35,7 @@ final class HlsSubtitlePlayer {
     private HlsMediaTracks.Playlist playlist;
     private long refreshedAt, retryAt;
     private Long originOffset;
-    private boolean busy;
+    private boolean busy, errorReported;
     private String displayed = "";
 
     HlsSubtitlePlayer(String url, String headers, Output output) {
@@ -107,6 +108,22 @@ final class HlsSubtitlePlayer {
                         final HlsMediaTracks.Playlist list;
                         if (refresh) {
                             Response response = read(url);
+                            if (!response.body.trim().startsWith("#EXTM3U")) {
+                                final HlsMediaTracks.Vtt cues = HlsMediaTracks.parseVtt(response.body);
+                                if (cues.cues.isEmpty()) throw new IOException("No SRT/WebVTT cues");
+                                final HlsMediaTracks.Playlist standalone = new HlsMediaTracks.Playlist();
+                                long end = 1;
+                                for (HlsMediaTracks.Cue cue : cues.cues) end = Math.max(end, cue.endMs);
+                                standalone.finite = true;
+                                standalone.segments.add(new HlsMediaTracks.Segment(response.url, 0, 0, end));
+                                main.post(() -> {
+                                    if (closed) return;
+                                    playlist = standalone;
+                                    cache.put(response.url, cues);
+                                    busy = false;
+                                });
+                                return;
+                            }
                             list = HlsMediaTracks.parsePlaylist(response.url, response.body, previous);
                         } else list = previous;
                         final Map<String, HlsMediaTracks.Vtt> loaded = new LinkedHashMap<
@@ -156,7 +173,8 @@ final class HlsSubtitlePlayer {
                                     if (closed) return;
                                     busy = false;
                                     retryAt = SystemClock.elapsedRealtime() + 2000;
-                                    Log.w("nTvSubtitle", "Unable to load WebVTT; will retry", error);
+                                    if (!errorReported) { errorReported = true; output.error(); }
+                                    Log.w("nTvSubtitle", "Unable to load subtitles; will retry", error);
                                 }
                             }
                         );
@@ -178,7 +196,7 @@ final class HlsSubtitlePlayer {
 
     private Response read(String target) throws IOException {
         if (closed) throw new IOException("Subtitle session closed");
-        HttpURLConnection current = (HttpURLConnection) new URL(target).openConnection();
+        HttpURLConnection current = NetworkClient.open(new URL(target));
         connection = current;
         current.setConnectTimeout(6000);
         current.setReadTimeout(6000);
@@ -197,8 +215,9 @@ final class HlsSubtitlePlayer {
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 byte[] buffer = new byte[4096];
                 int count;
+                long deadline = SystemClock.elapsedRealtime() + 10000L;
                 while ((count = input.read(buffer)) != -1) {
-                    if (closed || Thread.currentThread().isInterrupted()) throw new IOException(
+                    if (closed || Thread.currentThread().isInterrupted() || SystemClock.elapsedRealtime() > deadline) throw new IOException(
                         "Subtitle load cancelled"
                     );
                     if (bytes.size() + count > 2 * 1024 * 1024) throw new IOException(
@@ -206,7 +225,10 @@ final class HlsSubtitlePlayer {
                     );
                     bytes.write(buffer, 0, count);
                 }
-                return new Response(current.getURL().toString(), bytes.toString("UTF-8"));
+                byte[] data = bytes.toByteArray();
+                String charset = data.length >= 2 && ((data[0] == (byte)0xff && data[1] == (byte)0xfe)
+                        || (data[0] == (byte)0xfe && data[1] == (byte)0xff)) ? "UTF-16" : "UTF-8";
+                return new Response(current.getURL().toString(), new String(data, charset).replace("\uFEFF", ""));
             } finally {
                 input.close();
             }
