@@ -464,6 +464,23 @@ final class PlaylistManager {
     private synchronized ChannelCatalog.Group[] rememberAndFilterGroups(
             ChannelCatalog.Group[] groups) {
         catalogMemoryCache = groups;
+        List<ChannelCatalog.Group> combined = new ArrayList<ChannelCatalog.Group>();
+        for (ChannelCatalog.Group group : groups) combined.add(group);
+        try {
+            JSONArray library = vodLibrary();
+            for (int i = 0; i < library.length(); i++) {
+                JSONObject item = library.getJSONObject(i);
+                JSONArray episodes = item.getJSONArray("episodes");
+                Channel[] channels = new Channel[episodes.length()];
+                for (int e = 0; e < channels.length; e++) {
+                    JSONObject episode = episodes.getJSONObject(e);
+                    channels[e] = new Channel(String.valueOf(e + 1), episode.getString("name"),
+                            null, episode.getString("url"), null, null);
+                }
+                combined.add(new ChannelCatalog.Group(item.getString("group"), ChannelCatalog.SOURCE_CUSTOM, channels));
+            }
+        } catch (JSONException ignored) { }
+        groups = combined.toArray(new ChannelCatalog.Group[combined.size()]);
         availableGroups = groups;
         Set<String> disabled = getDisabledGroups();
         ChannelCatalog.Group[] visible = filterGroups(groups, disabled);
@@ -473,6 +490,29 @@ final class PlaylistManager {
             visible = filterGroups(groups, disabled);
         }
         return visible;
+    }
+
+    synchronized JSONArray vodLibrary() throws JSONException {
+        return new JSONArray(preferences.getString("vod_library_v1", "[]"));
+    }
+
+    synchronized ChannelCatalog.Group[] saveVod(String key, String title, JSONArray episodes)
+            throws Exception {
+        JSONArray old = vodLibrary();
+        JSONArray next = new JSONArray();
+        for (int i = 0; i < old.length(); i++) {
+            JSONObject item = old.getJSONObject(i);
+            if (!key.equals(item.optString("key"))) next.put(item);
+        }
+        if (episodes != null) {
+            if (episodes.length() == 0 || episodes.length() > 1000) throw new IOException("集数无效");
+            if (next.length() >= 30) throw new IOException("最多保存 30 条点播线路，请先移除旧线路");
+            next.put(new JSONObject().put("key", key).put("group", title).put("episodes", episodes));
+        }
+        String value = next.toString();
+        if (value.length() > 2 * 1024 * 1024) throw new IOException("点播库过大，请先移除旧线路");
+        if (!preferences.edit().putString("vod_library_v1", value).commit()) throw new IOException("点播库保存失败");
+        return loadCached();
     }
 
     private ChannelCatalog.Group[] persistAndFilterGroups(ChannelCatalog.Group[] groups) {

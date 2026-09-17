@@ -47,7 +47,11 @@ final class TlsCompat {
             installedTrustManager = new TrustAllManager();
             context.init(null, new TrustManager[] {installedTrustManager}, new SecureRandom());
             SSLSocketFactory socketFactory = context.getSocketFactory();
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN) {
+            // Android 4.x enabling TLS 1.2 is not enough: some system providers
+            // still lack the cipher suites required by current HTTPS CDNs.
+            // The bundled API-14 ARMv7 TLS client supplies those suites on 14-20.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP
+                    && "armeabi-v7a".equals(BuildConfig.CJS_PLUGIN_ABI)) {
                 socketFactory = new LegacyTlsSocket.Factory(installedTrustManager);
             } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                 socketFactory = new ModernTlsSocketFactory(socketFactory);

@@ -14,7 +14,7 @@ import java.util.*;
 
 /** Online per-site plugins with file integrity checks. Network I/O never holds the runtime monitor. */
 public final class CjsPluginRuntime {
-    public static final int HOST_PROTOCOL = 4;
+    public static final int HOST_PROTOCOL = 5;
     public static final String DEFAULT_MANIFEST_URL =
             "https://raw.githubusercontent.com/TvWasm/cjs/main/catalog.json";
     private static final String TAG = "CjsPlugin";
@@ -52,7 +52,7 @@ public final class CjsPluginRuntime {
         return context;
     }
     private static SharedPreferences preferences() {
-        return requireContext().getSharedPreferences("cjs_sites_v4", Context.MODE_PRIVATE);
+        return requireContext().getSharedPreferences("cjs_sites_v5", Context.MODE_PRIVATE);
     }
     public static String getManifestUrl() {
         return preferences().getString("catalog_url", DEFAULT_MANIFEST_URL);
@@ -74,17 +74,19 @@ public final class CjsPluginRuntime {
             throw new IOException("插件名称无效");
         return value;
     }
-    private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v4"); }
+    private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v5"); }
     private static String currentAbi() { return BuildConfig.CJS_PLUGIN_ABI; }
-    private static String pref(State s, String key) { return s.id + ":" + currentAbi() + ":" + key; }
-    private static File siteRoot(State s) { return new File(new File(root(), s.id), currentAbi()); }
+    private static String currentProfile() { return CjsNativeProfile.select(currentAbi(), android.os.Build.VERSION.SDK_INT); }
+    private static String pref(State s, String key) { return s.id + ":" + currentProfile() + ":" + key; }
+    private static File siteRoot(State s) { return new File(new File(root(), s.id), currentProfile()); }
     private static File directory(State s, int version) { return new File(siteRoot(s), String.valueOf(version)); }
 
     private static JSONObject readManifest(byte[] bytes) throws Exception {
         return readManifest(new JSONObject(new String(bytes, "UTF-8")));
     }
     private static JSONObject readManifest(JSONObject value) throws Exception {
-        if (value.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容");
+        if (value.optInt("protocol") != HOST_PROTOCOL) throw new IOException("插件协议不兼容：宿主 "
+                + HOST_PROTOCOL + "，清单 " + value.optInt("protocol", -1));
         // Read old cached envelopes during upgrade; newly published manifests are plain JSON.
         if (value.has("payload")) {
             value = new JSONObject(new String(Base64.decode(value.getString("payload"), Base64.DEFAULT), "UTF-8"));
@@ -209,6 +211,7 @@ public final class CjsPluginRuntime {
         try { input.readFully(header); } finally { input.close(); }
         verifyNativeAbi(header, currentAbi(), library.getName());
         if (!currentAbi().equals(new String(readFile(new File(dir, "abi.txt"), 64), "UTF-8"))) return null;
+        if (!currentProfile().equals(new String(readFile(new File(dir, "profile.txt"), 64), "UTF-8"))) return null;
         JSONObject result = new JSONObject(new String(readFile(new File(dir, "runtime.json"), MAX_SCRIPT_BYTES), "UTF-8"));
         return result.optInt("protocol") == HOST_PROTOCOL && s.id.equals(result.optString("id")) ? result : null;
     }
@@ -245,7 +248,7 @@ public final class CjsPluginRuntime {
                     .put("qualities", s.entry.optJSONObject("qualities")));
         }
         return new JSONObject().put("installed", hasCatalog()).put("version", "按站点管理")
-                .put("pendingVersion", "").put("sites", items).put("abi", currentAbi())
+                .put("pendingVersion", "").put("sites", items).put("abi", currentAbi()).put("profile", currentProfile())
                 .put("abiChangedAtStartup", abiChangedAtStartup).put("manifestUrl", getManifestUrl());
     }
     /** Manual update affects only sites already installed on this ABI. */
@@ -284,8 +287,7 @@ public final class CjsPluginRuntime {
                 String module = s.entry.getString("module") + ".so";
                 for (int i = 0; i < files.length(); i++) {
                     JSONObject f = files.getJSONObject(i);
-                    String abi = f.getString("abi");
-                    if (!"all".equals(abi) && !currentAbi().equals(abi)) continue;
+                    if (!CjsNativeProfile.accepts(f, currentAbi(), android.os.Build.VERSION.SDK_INT)) continue;
                     String filename = name(f.getString("name"));
                     if ((!"runtime.json".equals(filename) && !module.equals(filename)) || !downloaded.add(filename))
                         throw new IOException("站点文件声明无效");
@@ -296,6 +298,7 @@ public final class CjsPluginRuntime {
                 }
                 if (downloaded.size() != 2) throw new IOException("站点插件不完整");
                 writeAndSync(new File(staging, "abi.txt"), currentAbi().getBytes("UTF-8"));
+                writeAndSync(new File(staging, "profile.txt"), currentProfile().getBytes("UTF-8"));
                 JSONObject next = readRuntime(s, staging);
                 if (next == null || next.optInt("version") != version) throw new IOException("站点脚本版本无效");
                 File target = directory(s, version);

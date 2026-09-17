@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>nTv 影视点播</title>
+<style>
+body{font:16px sans-serif;background:#f3f4f7;color:#222;margin:0;padding:16px}main{max-width:760px;margin:auto}section{background:white;border-radius:12px;padding:18px;margin:16px 0}h1{font-size:24px}h2{font-size:19px}input,select,button{font:inherit;padding:11px;border:1px solid #bbb;border-radius:7px;box-sizing:border-box;margin:5px 0;max-width:100%}input,select{width:100%}button{background:#1763c5;color:white;border:0;cursor:pointer;margin-right:8px}button:disabled{opacity:.5;cursor:default}p,small{line-height:1.6}small{color:#555}#message{position:sticky;top:0;padding:12px;background:#e7efff;white-space:pre-wrap;z-index:2}li{margin:10px 0;word-break:break-word}.muted{background:#626b79}.row{border-top:1px solid #eee;padding:10px 0}a{color:#1763c5}label{display:block;margin-top:10px}
+</style></head><body><main>
+<a href="/index.html">返回电视管理</a><h1>影视点播</h1>
+<p>手机选剧，整条线路直接保存到电视频道分组，无需下载或上传 TXT。</p>
+<div id="message" role="status" aria-live="polite">正在连接电视…</div>
+<section><h2>1. 导入 TVBox 订阅</h2><label for="subscription">单仓 JSON 订阅地址</label><input id="subscription" type="password" autocomplete="off" placeholder="https://…"><button id="subscribe">导入 / 更换订阅</button>
+<p><small>支持 type 1 JSON 采集接口。暂不支持多仓、XML、JAR 爬虫、网页解析和 DRM。地址仅在电视本地保存，不内置任何订阅。请只使用有权访问的内容；勿把管理端口开放到公网。</small></p></section>
+<section><h2>2. 检测源并搜索</h2><label for="site">选择源</label><select id="site"></select><label for="keyword">片名（也用于检测）</label><input id="keyword" maxlength="100" placeholder="输入电视剧或电影名称">
+<button id="checkAll">检测全部源</button><button id="checkOne">检测当前源</button><button id="cancel" class="muted">停止检测</button>
+<p id="progress"></p><small>单路后台检测，可离开本页。搜到结果不代表每一集可播放；无结果也不代表源失效。最终解码需电视验证。</small>
+<div><label for="maxPages">每源搜索页数（最多 3 页，非全库扫描）</label><select id="maxPages"><option value="1">1 页 · 更快</option><option value="3">最多 3 页 · 更多结果</option></select><button id="searchAll">搜索全部支持的源</button><button id="stopSearch" class="muted" disabled>停止搜索</button><button id="search">搜索当前源</button></div><p id="searchProgress" role="status" aria-live="polite"></p><small>多源搜索最多同时请求 2 个接口，自动排除重复接口。按标题、年份、类型保守聚合；年份或分类不明的结果单列。慢源不会阻塞已有结果。最多保留 2000 个候选。</small><div id="results"></div><button id="previous" class="muted" disabled>上一页</button><span id="page"></span><button id="next" class="muted" disabled>下一页</button><details><summary>多源搜索记录</summary><ul id="searchChecks"></ul></details>
+<details><summary>本轮检测记录</summary><ul id="checks"></ul></details></section>
+<section><h2>3. 选择线路，整剧投递</h2><div id="detail">请先搜索并选择影片。</div></section>
+<section><h2>已投递到电视</h2><p><small>电视打开频道列表，选择“点播 · 片名”分组即可选集。重复投递相同影片线路会更新地址；不会覆盖直播源。不自动切走当前节目，暂不提供自动连播。</small></p><div id="library"></div></section>
+</main><script>
+(function(){
+'use strict';
+var sites=[], page=1, pages=1, querySite=-1, queryWord='', busy=false, timer=null, generation=0, revision='';
+var searchTask='', searchTimer=null, searchRunning=false, groupNodes={};
+var probeTask='',probeTimer=null,probeOutput=null,recoveryDone=false;
+var labels={available:'有搜索结果',empty:'无搜索结果',failed:'网络或格式失败',unsupported:'暂不支持的源类型'};
+function el(id){return document.getElementById(id);}
+function text(node,value){node.textContent=value;}
+function message(value){text(el('message'),value);}
+function button(title,fn,parent){var b=document.createElement('button');text(b,title);b.onclick=fn;parent.appendChild(b);return b;}
+function api(data,done){
+ if(!data.revision)data.revision=revision;
+ var xhr=new XMLHttpRequest(),finished=false;function finish(err,r){if(finished)return;finished=true;done(err,r);}
+ xhr.open('POST','/api/vod',true);xhr.setRequestHeader('Content-Type','application/json');xhr.timeout=29000;
+ xhr.onreadystatechange=function(){if(xhr.readyState!==4)return;var r;try{r=JSON.parse(xhr.responseText);if(xhr.status!==200||!r.ok)throw new Error(r.message||'请求失败');}catch(e){finish(e);return;}finish(null,r);};
+ xhr.ontimeout=xhr.onerror=function(){finish(new Error('连接失败或超时，请刷新状态后再试。'));};
+ xhr.send(JSON.stringify(data));
+}
+function action(data,done){if(busy)return;busy=true;message('正在处理…');api(data,function(err,r){busy=false;if(err){message(err.message);return;}done(r);});}
+function renderState(r){
+ if(revision&&revision!==r.revision){generation++;searchTask='';if(searchTimer)clearTimeout(searchTimer);el('results').innerHTML='';text(el('detail'),'订阅已改变，请重新搜索。');}
+ revision=r.revision||'';
+ if(!recoveryDone){recoveryDone=true;if(r.searchTask){searchTask=r.searchTask;groupNodes={};el('results').innerHTML='';pollSearch();}}
+ var selected=el('site').value, statuses={},i,item;
+ sites=r.sites||[];
+ for(i=0;i<r.results.length;i++)statuses[r.results[i].id]=r.results[i];
+ el('site').innerHTML='';
+ for(i=0;i<sites.length;i++){item=sites[i];var o=document.createElement('option');o.value=item.id;text(o,item.name+' · '+(statuses[item.id]?labels[statuses[item.id].status]:(item.supported?'未检测':'不支持')));o.disabled=!item.supported;el('site').appendChild(o);}
+ if(selected!==''&&el('site').querySelector('option[value="'+selected+'"]'))el('site').value=selected;
+ el('checkAll').disabled=r.running;el('checkOne').disabled=r.running;el('subscribe').disabled=r.running;el('cancel').disabled=!r.running;
+ text(el('progress'),(r.running?'检测中':r.cancelled?'检测已停止':'检测未开始或已结束')+'：'+r.results.length+' / '+r.total+'，共 '+sites.length+' 个源');
+ el('checks').innerHTML='';
+ for(i=0;i<r.results.length;i++){item=r.results[i];var li=document.createElement('li');text(li,(sites[item.id]?sites[item.id].name:'源')+'：'+labels[item.status]+'（'+item.ms+' ms）');el('checks').appendChild(li);}
+ el('library').innerHTML='';
+ if(!r.library.length)text(el('library'),'暂无点播分组。');
+ for(i=0;i<r.library.length;i++)(function(entry){var row=document.createElement('div');row.className='row';var title=document.createElement('p');text(title,entry.group+' · '+entry.count+' 集');row.appendChild(title);button('移除分组',function(){if(!confirm('仅移除此点播分组？'))return;action({action:'remove',key:entry.key},function(state){renderState(state);message('分组已移除。');});},row);el('library').appendChild(row);})(r.library[i]);
+ if(timer)clearTimeout(timer);if(r.running)timer=setTimeout(refresh,2000);
+}
+function refresh(){api({action:'state'},function(err,r){if(err){message('无法读取电视状态，请确认 nTv 仍在运行。');return;}renderState(r);});}
+el('subscribe').onclick=function(){action({action:'subscribe',url:el('subscription').value},function(r){generation++;el('subscription').value='';el('results').innerHTML='';text(el('detail'),'订阅已更新，请重新搜索。');renderState(r);message('订阅已导入，共 '+r.sites.length+' 个源。');});};
+function check(all){action({action:'check',site:all?-1:Number(el('site').value),keyword:el('keyword').value},function(r){renderState(r);message('检测已启动，可随时停止。');});}
+el('checkAll').onclick=function(){check(true);};el('checkOne').onclick=function(){check(false);};
+el('cancel').onclick=function(){action({action:'cancel'},function(r){renderState(r);message('已请求停止检测。');});};
+function search(p){if(searchRunning){message('请先停止多源搜索。');return;}var s=Number(el('site').value),word=el('keyword').value;action({action:'search',site:s,keyword:word,page:p},function(r){searchTask='';page=p;pages=r.pagecount;querySite=s;queryWord=word;el('results').innerHTML='';text(el('searchProgress'),'当前源搜索');text(el('page'),page+' / '+pages+' ');el('previous').disabled=page<=1;el('next').disabled=page>=pages;if(!r.items.length)text(el('results'),'未找到影片，可换源或缩短片名。');for(var i=0;i<r.items.length;i++)(function(item){var row=document.createElement('div');button(item.name+' '+item.remarks,function(){detail(s,item.id);},row);el('results').appendChild(row);})(r.items[i]);message('搜索完成，当前页 '+r.items.length+' 条结果。');});}
+function renderSearch(r){
+ if(r.task!==searchTask)return;
+ searchRunning=r.running;
+ el('stopSearch').disabled=!r.running;el('searchAll').disabled=r.running;el('search').disabled=r.running;
+ var failed=0,partial=0,more=0,i,j;
+ el('searchChecks').innerHTML='';
+ for(i=0;i<r.statuses.length;i++){var s=r.statuses[i];if(s.status==='failed')failed++;if(s.status==='partial')partial++;if(s.truncated)more++;var li=document.createElement('li');text(li,s.name+'：'+(s.status==='partial'?'部分结果，后续页失败':labels[s.status]||s.status)+' · '+s.count+' 条 / '+s.pages+' 页'+(s.truncated?'（仍有未取结果）':''));el('searchChecks').appendChild(li);}
+ text(el('searchProgress'),'“'+r.keyword+'” · '+(r.running?(r.cancelled?'正在停止':'搜索中'):r.cancelled?'已停止':'已结束')+'：'+r.completed+'/'+r.total+' 源，'+r.groups.length+' 个作品分组 / '+r.count+' 个候选；失败 '+failed+'，部分失败 '+partial+'，未取完 '+more+(r.limited?'；已达到 2000 候选上限':''));
+ for(i=0;i<r.groups.length;i++){
+  var g=r.groups[i],mapKey='g:'+g.key,node=groupNodes[mapKey];
+  if(!node){var box=document.createElement('div');box.className='row';var h=document.createElement('h3');box.appendChild(h);var choices=document.createElement('div');box.appendChild(choices);node={heading:h,choices:choices,seen:{},names:{}};groupNodes[mapKey]=node;el('results').appendChild(box);}
+  for(j=0;j<g.sources.length;j++)(function(item,n){var k='s:'+item.sourceKey+':'+item.id;if(n.seen[k])return;n.seen[k]=true;n.names[item.sourceKey]=true;button(item.sourceName+' · '+item.remarks,function(){detail(item.site,item.id);},n.choices);})(g.sources[j],node);
+  var count=0;for(var k in node.names)if(Object.prototype.hasOwnProperty.call(node.names,k))count++;
+  text(node.heading,g.name+' · '+(g.year||'年份未知')+' · '+({movie:'电影',tv:'电视剧',anime:'动漫',variety:'综艺',unknown:'分类未知'}[g.type]||g.type)+' · '+count+' 个源');
+ }
+ if(!r.running&&!r.groups.length)text(el('results'),r.cancelled?'搜索已停止，暂无结果。':'未找到影片。可缩短片名、增加页数或查看失败记录。');
+ if(searchTimer)clearTimeout(searchTimer);if(r.running)searchTimer=setTimeout(pollSearch,1200);
+}
+function pollSearch(){var task=searchTask;if(!task)return;api({action:'searchState',task:task},function(err,r){if(task!==searchTask)return;if(err){message('读取搜索进度失败：'+err.message+'；可点击停止搜索或刷新页面。');return;}renderSearch(r);});}
+el('searchAll').onclick=function(){action({action:'searchAll',site:-1,keyword:el('keyword').value,maxPages:Number(el('maxPages').value)},function(r){searchTask=r.task;groupNodes={};el('results').innerHTML='';text(el('detail'),'选择搜索结果中的来源查看线路。');el('previous').disabled=true;el('next').disabled=true;text(el('page'),'');renderSearch(r);message('已开始多源搜索，可以直接选择先返回的结果。');});};
+el('stopSearch').onclick=function(){var task=searchTask;api({action:'searchCancel',task:task},function(err,r){if(task!==searchTask)return;if(err){message(err.message);return;}renderSearch(r);message('已请求停止，已找到的结果会保留。');});};
+el('search').onclick=function(){search(1);};
+function turn(delta){if(Number(el('site').value)!==querySite||el('keyword').value!==queryWord){message('源或片名已改变，请重新搜索。');return;}search(page+delta);}
+el('previous').onclick=function(){turn(-1);};el('next').onclick=function(){turn(1);};
+function showProbe(r){
+ if(r.task!==probeTask||!probeOutput)return;
+ var stages={manifest:'清单',key:'AES 密钥',init:'初始化段',sample:'媒体样本'};
+ text(probeOutput,(r.running?'抽检中':r.status==='sample_ok'?'网络样本读取通过':r.status==='cancelled'?'已停止':'抽检失败')+' · '+(stages[r.stage]||r.stage)+(r.code?' ['+r.code+']':'')+' · '+r.bytes+' 字节 · '+r.ms+' ms\n'+r.scope+(r.checkedAt?' · '+new Date(r.checkedAt).toLocaleString():''));
+ if(probeTimer)clearTimeout(probeTimer);if(r.running)probeTimer=setTimeout(function(){var task=probeTask;api({action:'probeState',task:task},function(err,result){if(task!==probeTask)return;if(err){text(probeOutput,err.message);return;}showProbe(result);});},1200);
+}
+function detail(site,video){var version=generation;action({action:'detail',site:site,video:video},function(r){
+ if(version!==generation)return;
+ el('detail').innerHTML='';var h=document.createElement('h3');text(h,r.name+' · '+(sites[site]?sites[site].name:''));el('detail').appendChild(h);
+ for(var i=0;i<r.lines.length;i++)(function(line,index){
+  var row=document.createElement('div');row.className='row';var p=document.createElement('p');text(p,line.name+'：'+line.episodes.length+' 集直链；跳过 '+line.skipped+' 个非直链条目');row.appendChild(p);
+  var b=button('投递整条线路',function(){if(version!==generation){message('订阅已改变，请重新搜索。');return;}action({action:'import',site:site,video:video,line:index,fingerprint:r.fingerprint},function(result){message('已投递 '+result.count+' 集。请在电视频道列表选择：'+result.group);refresh();});},row);b.disabled=!line.episodes.length;
+  var output=document.createElement('p');
+  var test=button('抽检首集网络',function(){if(searchRunning){message('请先停止多源搜索，再抽检选定线路。');return;}if(version!==generation){message('订阅已改变，请重新搜索。');return;}action({action:'probe',site:site,video:video,line:index},function(result){probeTask=result.task;probeOutput=output;showProbe(result);message('正在电视后台抽检首集，不会打断当前播放；这不是全剧解码验证。');});},row);test.disabled=!line.episodes.length;
+  button('停止抽检',function(){if(!probeTask)return;api({action:'probeCancel',task:probeTask},function(err,result){if(err){message(err.message);return;}showProbe(result);});},row);row.appendChild(output);
+  var list=document.createElement('p'),names=[];for(var j=0;j<line.episodes.length;j++)names.push(line.episodes[j].name);text(list,names.join(' / '));row.appendChild(list);el('detail').appendChild(row);
+ })(r.lines[i],i);
+ message('详情已加载。只显示可识别的 M3U8 / MP4 直链；尚未验证逐集播放。');
+});}
+api({action:'state'},function(err,r){if(err){message('无法连接电视，请从 nTv 局域网管理页进入。');return;}renderState(r);message('已连接电视。');});
+})();
+</script></body></html>
