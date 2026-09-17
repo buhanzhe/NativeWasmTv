@@ -198,13 +198,7 @@ final class HlsProxyServer implements Closeable {
     /* The compact IJK build deliberately omits FFmpeg's crypto protocol. Standard
      * AES-128 HLS therefore has to be decrypted by the Java proxy before the clear
      * MPEG-TS segment is returned to IJK. Both maps are per-channel/proxy instance. */
-    private final Map<String, AesSegmentKey> aesSegmentKeys =
-            new LinkedHashMap<String, AesSegmentKey>(64, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, AesSegmentKey> eldest) {
-                    return size() > 512;
-                }
-            };
+    private final HlsKeyRegistry<AesSegmentKey> aesSegmentKeys = new HlsKeyRegistry<AesSegmentKey>();
     private final Map<String, byte[]> aesKeyCache =
             new LinkedHashMap<String, byte[]>(8, 0.75f, true) {
                 @Override
@@ -749,8 +743,10 @@ final class HlsProxyServer implements Closeable {
     }
 
     /** Rewrites ordinary HLS and removes standard AES-128 from IJK's responsibility. */
-    private String rewriteGenericMediaPlaylist(URI base, String[] lines, int sourceLength) {
+    private String rewriteGenericMediaPlaylist(URI base, String[] lines, int sourceLength) throws IOException {
         StringBuilder result = new StringBuilder(sourceLength + 256);
+        boolean finite = false;
+        for (String line : lines) if ("#EXT-X-ENDLIST".equals(line.trim())) { finite = true; break; }
         List<String> mediaSegments = new ArrayList<String>();
         long sequence = parseMediaSequence(lines);
         AesPlaylistKey currentKey = null;
@@ -790,7 +786,7 @@ final class HlsProxyServer implements Closeable {
                             ? sequenceIv(sequence) : currentKey.explicitIv;
                     synchronized (aesSegmentKeys) {
                         aesSegmentKeys.put(absolute,
-                                new AesSegmentKey(currentKey.keyUrl, iv));
+                                new AesSegmentKey(currentKey.keyUrl, iv), finite);
                     }
                 }
                 result.append(proxyUrl(absolute)).append('\n');

@@ -1141,8 +1141,65 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private synchronized JSONObject handleVod(JSONObject request) throws Exception {
+        String action = request.optString("action", "state");
+        int site = request.optInt("site", -1);
+        if (("search".equals(action) || "detail".equals(action) || "import".equals(action)
+                || "check".equals(action) || "searchAll".equals(action) || "searchState".equals(action)
+                || "searchCancel".equals(action) || "probe".equals(action) || "probeState".equals(action)
+                || "probeCancel".equals(action)) && !tvBoxService.matches(request.optString("revision"))) {
+            return new JSONObject().put("ok", false).put("message", "订阅已改变或电视已重启，请刷新页面再搜索");
+        }
+        if ("subscribe".equals(action)) tvBoxService.subscribe(request.optString("url").trim());
+        else if ("check".equals(action)) tvBoxService.check(request.optString("keyword"), site);
+        else if ("cancel".equals(action)) tvBoxService.cancel();
+        else if ("searchAll".equals(action)) return tvBoxService.startSearch(request.optString("keyword"), site, request.optInt("maxPages", 1));
+        else if ("searchState".equals(action) || "searchCancel".equals(action))
+            return tvBoxService.searchState(request.optString("task"), "searchCancel".equals(action));
+        else if ("probe".equals(action)) return tvBoxService.probe(site, request.optString("video"), request.optInt("line", -1));
+        else if ("probeState".equals(action) || "probeCancel".equals(action))
+            return tvBoxService.probeState(request.optString("task"), "probeCancel".equals(action));
+        else if ("search".equals(action)) return tvBoxService.search(site, request.optString("keyword"),
+                Math.max(1, request.optInt("page", 1)), false);
+        else if ("detail".equals(action)) return tvBoxService.detail(site, request.optString("video"));
+        else if ("import".equals(action)) {
+            String video = request.optString("video");
+            int line = request.optInt("line", -1);
+            JSONObject detail = tvBoxService.detail(site, video);
+            if (request.has("fingerprint") && !request.optString("fingerprint").equals(detail.optString("fingerprint")))
+                return new JSONObject().put("ok", false).put("message", "源站剧集或地址已变化，请重新打开详情再投递");
+            JSONObject selected = detail.getJSONArray("lines").getJSONObject(line);
+            String key = tvBoxService.libraryKey(site, video, line);
+            String group = "点播 · " + detail.getString("name") + " · " + selected.getString("name")
+                    + " [" + key.substring(0, 8) + "]";
+            applyPlaylistGroupVisibility(playlistManager.saveVod(key, group, selected.getJSONArray("episodes")));
+            return new JSONObject().put("ok", true).put("group", group)
+                    .put("count", selected.getJSONArray("episodes").length());
+        } else if ("remove".equals(action)) {
+            applyPlaylistGroupVisibility(playlistManager.saveVod(request.optString("key"), "", null));
+        } else if (!"state".equals(action)) throw new IOException("未知点播操作");
+        JSONObject state = tvBoxService.state();
+        JSONArray library = playlistManager.vodLibrary();
+        JSONArray summary = new JSONArray();
+        for (int i = 0; i < library.length(); i++) {
+            JSONObject item = library.getJSONObject(i);
+            summary.put(new JSONObject().put("key", item.getString("key")).put("group", item.getString("group"))
+                    .put("count", item.getJSONArray("episodes").length()));
+        }
+        return state.put("library", summary);
+    }
+
+    private TvBoxService tvBoxService;
+
     private void startManagementServer() {
         try {
+            if (tvBoxService == null) tvBoxService = new TvBoxService(new TvBoxService.Store() {
+                public String read() { return getSharedPreferences("vod", MODE_PRIVATE).getString("sites", "[]"); }
+                public boolean save(String value) { return getSharedPreferences("vod", MODE_PRIVATE)
+                        .edit().putString("sites", value).commit(); }
+            }, new TvBoxService.Transport() {
+                public HttpURLConnection open(URL url) throws IOException { return NetworkClient.open(url); }
+            });
             InputStream input = getResources().openRawResource(R.raw.control);
             byte[] html;
             try {
@@ -1151,6 +1208,10 @@ public final class MainActivity extends Activity {
                 input.close();
             }
             controlServer = new LocalControlServer(html, new LocalControlServer.Listener() {
+                @Override
+                public String vod(JSONObject request) throws Exception {
+                    return handleVod(request).toString();
+                }
                 @Override
                 public String stateJson() {
                     return buildControlState();
@@ -1257,6 +1318,11 @@ public final class MainActivity extends Activity {
     }
 
     private LocalControlServer.Resource handleControlPage(String path) throws IOException {
+        if ("vod.html".equals(path)) {
+            InputStream input = getResources().openRawResource(R.raw.vod);
+            try { return new LocalControlServer.Resource("text/html; charset=utf-8", readStream(input)); }
+            finally { input.close(); }
+        }
         String contentType = path.endsWith(".js")
                 ? "application/javascript; charset=utf-8" : "text/html; charset=utf-8";
         if (BuildConfig.EMBED_CONTROL_PAGES) {
@@ -7141,6 +7207,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (tvBoxService != null) tvBoxService.close();
         playRequestId++;
         cancelPendingRelativeSwitch();
         releaseCrashRecovery(isFinishing());

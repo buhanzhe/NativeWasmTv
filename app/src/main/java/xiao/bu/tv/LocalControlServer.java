@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 final class LocalControlServer implements Closeable {
     interface Listener {
         String stateJson();
+        String vod(JSONObject request) throws Exception;
         String control(JSONObject request) throws Exception;
         String pointer(JSONObject request) throws Exception;
         String settings(JSONObject request) throws Exception;
@@ -164,11 +165,17 @@ final class LocalControlServer implements Closeable {
             int contentLength = 0;
             boolean invalidContentLength = false;
             boolean chunkedBody = false;
+            String origin = "";
+            String host = "";
+            String contentType = "";
             String line;
             while ((line = readLine(input)) != null && line.length() > 0) {
                 int colon = line.indexOf(':');
                 String headerName = colon > 0 ? line.substring(0, colon).trim() : "";
                 String headerValue = colon > 0 ? line.substring(colon + 1).trim() : "";
+                if ("origin".equalsIgnoreCase(headerName)) origin = headerValue;
+                if ("host".equalsIgnoreCase(headerName)) host = headerValue;
+                if ("content-type".equalsIgnoreCase(headerName)) contentType = headerValue;
                 if ("content-length".equalsIgnoreCase(headerName)) {
                     try {
                         long parsedLength = Long.parseLong(headerValue);
@@ -190,7 +197,12 @@ final class LocalControlServer implements Closeable {
                         jsonError("请求长度无效"));
                 return;
             }
-            int bodyLimit = path.startsWith("/api/ku9/script/upload")
+            if (path.startsWith("/api/vod") && (!contentType.startsWith("application/json")
+                    || (origin.length() > 0 && !origin.equals("http://" + host)))) {
+                send(socket, 403, "application/json; charset=utf-8", jsonError("请从电视的局域网管理页访问"));
+                return;
+            }
+            int bodyLimit = path.startsWith("/api/vod") ? 16384 : path.startsWith("/api/ku9/script/upload")
                     ? MAX_KU9_SCRIPT_BYTES : requestBodyLimit();
             if (contentLength > bodyLimit) {
                 send(socket, 413, "application/json; charset=utf-8",
@@ -226,7 +238,20 @@ final class LocalControlServer implements Closeable {
         }
         if ("GET".equals(method) && ("/".equals(path) || "/index.html".equals(path))) {
             send(socket, 200, "text/html; charset=utf-8", indexHtml);
-        } else if ("GET".equals(method) && ("/flymouse.html".equals(path)
+        } else if ("POST".equals(method) && "/api/vod".equals(path)) {
+            // Do not let token-bearing upstream exceptions reach generic HTTP logging.
+            String action = "";
+            try {
+                JSONObject request = new JSONObject(new String(body, "UTF-8"));
+                action = request.optString("action");
+                send(socket, 200, "application/json; charset=utf-8",
+                        listener.vod(request).getBytes("UTF-8"));
+            } catch (Exception error) {
+                send(socket, 200, "application/json; charset=utf-8",
+                        VodErrors.json(action, error).getBytes("UTF-8"));
+            }
+        } else if ("GET".equals(method) && ("/vod.html".equals(path)
+                || "/flymouse.html".equals(path)
                 || "/video-recorder.html".equals(path)
                 || "/mp4-finalizer.js".equals(path))) {
             Resource resource = listener.page(path.substring(1));
