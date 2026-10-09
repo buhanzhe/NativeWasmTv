@@ -2965,7 +2965,7 @@ public final class WebSourceView extends FrameLayout {
                 WebResourceResponse page = LegacyTvSiteAdapter.page(url, legacyPrelude);
                 if (page != null) return page;
                 return LegacyWebHttp.intercept(url, activeUserAgent, bootstrap,
-                        (cookieUrl, value) -> view.post(() -> CookieManager.getInstance().setCookie(cookieUrl, value)),
+                        (cookieUrl, value) -> LegacyWebCookies.save(view,cookieUrl,value),
                         target -> view.post(() -> {
                             if (this != sourceClient || view != webView || !pageActive
                                     || bootstrapGeneration != pageLoadGeneration) return;
@@ -2975,8 +2975,7 @@ public final class WebSourceView extends FrameLayout {
             String cookies = claimHttpsFallback(url);
             if (cookies != null) {
                 return LegacyWebHttp.intercept(url, activeUserAgent, cookies,
-                        (cookieUrl, value) -> view.post(() -> CookieManager.getInstance()
-                                .setCookie(cookieUrl, value)),
+                        (cookieUrl, value) -> LegacyWebCookies.save(view,cookieUrl,value),
                         target -> view.post(() -> {
                             if (this != sourceClient || view != webView || !pageActive
                                     || !url.equals(view.getUrl())) return;
@@ -3007,7 +3006,7 @@ public final class WebSourceView extends FrameLayout {
 
         private WebResourceResponse interceptConfirmedHtml(WebView view, String url) {
             return LegacyWebHttp.intercept(url, activeUserAgent, htmlMimeOverrideCookies,
-                    (cookieUrl, value) -> view.post(() -> CookieManager.getInstance().setCookie(cookieUrl, value)),
+                    (cookieUrl, value) -> LegacyWebCookies.save(view,cookieUrl,value),
                     target -> view.post(() -> {
                         if (this != sourceClient || view != webView || !pageActive) return;
                         htmlMimeOverrideUrl = target;

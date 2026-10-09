@@ -60,6 +60,10 @@ Android probes use LegacyWebCompatibilityInstrumentation:
   -e playback true: require browser playback time to advance for 10 seconds
   -e native true: production webview:// channel switch + native first frame,
                   output fps and buffering over 10 seconds; restores settings
+                  -e transpile true enables the experiment for this run;
+                  per-channel screenshots and browser diagnostics are recorded
+  -e dumpStall true: optional same-UID SIGQUIT diagnostic for a stalled browser;
+                    collect /data/anr/traces.txt to inspect that browser's stack
 JSONL results are written to the app's external files directory.
 
 Generic syntax experiment (Android 4.4, default OFF):
@@ -118,5 +122,20 @@ Reproduce compiler assets and tests:
   Device tested: SM-G3608 / Android 4.4.4; no Android 7.1 device tested for this work.
 
 Observed dense-modern 10/100/300 KB stress scripts exceed the 8 s transform limit.
-Small generic pages benefit after caching; tested large TV sites still have
-syntax/runtime errors and cold-load regressions. This is why the switch stays OFF.
+Small generic pages benefit after caching. In the 2026-10-09 18-site real-device
+comparison, Nanjing TV gained actual native playback (6.875 s first frame, 25 fps,
+no rebuffer during 10 s); with transpilation OFF it had no first frame in 45 s.
+Other tested large TV sites still have syntax/runtime errors and load regressions,
+including on cached revisits. This is why the switch stays OFF.
+
+Real-site testing also exposed a separate Chromium 33 cookie/UI circular wait:
+nativeSetCookie on UI waited for Chromium while sensor initialization waited for
+UI services. Native HTTP response cookies now use LegacyWebCookies' bounded,
+serial worker on pre-Lollipop. It does not perform CookieManager calls on the
+interception thread. A cookie-sensors fixture adds a fresh response cookie while
+starting deviceorientation, then verifies document.cookie and an XHR cookie header
+at the server. Three production-isolated-browser runs passed on Android 4.4:
+  -e urls http://HOST:18769/cookie-sensors?nonce=UNIQUE
+  -e proof true -e settleSeconds 2 -e timeoutSeconds 15
+The fixture is ES5 and should pass without -e transpile true.
+Local measurements/report: reports/real-webview-4.4-20261009.txt.

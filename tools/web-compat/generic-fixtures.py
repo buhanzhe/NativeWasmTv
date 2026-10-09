@@ -1,6 +1,10 @@
 """Local, host-independent compatibility fixtures. No external accounts/media."""
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import argparse
+import json
+import re
+from urllib.parse import parse_qs, urlsplit
+from http.cookies import SimpleCookie
 
 scripts = {
     '/external.js': "const values=new Set([1,2,2]); let sum=0; for(const v of values)sum+=v; window.externalProof=sum===3; const tag=document.createElement('script');tag.src='/chunk.js';document.head.appendChild(tag);",
@@ -25,15 +29,34 @@ pages = {
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        path=self.path.split('?',1)[0]
+        parsed=urlsplit(self.path);path=parsed.path
+        nonce=parse_qs(parsed.query).get('nonce',['probe'])[0]
+        nonce=re.sub(r'[^a-zA-Z0-9_-]','',nonce)[:64] or 'probe'
         value=scripts.get(path)
         mime='application/javascript; charset=utf-8'
+        if path=='/cookie-check':
+            cookies=SimpleCookie(self.headers.get('Cookie',''))
+            match=cookies.get('ntv_compat_cookie')
+            value=json.dumps({'match':bool(match and match.value==nonce)});mime='application/json'
         if value is None:
             value=pages.get(path)
             mime='text/html; charset=utf-8'
+            if path=='/cookie-sensors':
+                # A real KitKat thread dependency: sensor startup needs UI services
+                # while the native response's Set-Cookie writes reach Chromium.
+                value='''<script>(function(){var nonce=%s,tries=0;function sensor(){}
+window.addEventListener('deviceorientation',sensor,false);
+var timer=setInterval(function(){if(document.cookie.indexOf('ntv_compat_cookie='+nonce)<0){
+if(++tries<100)return;clearInterval(timer);window.__ntvGenericProof='FAIL';return;}
+clearInterval(timer);var x=new XMLHttpRequest();x.open('GET','/cookie-check?nonce='+nonce,true);x.timeout=5000;
+x.onload=function(){window.__ntvGenericProof=x.status===200&&JSON.parse(x.responseText).match?'PASS':'FAIL';
+window.removeEventListener('deviceorientation',sensor,false);};
+x.onerror=x.ontimeout=function(){window.__ntvGenericProof='FAIL';};x.send();},50);})();</script>''' % json.dumps(nonce)
             if value is not None:value='<!doctype html><html><head><meta charset="utf-8">'+value+'</head><body>Generic fixture</body></html>'
         if value is None:self.send_error(404);return
-        data=value.encode('utf-8');self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.send_header('Connection','close');self.end_headers();self.wfile.write(data)
+        data=value.encode('utf-8');self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.send_header('Connection','close')
+        if path=='/cookie-sensors':self.send_header('Set-Cookie','ntv_compat_cookie='+nonce+'; Path=/; SameSite=Lax')
+        self.end_headers();self.wfile.write(data)
     def log_message(self, *args): pass
 
 if __name__=='__main__':

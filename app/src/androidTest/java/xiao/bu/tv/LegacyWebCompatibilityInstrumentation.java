@@ -51,11 +51,15 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
                 if(url.isEmpty())continue;
                 long begin=SystemClock.elapsedRealtime();
                 runOnMainSync(()->source.open(7654,url,"",false));
-                JSONObject snapshot=new JSONObject();boolean complete=false;long playedAt=0,completedAt=0;double firstTime=0;boolean playback=args.containsKey("playback");
+                JSONObject snapshot=new JSONObject();boolean complete=false,dumped=false;long playedAt=0,completedAt=0;double firstTime=0;boolean playback=args.containsKey("playback");
                 while(SystemClock.elapsedRealtime()-begin<limit) {
                     CountDownLatch done=new CountDownLatch(1);JSONObject[] value={new JSONObject()};
                     runOnMainSync(()->source.inspectCompatibility(v->{value[0]=v;done.countDown();}));
                     if(done.await(4,TimeUnit.SECONDS))snapshot=value[0];
+                    if(args.containsKey("dumpStall")&&!dumped&&snapshot.length()==0&&SystemClock.elapsedRealtime()-begin>5000){
+                        LegacyWebSession session=(LegacyWebSession)field(source,"legacy");
+                        if(session!=null&&session.pid>0){android.os.Process.sendSignal(session.pid,3);dumped=true;}
+                    }
                     if(!snapshot.optString("url").isEmpty()&&!snapshot.optString("url").startsWith("about:")
                             &&"complete".equals(snapshot.optString("ready"))) {
                         complete=true;
@@ -82,12 +86,14 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
         finish(code,result);
     }
     private void nativePlayback(){
-        Bundle result=new Bundle();MainActivity activity=null;PrintWriter writer=null;
+        Bundle result=new Bundle();int code=-1;MainActivity activity=null;PrintWriter writer=null;
         java.util.Map<String,?> saved=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0).getAll();
         ChannelCatalog.Group[] groups=ChannelCatalog.GROUPS;
         try{
             activity=(MainActivity)startActivitySync(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));SystemClock.sleep(1500);
             groups=ChannelCatalog.GROUPS;final MainActivity owner=activity;
+            final WebSourceView source=(WebSourceView)field(owner,"webSourceView");
+            runOnMainSync(()->source.setLegacyTranspilation(args.containsKey("transpile")));
             writer=new PrintWriter(new File(getTargetContext().getExternalFilesDir(null),"web-compat-"+args.getString("label","native")+".jsonl"),"UTF-8");
             java.util.List<String> urls=new java.util.ArrayList<>();
             if(args.containsKey("urls"))urls.add(args.getString("urls"));else try(BufferedReader r=new BufferedReader(new InputStreamReader(new FileInputStream(args.getString("list")),"UTF-8"))){String s;while((s=r.readLine())!=null)if(!s.trim().isEmpty())urls.add(s.trim());}
@@ -101,28 +107,35 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
                     for(String name:new String[]{"currentGroupIndex","currentChannelIndex","currentSourceIndex"}){Field f=MainActivity.class.getDeclaredField(name);f.setAccessible(true);f.setInt(owner,0);}
                     Method start=MainActivity.class.getDeclaredMethod("startChannel",int.class);start.setAccessible(true);start.invoke(owner,0);
                 }catch(Exception e){throw new RuntimeException(e);}});
-                tv.danmaku.ijk.media.player.IjkMediaPlayer player=null;
+                tv.danmaku.ijk.media.player.IjkMediaPlayer player=null;boolean hadPage=false,pageRetired=false;
                 while(SystemClock.elapsedRealtime()-began<45000){
                     if((Boolean)field(owner,"videoRenderingStarted")){Object p=field(owner,"player");if(p instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer){player=(tv.danmaku.ijk.media.player.IjkMediaPlayer)p;break;}}
+                    hadPage|=source.hasRetainedPage();
+                    if(hadPage&&!source.hasRetainedPage()&&field(owner,"player")==null&&field(owner,"pendingPlayerChannel")==null){pageRetired=true;break;}
                     SystemClock.sleep(100);
                 }
-                long first=SystemClock.elapsedRealtime()-began;JSONObject row=new JSONObject().put("requested",url).put("firstFrame",player!=null).put("firstFrameMs",first);
+                long first=SystemClock.elapsedRealtime()-began;JSONObject row=new JSONObject().put("requested",url).put("firstFrame",player!=null).put("firstFrameMs",first).put("pageRetired",pageRetired);
                 if(player!=null){long position=player.getCurrentPosition();int buffers=(Integer)field(owner,"bufferingEventId");SystemClock.sleep(10000);
                     row.put("fps",player.getVideoOutputFramesPerSecond()).put("positionAdvancedMs",player.getCurrentPosition()-position).put("rebufferEvents",(Integer)field(owner,"bufferingEventId")-buffers);
-                    android.graphics.Bitmap shot=getUiAutomation().takeScreenshot();if(shot!=null){try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"web-compat-native.png"))){shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{shot.recycle();}}
+                    String shotName="web-compat-"+args.getString("label","native")+"-"+urls.indexOf(url)+".png";
+                    android.graphics.Bitmap shot=getUiAutomation().takeScreenshot();if(shot!=null){try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),shotName))){shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);row.put("screenshot",shotName);}finally{shot.recycle();}}
                 }
-                writer.println(row);writer.flush();
+                CountDownLatch inspected=new CountDownLatch(1);JSONObject[] snapshot={new JSONObject()};
+                runOnMainSync(()->source.inspectCompatibility(value->{snapshot[0]=value;inspected.countDown();}));
+                inspected.await(4,TimeUnit.SECONDS);
+                row.put("snapshot",snapshot[0]).put("retained",source.hasRetainedPage());
+                writer.println(row);writer.flush();System.out.println(row);
                 runOnMainSync(()->{try{for(String name:new String[]{"closeWebSource","releasePlayer"}){Method m=MainActivity.class.getDeclaredMethod(name);m.setAccessible(true);m.invoke(owner);}}catch(Exception e){throw new RuntimeException(e);}});
             }
             result.putString("stream","Completed native handoff probes\n");
-        }catch(Throwable error){result.putString("stream",android.util.Log.getStackTraceString(error));}
+        }catch(Throwable error){code=0;result.putString("stream",android.util.Log.getStackTraceString(error));}
         finally{
             if(writer!=null)writer.close();ChannelCatalog.GROUPS=groups;
             android.content.SharedPreferences.Editor e=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0).edit().clear();
             for(java.util.Map.Entry<String,?> v:saved.entrySet()){Object x=v.getValue();String k=v.getKey();if(x instanceof String)e.putString(k,(String)x);else if(x instanceof Boolean)e.putBoolean(k,(Boolean)x);else if(x instanceof Integer)e.putInt(k,(Integer)x);else if(x instanceof Long)e.putLong(k,(Long)x);else if(x instanceof Float)e.putFloat(k,(Float)x);else if(x instanceof java.util.Set)e.putStringSet(k,(java.util.Set<String>)x);}e.commit();
             if(activity!=null)activity.finish();
         }
-        finish(-1,result);
+        finish(code,result);
     }
     private void fixture() {
         Bundle result=new Bundle();android.webkit.WebView[] view={null};CountDownLatch loaded=new CountDownLatch(1);
