@@ -36,6 +36,7 @@
 -dontwarn androidx.webkit.internal.StartupApiFeature
 
 -keep class xiao.bu.tv.NativeQuickJs { *; }
+-keep class xiao.bu.tv.LegacyJsTranspiler { *; }
 -keep class xiao.bu.tv.LegacyTlsSocket { *; }
 -keep interface xiao.bu.tv.NativeQuickJs$Host { *; }
 -keepclassmembers class * implements xiao.bu.tv.NativeQuickJs$Host {

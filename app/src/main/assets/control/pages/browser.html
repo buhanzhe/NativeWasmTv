@@ -131,6 +131,13 @@
             </div>
             <button onclick="navigateTo('/pages/script.html')">配置</button>
           </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>旧网页语法兼容（实验）</b><span>适用于 Android 4.4，尝试加载使用现代语法的网页；首次打开可能较慢，缓存后更快。默认关闭，下次打开网页生效。</span>
+            </div>
+            <input id="webViewLegacyTranspilation" class="source-toggle" type="checkbox"
+              aria-label="旧网页语法兼容" onchange="saveWebViewSettings()" />
+          </div>
         </div>
       </section>
       <section class="browser-section">

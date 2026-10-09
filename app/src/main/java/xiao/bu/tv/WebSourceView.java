@@ -152,6 +152,7 @@ public final class WebSourceView extends FrameLayout {
     private boolean adBlockEnabled = true;
     private boolean webRtcEnabled;
     private boolean userScriptEnabled;
+    private volatile boolean legacyTranspilationEnabled;
     private String userScripts = "[]";
     private int viewportWidth = VIEWPORT_720P_WIDTH;
     private int viewportHeight = VIEWPORT_720P_HEIGHT;
@@ -1262,7 +1263,7 @@ public final class WebSourceView extends FrameLayout {
             data.putString("ua", requestedUserAgentMode); data.putString("version", requestedBrowserVersionMode);
             data.putFloat("pageScale", requestedPageScale); data.putBoolean("ads", requestedAdBlock);
             data.putBoolean("rtc", requestedWebRtc); data.putBoolean("scripts", requestedUserScriptEnabled);
-            data.putString("userScripts", requestedUserScripts); legacy.configure(data); return;
+            data.putString("userScripts", requestedUserScripts);data.putBoolean("transpile",legacyTranspilationEnabled); legacy.configure(data); return;
         }
         String nextMode = "4k".equals(requestedViewportMode)
                 || "2k".equals(requestedViewportMode)
@@ -1332,6 +1333,12 @@ public final class WebSourceView extends FrameLayout {
 
     void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    /** Experimental syntax adaptation applies to newly opened documents. */
+    void setLegacyTranspilation(boolean enabled){
+        legacyTranspilationEnabled=enabled;
+        if(legacy!=null){legacy.configuration.putBoolean("transpile",enabled);android.os.Bundle data=new android.os.Bundle();data.putBoolean("enabled",enabled);legacy.send("transpilation",data);}
     }
 
     void legacyUnavailable(int failedRequest, String reason) {
@@ -1553,6 +1560,7 @@ public final class WebSourceView extends FrameLayout {
         beginPageLoad(webView);
         resetResourcePage(target);
         sourceClient.resetHttpsFallback();
+        sourceClient.armBootstrap(target);
         webView.loadUrl(target);
     }
 
@@ -2036,6 +2044,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void clearBrowserCache() {
+        deleteObsoleteProxyCache(new File(getContext().getCacheDir(), "legacy-js-cache"));
         if (legacy != null) {
             if (legacy.active) legacy.command("cache");
             else getContext().startService(new android.content.Intent(getContext(), LegacyWebCacheService.class));
@@ -2079,7 +2088,8 @@ public final class WebSourceView extends FrameLayout {
         cachedBrowserCacheBytes = measureFiles(webViewData, false)
                 + measureFiles(new File(cacheRoot, "webview"), true)
                 + measureFiles(new File(cacheRoot, "WebView"), true)
-                + measureFiles(new File(cacheRoot, "webviewCacheChromium"), true);
+                + measureFiles(new File(cacheRoot, "webviewCacheChromium"), true)
+                + measureFiles(new File(cacheRoot, "legacy-js-cache"), true);
         browserCacheMeasuredAt = now;
         return cachedBrowserCacheBytes;
     }
@@ -2131,10 +2141,33 @@ public final class WebSourceView extends FrameLayout {
         if (pageScriptManager != null) {
             pageScriptManager.update(blockAds, webRtcEnabled,
                     userScriptEnabled, userScripts);
+            if (sourceClient != null)
+                sourceClient.legacyPrelude = LegacyWebCompatibility.supports(pageUrl)
+                        ? pageScriptManager.legacyDocumentPrelude() : "";
         }
     }
 
     interface SmartContextCallback { void onResult(JSONObject result); }
+    /** Fixed, read-only diagnostics; does not expose arbitrary script execution over IPC. */
+    void inspectCompatibility(SmartContextCallback callback) {
+        if (legacy != null) { legacy.inspectCompatibility(callback); return; }
+        if (webView == null || Build.VERSION.SDK_INT < 19) { callback.onResult(new JSONObject()); return; }
+        webView.evaluateJavascript("(function(){var p=window.performance,t=p&&p.timing,v=document.querySelector('video');"
+                + "return {url:location.href,title:document.title,ready:document.readyState,"
+                + "text:document.body?(document.body.innerText||'').slice(0,180):'',"
+                + "compat:window.__ntvTvCompatibility||null,errors:window.__ntvCompatErrors||[],genericProof:typeof window.__ntvGenericProof==='string'?window.__ntvGenericProof.slice(0,64):'',"
+                + "policy:window.__ntvPagePolicy,modernScripts:'noModule' in document.createElement('script'),"
+                + "promise:typeof Promise,fetch:typeof fetch,params:typeof URLSearchParams,"
+                + "domMs:t&&t.domContentLoadedEventEnd>0?t.domContentLoadedEventEnd-t.navigationStart:0,"
+                + "loadMs:t&&t.loadEventEnd>0?t.loadEventEnd-t.navigationStart:0,"
+                + "video:v?{src:v.currentSrc,ready:v.readyState,paused:v.paused,time:v.currentTime,error:v.error&&v.error.code}:null};})()",
+                value -> {
+                    JSONObject result=LegacyWebSession.json(value);
+                    try { synchronized(discoveredStreamUrls){result.put("discoveredStreams",discoveredStreamUrls.size());} if(sourceClient!=null)result.put("transpiler",sourceClient.transpilation.stats()); }
+                    catch(org.json.JSONException ignored) { }
+                    callback.onResult(result);
+                });
+    }
 
     void inspectSmartContext(float screenX, float screenY,
             final SmartContextCallback callback) {
@@ -2683,12 +2716,33 @@ public final class WebSourceView extends FrameLayout {
         private String attemptedFallback;
         private boolean fallbackRetryActive;
         private boolean fallbackExhausted;
+        private String bootstrapUrl, bootstrapCookies;
+        private volatile String legacyPrelude = "";
+        private volatile LegacyWebTranspilation transpilation=new LegacyWebTranspilation(getContext());
 
         void awaitDocument(String url) {
             expectedDocument = navigationDocument(url);
             replacedDocument = navigationDocument(webView == null ? null : webView.getUrl());
             mainDocumentUrl = url;
             awaitingDocument = true;
+            armBootstrap(url);
+        }
+
+        private synchronized void armBootstrap(String url) {
+            // This runs on the UI thread for explicit GET navigation only.
+            bootstrapUrl = bootstrapCookies = null;
+            if (!LegacyWebCompatibility.enabled()) return;
+            LegacyWebCompatibility.script(getContext());
+            if (LegacyWebCompatibility.supports(url)) {
+                bootstrapUrl = normalizedDocument(url);
+                bootstrapCookies = CookieManager.getInstance().getCookie(url);
+                LegacyWebTranspilation document=new LegacyWebTranspilation(getContext());document.navigate(url,bootstrapCookies);transpilation=document;
+            }
+        }
+        private synchronized String claimBootstrap(String url) {
+            if (!normalizedDocument(url).equals(bootstrapUrl)) return null;
+            bootstrapUrl = null;
+            return bootstrapCookies == null ? "" : bootstrapCookies;
         }
 
         synchronized void resetHttpsFallback() {
@@ -2765,6 +2819,7 @@ public final class WebSourceView extends FrameLayout {
                 return false;
             }
             if (awaitingDocument) expectedDocument = navigationDocument(url);
+            armBootstrap(url);
             // Let WebView commit links and redirects itself. Reissuing loadUrl here
             // cancels the original navigation and replaces its history semantics.
             // onPageStarted updates pageUrl when the navigation actually commits.
@@ -2896,8 +2951,27 @@ public final class WebSourceView extends FrameLayout {
             if (requestAdBlockEnabled && !sameDocument(url, mainDocumentUrl)
                     && WebAdBlocker.shouldBlock(url)) return blockedResponse();
             if (this != sourceClient || view != webView || !pageActive) return null;
+            WebResourceResponse adapted = LegacyTvSiteAdapter.resource(mainDocumentUrl, url, activeUserAgent);
+            if (adapted != null) return adapted;
             if (sameDocument(url, htmlMimeOverrideUrl)) return interceptConfirmedHtml(view, url);
             observeResource(view, this, url);
+            if(legacyTranspilationEnabled&&LegacyJsTranspiler.enabled()&&!sameDocument(url,mainDocumentUrl)){
+                WebResourceResponse compiled=transpilation.resource(url,activeUserAgent);
+                if(compiled!=null)return compiled;
+            }
+            String bootstrap = claimBootstrap(url);
+            if (bootstrap != null && !legacyPrelude.isEmpty()) {
+                final int bootstrapGeneration = pageLoadGeneration;
+                WebResourceResponse page = LegacyTvSiteAdapter.page(url, legacyPrelude);
+                if (page != null) return page;
+                return LegacyWebHttp.intercept(url, activeUserAgent, bootstrap,
+                        (cookieUrl, value) -> view.post(() -> CookieManager.getInstance().setCookie(cookieUrl, value)),
+                        target -> view.post(() -> {
+                            if (this != sourceClient || view != webView || !pageActive
+                                    || bootstrapGeneration != pageLoadGeneration) return;
+                            armBootstrap(target);view.loadUrl(target);
+                        }), false, legacyPrelude,legacyTranspilationEnabled?transpilation:null);
+            }
             String cookies = claimHttpsFallback(url);
             if (cookies != null) {
                 return LegacyWebHttp.intercept(url, activeUserAgent, cookies,
@@ -2909,7 +2983,7 @@ public final class WebSourceView extends FrameLayout {
                             armHttpsFallback(target,
                                     CookieManager.getInstance().getCookie(target));
                             view.loadUrl(target);
-                        }));
+                        }), false, LegacyWebCompatibility.supports(url) ? legacyPrelude : "",legacyTranspilationEnabled&&LegacyJsTranspiler.enabled()?transpilation:null);
             }
             return null;
         }
@@ -2939,7 +3013,7 @@ public final class WebSourceView extends FrameLayout {
                         htmlMimeOverrideUrl = target;
                         htmlMimeOverrideCookies = CookieManager.getInstance().getCookie(target);
                         view.loadUrl(target);
-                    }), true);
+                    }), true, LegacyWebCompatibility.supports(url) ? legacyPrelude : "",legacyTranspilationEnabled&&LegacyJsTranspiler.enabled()?transpilation:null);
         }
 
         @Override

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "@babel/standalone",
+    "version": "7.28.5",
+    "file": "babel.min.js",
+    "sha256": "f72cb977ba7831ffb8160a4f5b74dda91567e11ec09665d6c8fc8b7dc1ab5eaf"
+  },
+  {
+    "name": "acorn",
+    "version": "8.15.0",
+    "file": "dist/acorn.js",
+    "sha256": "fdb08546776ec6228b03e8d02b40d4ab3255bae5f401adba7ff5dad927ac5c9c"
+  },
+  {
+    "name": "systemjs",
+    "version": "6.15.1",
+    "file": "dist/s.min.js",
+    "sha256": "f7329532908ed479640b262c69116bfb7019718600aefed12b59e61da3d7df2a"
+  }
+]

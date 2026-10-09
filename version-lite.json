@@ -5,9 +5,9 @@
     "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
     "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
     "apkX86Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTvX86.apk",
-    "sha256": "2b60bfaa71b4d6543cee610e652ad9e67523e1ef317e922d9df879c1abe6da5f",
-    "sha25632": "2b60bfaa71b4d6543cee610e652ad9e67523e1ef317e922d9df879c1abe6da5f",
-    "sha25664": "9751f2b4bd545f9c3796f7cded7455d264f9a734e74da2ba371235f8ed4f5b7b",
-    "sha256X86": "5cfeeb99d94a80d304b5e43c2fe881c9ec8fef9ce241a4c3758e3ed1851422be",
+    "sha256": "c24b2e2aa889b06c3297ef6a76002a84a20207d9c0156b8edc4420a57a8d928c",
+    "sha25632": "c24b2e2aa889b06c3297ef6a76002a84a20207d9c0156b8edc4420a57a8d928c",
+    "sha25664": "f724373cc1f55ea3648ca8447aae35eca1a702495ec44a33fdbfcda29244a375",
+    "sha256X86": "6fc641f0b798e5ba604e0c635b7bfab62e6779fb28844f421f0dfddbcc7a9cea",
     "releaseNotes": "\u4fee\u590d\u95ee\u9898\u5e76\u63d0\u5347\u64ad\u653e\u4f53\u9a8c\u3002"
 }

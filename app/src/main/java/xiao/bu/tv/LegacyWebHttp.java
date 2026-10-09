@@ -29,14 +29,27 @@ final class LegacyWebHttp {
     /** Correct a main document MIME only after the channel resolver identified HTML. */
     static WebResourceResponse intercept(String url, String userAgent, String cookies,
             Cookies sink, Redirect redirect, boolean forceHtml) {
-        if (url == null || (!forceHtml && (!enabled() || !url.startsWith("https://")))) return null;
+        return intercept(url, userAgent, cookies, sink, redirect, forceHtml, "");
+    }
+
+    static WebResourceResponse intercept(String url, String userAgent, String cookies,
+            Cookies sink, Redirect redirect, boolean forceHtml, String prelude) {
+        return intercept(url,userAgent,cookies,sink,redirect,forceHtml,prelude,null);
+    }
+    static WebResourceResponse intercept(String url, String userAgent, String cookies,
+            Cookies sink, Redirect redirect, boolean forceHtml, String prelude, LegacyWebTranspilation transpilation) {
+        boolean bootstrap = !prelude.isEmpty();
+        if (url == null || (!forceHtml && !bootstrap && (!enabled() || !url.startsWith("https://")))) return null;
         HttpURLConnection connection = null;
         try {
+            long deadline = System.nanoTime() + 15000000000L;
             URL target = new URL(url);
             for (int hops = 0; hops < 8; hops++) {
                 if (!"https".equals(target.getProtocol())
-                        && (!forceHtml || !"http".equals(target.getProtocol()))) return null;
-                connection = forceHtml ? NetworkClient.openBounded(target, 12000)
+                        && ((!forceHtml && !bootstrap) || !"http".equals(target.getProtocol()))) return null;
+                int remaining = (int) ((deadline-System.nanoTime())/1000000L);
+                if (remaining <= 0) return null;
+                connection = forceHtml || bootstrap ? NetworkClient.openBounded(target, remaining)
                         : NetworkClient.open(target); // Existing OkHttp/TLS compatibility.
                 connection.setRequestMethod("GET");
                 connection.setInstanceFollowRedirects(false);
@@ -82,15 +95,20 @@ final class LegacyWebHttp {
                     return new WebResourceResponse("text/html", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
                 }
                 final HttpURLConnection owned = connection;
+                Charset charset = type == null ? Charset.forName("UTF-8") : type.charset(Charset.forName("UTF-8"));
+                body = transpilation==null ? LegacyDocumentInjector.prepend(body, charset, prelude)
+                        : transpilation.document(body,charset,prelude,url);
                 InputStream stream = new FilterInputStream(body) {
+                    // KitKat's BrowserBlocking JNI aborts on a Java stream exception.
+                    @Override public int read() {try{return super.read();}catch(IOException error){owned.disconnect();return -1;}}
+                    @Override public int read(byte[] bytes,int offset,int length) {try{return super.read(bytes,offset,length);}catch(IOException error){owned.disconnect();return -1;}}
                     @Override public void close() throws IOException {
-                        try { super.close(); } finally { owned.disconnect(); }
+                        try { super.close(); } catch(IOException ignored){} finally { owned.disconnect(); }
                     }
                 };
-                Log.i("LegacyWebHttp", "HTTPS GET 200 " + target.getHost());
+                Log.i("LegacyWebHttp", "GET 200 " + target.getHost() + " early=" + bootstrap);
                 WebResourceResponse response = new WebResourceResponse("text/html",
-                        (type == null ? Charset.forName("UTF-8")
-                                : type.charset(Charset.forName("UTF-8"))).name(), stream);
+                        charset.name(), stream);
                 if (forceHtml && Build.VERSION.SDK_INT >= 21) {
                     Map<String, String> headers = new HashMap<>();
                     for (Map.Entry<String, List<String>> entry : connection.getHeaderFields().entrySet()) {

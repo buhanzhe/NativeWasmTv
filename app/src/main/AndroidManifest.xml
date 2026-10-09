@@ -72,6 +72,7 @@
             android:screenOrientation="@integer/main_activity_screen_orientation" />
         <service android:name=".LegacyWebGuardService" android:exported="false" />
         <service android:name=".LegacyWebCacheService" android:process=":web_browser" android:exported="false" />
+        <service android:name=".LegacyJsCompilerService" android:process=":web_transpiler" android:exported="false" />
 
         <activity
             android:name=".ManagementActivity"

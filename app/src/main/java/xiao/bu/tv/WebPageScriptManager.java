@@ -46,6 +46,8 @@ final class WebPageScriptManager {
         if (scriptsChanged) userScripts = userScriptEnabled
                 ? compiledUserScripts(sources) : Collections.<String>emptyList();
         StringBuilder body = new StringBuilder();
+        String compatibility = LegacyWebCompatibility.enabled()
+                ? "window.__ntvNativeTvCompatibility=true;\n" + LegacyWebCompatibility.script(view.getContext()) : "";
         body.append(WebMediaSession.script(view.getContext()));
         body.append(systemMouseSelectionScript());
         if (!webRtc) body.append(webRtcBlockScript());
@@ -53,7 +55,9 @@ final class WebPageScriptManager {
         String next = body.length() == 0 ? "" : "(function(){var k=" + body.toString().hashCode()
                 + ";if(window.__ntvPagePolicy===k)return;window.__ntvPagePolicy=k;try{"
                 + body + "}catch(e){console.warn('nTv page policy: '+e);}})();";
-        script = next;
+        // KitKat can evaluate onPageStarted in the departing document. Its policy
+        // marker must not suppress a site shim after the URL changes in that realm.
+        script = compatibility + next;
         installHandlers();
     }
 
@@ -110,10 +114,29 @@ final class WebPageScriptManager {
 
     boolean hasDocumentStartScript() { return documentStart; }
 
+    /** Separate units preserve imported-script syntax error isolation on old engines. */
+    String legacyDocumentPrelude() {
+        StringBuilder html = new StringBuilder();
+        appendInline(html, script);
+        for (String value : userScripts) appendInline(html, value);
+        return html.toString();
+    }
+    private static void appendInline(StringBuilder html, String value) {
+        if (value.isEmpty()) return;
+        String literal = JSONObject.quote(value).replace("<", "\\u003c")
+                .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029");
+        html.append("<script>(0,eval)(").append(literal).append(");</script>");
+    }
+
     void applyToCurrentDocument() {
         if (script.isEmpty()) return;
-        evaluate(script);
-        for (String userScript : userScripts) evaluate(userScript);
+        // A KitKat callback can execute in the departing about:blank document.
+        // core-js captures that document's MutationObserver for Promise jobs;
+        // reusing it after navigation leaves all async module/site work pending.
+        String guard=LegacyWebCompatibility.enabled()
+                ? "if(!/^https?:$/.test(location.protocol)||(!window.__ntvTvCompatibility&&document.readyState==='loading'))return;" : "";
+        evaluate("(function(){"+guard+script+"})();");
+        for (String userScript : userScripts) evaluate("(function(){"+guard+userScript+"})();");
     }
 
     private void evaluate(String value) {

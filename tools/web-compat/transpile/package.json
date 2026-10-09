@@ -1,0 +1,13 @@
+{
+  "name": "ntv-legacy-transpiler-build",
+  "private": true,
+  "dependencies": {
+    "@babel/standalone": "7.28.5",
+    "acorn": "8.15.0",
+    "systemjs": "6.15.1"
+  },
+  "scripts": {
+    "build": "node ../build-transpiler.cjs",
+    "test": "node ../test-transpiler.cjs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "acorn": "8.15.0",
+    "core-js": "3.50.0",
+    "core-js-builder": "3.50.0",
+    "terser": "5.44.0"
+  },
+  "name": "ntv-legacy-corejs-build",
+  "private": true,
+  "scripts": {
+    "build": "node ../build-corejs.cjs",
+    "test": "node ../test.cjs node_modules/acorn"
+  }
+}

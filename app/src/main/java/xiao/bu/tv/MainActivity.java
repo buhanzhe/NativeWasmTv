@@ -1109,6 +1109,7 @@ public final class MainActivity extends Activity {
         webViewAdBlock = preferences.getBoolean(WEB_VIEW_AD_BLOCK, true);
         webViewWebRtcEnabled = preferences.getBoolean(WEB_VIEW_WEBRTC_ENABLED, false);
         webViewUserScriptEnabled = preferences.getBoolean(WEB_VIEW_USER_SCRIPT_ENABLED, false);
+        webSourceView.setLegacyTranspilation(preferences.getBoolean("legacy_js_transpilation",false));
         String storedUserScripts = preferences.getString(WEB_VIEW_USER_SCRIPTS, "");
         try {
             if (storedUserScripts.trim().length() > 0) {
@@ -2602,6 +2603,7 @@ public final class MainActivity extends Activity {
                     .put("webViewLoadImages", webViewLoadImages)
                     .put("webViewAutoPlaySniffed", webViewAutoPlaySniffed)
                     .put("webViewAutoCloseSniffed", webViewAutoCloseSniffed)
+                    .put("webViewLegacyTranspilation", getSharedPreferences(PREFERENCES,MODE_PRIVATE).getBoolean("legacy_js_transpilation",false))
                     .put("webViewUserAgent", webViewUserAgent)
                     .put("webViewBrowserVersion", webViewBrowserVersion)
                     .put("webViewAdBlock", webViewAdBlock)
@@ -4435,6 +4437,11 @@ public final class MainActivity extends Activity {
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(WEB_VIEW_USER_SCRIPT_ENABLED, webViewUserScriptEnabled).apply();
             applyWebViewSettings = true;
+        }
+        if(request.has("webViewLegacyTranspilation")){
+            final boolean enabled=request.optBoolean("webViewLegacyTranspilation",false);
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putBoolean("legacy_js_transpilation",enabled).apply();
+            runOnUiThread(()->{if(webSourceView!=null)webSourceView.setLegacyTranspilation(enabled);});
         }
         if (request.has("webViewUserScripts")) {
             JSONArray requestedScripts = request.optJSONArray("webViewUserScripts");

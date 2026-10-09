@@ -1,0 +1,26 @@
+[
+  {
+    "name": "core-js",
+    "version": "3.50.0",
+    "file": "legacy.min.js",
+    "upstream": "https://github.com/zloirock/core-js",
+    "license": "MIT",
+    "sha256": "408877822f7cfb8f707a1d3a8e959308577f9cc01239ddb4eaad735caa1a027a"
+  },
+  {
+    "name": "whatwg-fetch",
+    "version": "3.6.20",
+    "file": "fetch.umd.js",
+    "upstream": "https://github.com/JakeChampion/fetch",
+    "license": "MIT",
+    "sha256": "8c006dece7b95b63787c3ae297593c6bad9386cb8054697d18104177a5f52c87"
+  },
+  {
+    "name": "blueimp-md5",
+    "version": "2.19.0",
+    "file": "md5.min.js",
+    "upstream": "https://github.com/blueimp/JavaScript-MD5",
+    "license": "MIT",
+    "sha256": "64d7ded388c562e4bde9e58ce205e5fa01b9734fcd434d496eb7b4fbfe9b927d"
+  }
+]

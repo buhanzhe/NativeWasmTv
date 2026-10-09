@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "quickjs.h"
 
 typedef struct {
@@ -126,4 +128,66 @@ oom:
 done:
     if (ctx) JS_FreeContext(ctx);
     if (rt) JS_FreeRuntime(rt);
+}
+
+/* Compiler runtimes have no network, filesystem, DOM or CJS host callbacks. */
+typedef struct { JSRuntime *rt; JSContext *ctx; int64_t deadline; } Compiler;
+static int compiler_interrupt(JSRuntime *rt, void *opaque) {
+    return now_ms() >= ((Compiler *)opaque)->deadline;
+}
+static void compiler_error(JNIEnv *e, JSContext *ctx) {
+    JSValue error=JS_GetException(ctx);
+    const char *text=JS_ToCString(ctx,error);
+    /* Exception text need only identify the failure; transformed output uses UTF-8 below. */
+    char message[256];
+    snprintf(message,sizeof(message),"QuickJS compiler: %.210s",text?text:"memory limit reached");
+    for(char *p=message;*p;p++)if((unsigned char)*p>=128)*p='?';
+    (*e)->ThrowNew(e,(*e)->FindClass(e,"java/io/IOException"),message);
+    if(text)JS_FreeCString(ctx,text);JS_FreeValue(ctx,error);
+}
+static JSValue compiler_string(JNIEnv *e,JSContext *ctx,jbyteArray bytes) {
+    jsize n=(*e)->GetArrayLength(e,bytes);jbyte *data=(*e)->GetByteArrayElements(e,bytes,NULL);
+    if(!data)return JS_EXCEPTION;
+    JSValue value=JS_NewStringLen(ctx,(const char *)data,n);
+    (*e)->ReleaseByteArrayElements(e,bytes,data,JNI_ABORT);return value;
+}
+JNIEXPORT jlong JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeCompilerCreate(JNIEnv *e,jclass klass,jbyteArray bootstrap) {
+    Compiler *c=malloc(sizeof(*c));if(!c)return 0;memset(c,0,sizeof(*c));
+    c->rt=JS_NewRuntime();if(!c->rt)goto fail;
+    JS_SetMemoryLimit(c->rt,64*1024*1024);JS_SetMaxStackSize(c->rt,768*1024);
+    c->deadline=now_ms()+15000;JS_SetInterruptHandler(c->rt,compiler_interrupt,c);
+    c->ctx=JS_NewContext(c->rt);if(!c->ctx)goto fail;
+    jsize n=(*e)->GetArrayLength(e,bootstrap);char *code=js_malloc(c->ctx,(size_t)n+1);if(!code)goto fail;
+    (*e)->GetByteArrayRegion(e,bootstrap,0,n,(jbyte *)code);code[n]=0;
+    JSValue result=JS_Eval(c->ctx,code,n,"legacy-compiler.js",JS_EVAL_TYPE_GLOBAL);js_free(c->ctx,code);
+    int failed=JS_IsException(result);JS_FreeValue(c->ctx,result);
+    if(failed){compiler_error(e,c->ctx);goto fail;}
+    return (jlong)(intptr_t)c;
+fail:
+    if(c->ctx)JS_FreeContext(c->ctx);if(c->rt)JS_FreeRuntime(c->rt);free(c);
+    if(!(*e)->ExceptionCheck(e))(*e)->ThrowNew(e,(*e)->FindClass(e,"java/io/IOException"),"QuickJS compiler initialization failed");
+    return 0;
+}
+JNIEXPORT jstring JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeCompilerTransform(JNIEnv *e,jclass klass,jlong handle,jbyteArray source,jbyteArray filename,jboolean module) {
+    Compiler *c=(Compiler *)(intptr_t)handle;if(!c)return NULL;
+    c->deadline=now_ms()+8000;
+    JSValue global=JS_GetGlobalObject(c->ctx),function=JS_GetPropertyStr(c->ctx,global,"ntvTransform");JS_FreeValue(c->ctx,global);
+    JSValue args[3]={compiler_string(e,c->ctx,source),compiler_string(e,c->ctx,filename),JS_NewBool(c->ctx,module)};
+    JSValue result=JS_Call(c->ctx,function,JS_UNDEFINED,3,args);
+    JS_FreeValue(c->ctx,function);for(int i=0;i<3;i++)JS_FreeValue(c->ctx,args[i]);
+    jstring output=NULL;
+    if(JS_IsException(result)){compiler_error(e,c->ctx);}else{
+        size_t n;const char *text=JS_ToCStringLen(c->ctx,&n,result);
+        if(text){
+            jbyteArray bytes=(*e)->NewByteArray(e,(jsize)n);
+            if(bytes){(*e)->SetByteArrayRegion(e,bytes,0,n,(const jbyte *)text);
+                jclass strings=(*e)->FindClass(e,"java/lang/String");jmethodID constructor=(*e)->GetMethodID(e,strings,"<init>","([BLjava/lang/String;)V");
+                output=(*e)->NewObject(e,strings,constructor,bytes,(*e)->NewStringUTF(e,"UTF-8"));}
+            JS_FreeCString(c->ctx,text);
+        }else compiler_error(e,c->ctx);
+    }
+    JS_FreeValue(c->ctx,result);JS_RunGC(c->rt);return output;
+}
+JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeCompilerClose(JNIEnv *e,jclass klass,jlong handle) {
+    Compiler *c=(Compiler *)(intptr_t)handle;if(c){JS_FreeContext(c->ctx);JS_FreeRuntime(c->rt);free(c);}
 }

@@ -36,3 +36,10 @@ ARM32 and x86 target API 14; ARM64 targets API 21. Prebuilt libraries are checke
 regular release builds need no NDK; the release script verifies all three engine libraries exist.
 `app/src/androidTest/java/xiao/bu/tv/QuickJsInstrumentation.java` checks Unicode, native
 callbacks, Promise/BigInt, syntax errors, interruption, heap limits and runtime lifecycle.
+
+The optional legacy webpage compiler uses separate persistent contexts in the
+non-exported `:web_transpiler` service. Babel/Acorn bootstrap and compilation are
+bounded to 15/8 seconds with 64 MiB heaps and 768 KiB stacks. No webpage or DOM
+executes in that service. The original CJS runtime/host and its 16 MiB budget remain
+separate. See `tools/web-compat/README.txt` for assets, cache and limitations.
+The checked-in compiler builds were also verified with NDK r17c (API 14/21).

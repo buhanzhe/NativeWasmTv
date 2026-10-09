@@ -48,6 +48,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         if (token == null) { finish(); return; }
         if (getIntent().hasExtra("orientation")) setRequestedOrientation(getIntent().getIntExtra("orientation", -1));
         GithubProxy.initialize(this);
+        NetworkClient.initialize(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -153,10 +154,11 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         if (!running || !token.equals(data.getString("token"))) return;
         String action = data.getString("action", "");
         switch (action) {
-            case "configuration": source.applyConfiguration(data.getString("viewport", "720p"), data.getBoolean("images", true),
+            case "configuration": source.setLegacyTranspilation(data.getBoolean("transpile"));source.applyConfiguration(data.getString("viewport", "720p"), data.getBoolean("images", true),
                     data.getString("ua", "windows"), data.getString("version", "native"), data.getFloat("pageScale", 1f),
                     data.getBoolean("ads", true), data.getBoolean("rtc"), data.getBoolean("scripts"), data.getString("userScripts", "[]")); break;
             case "scale": source.setInterfaceScale(data.getFloat("scale", 1f)); cursor.setCastVisualScale(data.getFloat("scale", 1f)); break;
+            case "transpilation":source.setLegacyTranspilation(data.getBoolean("enabled"));break;
             case "open": request = data.getInt("request"); monitoring = true;
                 rendererBeat = SystemClock.elapsedRealtime(); source.open(request, data.getString("url"),
                         data.getString("script", ""), data.getBoolean("htmlMimeOverride", false)); break;
@@ -181,6 +183,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
             case "pageScale": source.adjustCurrentPageScale(data.getFloat("factor")); break;
             case "context": source.showSmartContextAt(data.getFloat("x"), data.getFloat("y")); break;
             case "inspect": source.inspectSmartContext(data.getFloat("x"), data.getFloat("y"), value -> result(data.getInt("id"), null, value.toString())); break;
+            case "compatibility": source.inspectCompatibility(value -> result(data.getInt("id"), null, value.toString())); break;
             case "ad": source.markImageAsAd(data.getString("url")); break;
             case "mouse": MotionEvent motion = data.getParcelable("motion");
                 if (motion != null) { updateCursor(motion); source.dispatchRemoteMouseHover(source, motion); motion.recycle(); } break;

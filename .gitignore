@@ -33,3 +33,7 @@ scripts/*
 /tests/*
 !/tests/hls-cache-performance.test.py
 userscripts/
+!app/src/main/assets/control/userscripts/
+!app/src/main/assets/control/userscripts/kitkat-tv.user.js
+/tools/web-compat/corejs/node_modules/
+/tools/web-compat/transpile/node_modules/

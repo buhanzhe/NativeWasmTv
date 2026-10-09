@@ -31,7 +31,8 @@ function saveWebViewSettings(includeScript) {
     webViewAutoPlaySniffed: autoPlaySniffed.checked,
     webViewAutoCloseSniffed: autoCloseSniffed.checked,
     webViewAdBlock: adBlock.checked,
-    webViewWebRtcEnabled: webRtc.checked
+    webViewWebRtcEnabled: webRtc.checked,
+    webViewLegacyTranspilation: document.getElementById("webViewLegacyTranspilation").checked
   };
   api(
     "/api/settings",
@@ -58,6 +59,7 @@ function renderPageState() {
   document.getElementById("webViewAutoCloseSniffed").checked = s.webViewAutoCloseSniffed !== false;
   document.getElementById("webViewAdBlock").checked = s.webViewAdBlock !== false;
   document.getElementById("webViewWebRtcEnabled").checked = s.webViewWebRtcEnabled === true;
+  document.getElementById("webViewLegacyTranspilation").checked = s.webViewLegacyTranspilation === true;
   document.getElementById("webCacheSize").textContent =
     "系统 WebView · 当前占用：" + formatBytes(Number(s.webViewCacheBytes) || 0);
 }

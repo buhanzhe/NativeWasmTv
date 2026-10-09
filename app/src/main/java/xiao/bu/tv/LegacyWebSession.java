@@ -213,6 +213,14 @@ final class LegacyWebSession {
         handler.postDelayed(() -> { WebSourceView.SmartContextCallback pending = inspections.remove(id);
             if (pending != null) pending.onResult(new JSONObject()); }, 2000L);
     }
+    void inspectCompatibility(WebSourceView.SmartContextCallback callback) {
+        int id = ++sequence; inspections.put(id, callback);
+        Bundle data = new Bundle(); data.putInt("id", id); send("compatibility", data);
+        handler.postDelayed(() -> {
+            WebSourceView.SmartContextCallback pending = inspections.remove(id);
+            if (pending != null) pending.onResult(new JSONObject());
+        }, 3000L);
+    }
     static JSONObject json(String value) { try { return new JSONObject(value); } catch (Exception ignored) { return new JSONObject(); } }
     static Bundle bundle(String key, String value) { Bundle b = new Bundle(); b.putString(key, value); return b; }
     static Bundle bundle(String key, float value) { Bundle b = new Bundle(); b.putFloat(key, value); return b; }
