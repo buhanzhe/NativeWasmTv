@@ -2,7 +2,7 @@ const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('ass
 const deps=path.resolve(process.argv[2]||path.join(__dirname,'transpile'));
 const resolve=name=>require.resolve(name,{paths:[deps]});
 const context={Babel:require(resolve('@babel/standalone')),acorn:require(resolve('acorn')),console,Date,JSON};
-vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'transpile-runtime.js'),'utf8'),context);
+vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'transpile-preflight.js'),'utf8'),context);vm.runInContext(fs.readFileSync(path.join(__dirname,'transpile-runtime.js'),'utf8'),context);
 function transform(s,m=false){return JSON.parse(context.ntvTransform(s,'https://fixture.invalid/a.js',m));}
 assert.strictEqual(transform('var answer=42;').changed,false);
 const modern=transform('const add=(x=2)=>x+1; class Value {get(){return add();}} async function go(){const result=await Promise.resolve(new Value().get());window.proof=result===3&&[...new Set([1,1])].length===1;} go();');

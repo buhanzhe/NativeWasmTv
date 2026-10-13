@@ -19,6 +19,8 @@ final class LegacyTvSiteAdapter {
             return ("https".equals(uri.getScheme())||"http".equals(uri.getScheme()))
                     && (("www.cztv.com".equalsIgnoreCase(uri.getHost())&&uri.getPath().matches("/liveTV(?:/\\d+)?/?"))
                     ||("v.iqilu.com".equalsIgnoreCase(uri.getHost())&&uri.getPath().matches("/live/[a-z0-9]+/?"))
+                    ||("www.gzstv.com".equalsIgnoreCase(uri.getHost())&&uri.getPath().matches("/tv/ch(?:0[1-6]|13)/?"))
+                    ||("www.hebtv.com".equalsIgnoreCase(uri.getHost())&&"/19/19js/st/xdszb/index.shtml".equals(uri.getPath()))
                     ||("web.guangdianyun.tv".equalsIgnoreCase(uri.getHost())&&uri.getPath().matches("/tv/\\d+/?")&&uin(uri)!=null));
         } catch (IllegalArgumentException error) { return false; }
     }
@@ -37,6 +39,10 @@ final class LegacyTvSiteAdapter {
                     )return null;
             if("v.iqilu.com".equals(page.getHost())&&"/__ntv_kitkat__/iqilu-play-info".equals(target.getPath())&&target.getRawQuery()==null)
                 return text("application/json",iqilu(document,userAgent));
+            if("www.gzstv.com".equals(page.getHost())&&"/__ntv_kitkat__/guizhou-play-info".equals(target.getPath())&&target.getRawQuery()==null)
+                return text("application/json",guizhou(page,userAgent));
+            if("www.hebtv.com".equals(page.getHost())&&"/__ntv_kitkat__/hebei-play-info".equals(target.getPath())&&target.getRawQuery()==null)
+                return text("application/json",hebei(document,userAgent));
             if("web.guangdianyun.tv".equals(page.getHost())&&"/__ntv_kitkat__/gdy-play-info".equals(target.getPath())&&target.getRawQuery()==null)
                 return text("application/json",guangdianyun(page,userAgent));
             if(!"www.cztv.com".equals(page.getHost())||!"/__ntv_kitkat__/cztv-play-info".equals(target.getPath())
@@ -71,6 +77,42 @@ final class LegacyTvSiteAdapter {
             finally{connection.disconnect();}
         }
         throw new IOException("Live API unavailable");
+    }
+    private static String guizhou(URI page,String userAgent)throws Exception {
+        // Same public metadata call as the official Nuxt TV component. An empty
+        // remote_address is its client-navigation value; never spoof a viewer IP.
+        String channel=page.getPath().split("/")[2];
+        if(!channel.matches("ch(?:0[1-6]|13)"))throw new IOException("Channel unavailable");
+        HttpURLConnection connection=NetworkClient.openBounded(new URL(
+                "https://api.gzstv.com/v1/tv/"+channel+"/?remote_address=&fields=description,title,stream_url,image,author"),10000);
+        try {
+            connection.setInstanceFollowRedirects(false);connection.setRequestMethod("GET");
+            connection.setRequestProperty("User-Agent",userAgent);connection.setRequestProperty("Referer",page.toString());
+            connection.setRequestProperty("Origin","https://www.gzstv.com");
+            // The metadata CDN has served already-expired URLs. Request normal
+            // revalidation once; preserve returned signatures and any denial.
+            connection.setUseCaches(false);connection.setRequestProperty("Cache-Control","no-cache");
+            connection.setRequestProperty("Pragma","no-cache");
+            JSONObject info=new JSONObject(read(connection,262144));
+            long serverTime=connection.getDate();if(serverTime>0)info.put("_ntvServerTimeMs",serverTime);
+            return info.toString();
+        } finally {connection.disconnect();}
+    }
+    private static String hebei(String document,String userAgent)throws Exception {
+        // The official page retrieves its seven-channel catalog with an empty POST.
+        // Keep this fixed public endpoint; never accept an arbitrary proxy target.
+        HttpURLConnection connection=NetworkClient.openBounded(new URL("https://api.cmc.hebrts.cn/cmsback/api/com/article/getArticleList?catalogId=32557&siteId=1"),10000);
+        try {
+            connection.setInstanceFollowRedirects(false);connection.setRequestMethod("POST");
+            connection.setRequestProperty("User-Agent",userAgent);connection.setRequestProperty("Referer",document);
+            connection.setRequestProperty("Origin","https://www.hebtv.com");
+            connection.setDoOutput(true);connection.setFixedLengthStreamingMode(0);
+            connection.getOutputStream().close();
+            JSONObject info=new JSONObject(read(connection,262144));
+            // Propagate denial/changed API responses. No alternate private playback URL.
+            long serverTime=connection.getDate();if(serverTime>0)info.put("_ntvServerTimeMs",serverTime);
+            return info.toString();
+        } finally {connection.disconnect();}
     }
     private static String uin(URI uri){
         Matcher value=Pattern.compile("(?:^|&)uin=(\\d{1,8})(?:&|$)").matcher(uri.getRawQuery()==null?"":uri.getRawQuery());

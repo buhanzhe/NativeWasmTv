@@ -23,6 +23,26 @@ protocol. Guangdianyun /tv/:id?uin=:tenant resolves the public API, but the
 tested channel 2851 CDN returns HTTP 403, so playback remains unverified.
 Playback-denied responses never fall back to internal pullUrl.
 
+Hebei /19/19js/st/xdszb/index.shtml?index=0..6 now uses the same lightweight
+shell. Its official page's ES6 player/EPG scripts are not evaluated. A bounded
+native empty POST reads the fixed public seven-channel catalog (256 KiB limit,
+10-second total timeout, no redirect/retry), and the ES5 adapter validates the
+selected entry before applying the website's public t/k signature. API Date
+corrects old-device clocks. Existing URL query parameters are preserved; stale
+t/k values are replaced. Invalid/missing stream data and denied API responses
+fail closed, without alternate/private stream fields or authentication bypass.
+Absent index selects channel zero; invalid or repeated indexes show an error
+instead of silently playing a different channel. General transpilation stays OFF.
+
+The schema/signature were inspected in the official page on 2026-10-12. Offline
+fixtures prove the contract, not current upstream availability or native playback.
+The generated bundle also passed ten synthetic scenarios in the official API19
+x86 emulator (Android 4.4.2, Chromium 30): seven signed channel selections, two
+invalid indexes and an API denial. This used a minimal WebView test APK, not nTv.
+Run all seven URLs in hebei-sites.txt through the existing native instrumentation
+on a real 4.4 box before declaring channels playable. Check first frame, 10-second
+position advance, FPS, rebuffer count, rapid switches, Back and reopen behavior.
+
 KitKat MediaPlayer may fetch HLS outside WebView interception. One explicit
 manifest request feeds the app's existing resource discovery/native playback.
 The browser process now initializes NetworkClient so saved DNS preferences
@@ -50,6 +70,8 @@ The regular build.cjs remains offline and needs no npm packages.
 Checks:
   node tools/web-compat/test.cjs
   node tools/web-compat/test.cjs path/to/acorn
+  node tools/web-compat/test-sites.cjs
+  python tools/web-compat/test-site-adapter.py
   python tools/web-compat/test-injector.py   (JAVA_HOME points to JDK 8)
 
 Android probes use LegacyWebCompatibilityInstrumentation:
@@ -139,3 +161,68 @@ at the server. Three production-isolated-browser runs passed on Android 4.4:
   -e proof true -e settleSeconds 2 -e timeoutSeconds 15
 The fixture is ES5 and should pass without -e transpile true.
 Local measurements/report: reports/real-webview-4.4-20261009.txt.
+
+Guizhou /tv/ch01..ch06 and /tv/ch13 (2026-10-12):
+- Uses the official public /v1/tv/:channel/ metadata response and preserves
+  stream_url exactly, including the server-issued CDN token. No CDN fallback.
+- Native metadata GET is bounded to 10 seconds and 256KiB, disables redirects,
+  makes no retries, and requests normal no-cache revalidation. Browser-only
+  userscript uses the official simple GET to avoid adding a CORS preflight.
+- Empty remote_address matches the official component's client-navigation IP
+  default; it never invents a viewer IP or uses another region's address.
+- If txTime is malformed or duplicated, fail closed. If the token is already
+  expired at the metadata HTTP Date, show a stale-address error without media
+  handoff. Do not use the potentially wrong Android clock or modify a token.
+  Date is a conservative lower bound: unusual cache Age-only expiry may still
+  reach the CDN, which remains authoritative. No retry/refresh loop is installed.
+- Seven metadata APIs returned HTTP200, but ch01 returned an already-expired
+  token and CDN HTTP403. Revalidation still returned stale metadata. This is
+  upstream service/cache evidence, not a claim of live playback or an Android
+  decoder defect. Other channels' live playback is not established.
+
+Additional offline check:
+  node tools/web-compat/test-guizhou.cjs
+
+Captured-page compatibility adapters (2026-10-12):
+- Hainan /live.html: the known getOtherHtml helper waits for XHR DONE before
+  reading status/body. A source fingerprint leaves unknown future helpers alone.
+- Heyuan /itv/: restore only missing jQuery3 .size() as a collection count alias.
+Both retain the native page and native XHR/security/network behavior. No broad
+error suppression or replacement of native XHR is used.
+Actual API19 captured replays remove the two targeted JavaScript exceptions.
+They do NOT prove live acceptance: missing captures remain, and Hainan's CSP
+and media CORS errors are still visible. No video playback claim is made.
+Regression: node tools/web-compat/test-page-adapters.cjs
+
+Shared jQuery 3 collection-size compatibility (2026-10-12):
+- Restores the documented removed .size() as this.length only when a callable
+  global jQuery has a numeric 3.x.y version, no existing/inherited size member,
+  and an extensible fn object. Existing behavior is never overwritten.
+- Installs at startup, pending DOMContentLoaded/window.load, and captured script
+  load events; no polling, global property setters, eval hooks, or fake DOM.
+- Covers external jQuery loaded after window.load and replacement global copies.
+  Cannot intercept a single inline/external script defining jQuery then calling
+  .size() before that script ends, or private noConflict(true) references.
+- Replaces former Heyuan/Harbin/Weifang path copies. Actual API19 tests remove
+  their targeted .size exceptions; Heyuan/Harbin retain original page content.
+  Weifang still has missing API/CORS errors and a placeholder: no page-pass claim.
+- Actual API19 real-jQuery3.7.1 delayed-load fixture: 7/7 checks passed.
+  node tools/web-compat/test-jquery-size.cjs
+Official contract: https://api.jquery.com/size/
+Timing constraints: https://api.jquery.com/ready/
+
+TypedArray.from standard-library coverage (2026-10-12):
+- Selects the official pinned core-js es.typed-array.from module, including its
+  shared native typed-array prototype setup. API19 already has the nine numeric
+  typed-array constructors; this selection does not add replacement constructors.
+- Handles numeric conversion, Uint8ClampedArray ties-to-even, arraylike/iterable
+  input, map function/thisArg, valid typed-array subclass construction, and
+  null-source/noncallable-mapper/invalid-receiver errors.
+- Upstream limitation: a linked subclass constructor returning an undersized
+  typed array or a plain object is not validated as strictly as the native
+  implementation. This is not a claim of complete TypedArray.from conformance.
+- Conformant native from methods and existing numeric constructors are retained.
+  No WebAssembly, MSE, codecs or network/security capabilities are fabricated.
+- This addresses the missing Uint8Array.from reached by captured Shenzhen SDK
+  execution, not Shenzhen's API401 or the separate page compilation budget.
+  node tools/web-compat/test-typed-array-from.cjs

@@ -6,14 +6,22 @@
   var cztv=w.location.hostname==='www.cztv.com'&&/^\/liveTV(?:\/\d+)?\/?$/.test(w.location.pathname);
   var iqilu=w.location.hostname==='v.iqilu.com'&&/^\/live\/[a-z0-9]+\/?$/.test(w.location.pathname);
   var gdy=w.location.hostname==='web.guangdianyun.tv'&&/^\/tv\/\d+\/?$/.test(w.location.pathname);
-  if(!cztv&&!iqilu&&!gdy)return;
+  var hebei=w.location.hostname==='www.hebtv.com'&&w.location.pathname==='/19/19js/st/xdszb/index.shtml';
+  var guizhou=w.location.hostname==='www.gzstv.com'&&/^\/tv\/ch(?:0[1-6]|13)\/?$/.test(w.location.pathname);
+  if(!cztv&&!iqilu&&!gdy&&!hebei&&!guizhou)return;
   var marker=w.__ntvTvCompatibility;if(!marker||marker.adapter)return;
-  marker.adapter=cztv?'cztv':gdy?'guangdianyun':'iqilu';
+  marker.adapter=guizhou?'guizhou':cztv?'cztv':gdy?'guangdianyun':hebei?'hebei':'iqilu';
   var id=(w.location.pathname.match(/\/(\d+)\/?$/)||[])[1]||'101';
-  var api=w.__ntvLegacySiteShell?(cztv?'/__ntv_kitkat__/cztv-play-info?id='+id:gdy?'/__ntv_kitkat__/gdy-play-info':'/__ntv_kitkat__/iqilu-play-info'):
+  var api=w.__ntvLegacySiteShell?(guizhou?'/__ntv_kitkat__/guizhou-play-info':cztv?'/__ntv_kitkat__/cztv-play-info?id='+id:gdy?'/__ntv_kitkat__/gdy-play-info':hebei?'/__ntv_kitkat__/hebei-play-info':'/__ntv_kitkat__/iqilu-play-info'):
     'https://zlive-das.cztv.com/zapp/live/tv/channel/playInfo?channelId='+id+'&platform=WEB';
   // On a standalone userscript, wait for the site's current crypto/config script.
   var response=cztv||w.__ntvLegacySiteShell?w.fetch(api,{credentials:'omit'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}):null;
+  if(guizhou&&!w.__ntvLegacySiteShell)
+    response=w.fetch('https://api.gzstv.com/v1/tv/'+w.location.pathname.split('/')[2]+'/?remote_address=&fields=description,title,stream_url,image,author',
+      {credentials:'omit'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
+  if(hebei&&!w.__ntvLegacySiteShell)
+    response=w.fetch('https://api.cmc.hebrts.cn/cmsback/api/com/article/getArticleList?catalogId=32557&siteId=1',
+      {method:'POST',credentials:'omit'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
   if(gdy&&!w.__ntvLegacySiteShell){
     var tenant=new URLSearchParams(w.location.search).get('uin'),channel=w.location.pathname.replace(/[^0-9]/g,''),base='https://1812501212048408.cn-hangzhou.fc.aliyuncs.com/2016-08-15/proxy/node-api.online/node-api/tv/';
     var query='?id='+encodeURIComponent(channel)+'&uin='+encodeURIComponent(tenant||'');
@@ -25,6 +33,40 @@
         return {success:true,data:{url:play.data.hlsUrl,channelName:info.data.name}};
       });
     });
+  }
+  // EPG/UI scripts on the official Hebei page use syntax unavailable in Chromium 33.
+  // Read the same public catalog directly; keep the current public signing formula.
+  function hebeiInfo(value){
+    if(value.returnCode!=='0000')throw new Error('直播接口不可用');
+    var entries=value.returnData&&value.returnData.news,params=new URLSearchParams(w.location.search);
+    var indexes=params.getAll('index'),raw=indexes.length?indexes[0]:'0';
+    if(indexes.length>1||!/^\d{1,3}$/.test(raw)||!Array.isArray(entries)||Number(raw)>=entries.length)
+      throw new Error('频道编号无效');
+    var item=entries[Number(raw)],videos=item&&item.liveVideo,formats=videos&&videos[0]&&videos[0].formats;
+    var movie=item&&item.appCustomParams&&item.appCustomParams.movie;
+    if(!formats||!formats[0]||typeof formats[0].url!=='string'||!movie||
+      typeof movie.liveUri!=='string'||!movie.liveUri||typeof movie.liveKey!=='string'||!movie.liveKey)
+      throw new Error('网站播放配置不可用');
+    var stream=new URL(formats[0].url);
+    if(stream.protocol!=='https:'&&stream.protocol!=='http:')throw new Error('视频地址无效');
+    var expires=Math.floor((value._ntvServerTimeMs>0?value._ntvServerTimeMs:Date.now())/1000)+7200;
+    stream.searchParams.set('t',String(expires));
+    stream.searchParams.set('k',w.__ntvMd5(movie.liveUri+movie.liveKey+expires));
+    return {success:true,data:{url:stream.href,channelName:item.title||'河北直播'}};
+  }
+  function guizhouInfo(value){
+    if(!value||typeof value.stream_url!=='string'||!value.stream_url)throw new Error('没有可用的视频线路');
+    var stream=new URL(value.stream_url),expiry=stream.searchParams.getAll('txTime');
+    if((stream.protocol!=='https:'&&stream.protocol!=='http:')||!stream.hostname||stream.username||stream.password)
+      throw new Error('视频地址无效');
+    // Do not repair CDN tokens or loop on stale upstream metadata. A reliable
+    // native HTTP Date avoids false expiry decisions on old boxes with bad clocks.
+    if(expiry.length){
+      if(expiry.length!==1||!/^[a-f0-9]{1,12}$/i.test(expiry[0]))throw new Error('网站播放配置不可用');
+      if(value._ntvServerTimeMs>0&&parseInt(expiry[0],16)*1000<=value._ntvServerTimeMs)
+        throw new Error('网站返回的播放地址已过期，请稍后重试');
+    }
+    return {success:true,data:{url:value.stream_url,channelName:value.title||'贵州直播'}};
   }
   function ready(){
     var root=d.createElement('div');root.id='ntv-legacy-player';
@@ -46,6 +88,8 @@
       }catch(error){response=Promise.reject(error);}
     }
     response.then(function(value){
+      if(hebei)value=hebeiInfo(value);
+      if(guizhou)value=guizhouInfo(value);
       if(!value.success||!value.data)throw new Error(value.message||'直播接口不可用');
       var list=value.data.multiBitrateStreamList||[],selected=null,i;
       if(!cztv)selected={urlList:[value.data.url]};

@@ -1,0 +1,41 @@
+=== nativewasmtv-full/tools/web-compat/test-huangshan-server-adapter.py
+warning: [options] bootstrap class path not set in conjunction with -source 1.7
+1 warning
+PASS bare-base original failure, exact HTTP config restored, unrelated options/HTTPS/native URL invalid-input errors preserved
+PASS Huangshan server guards: synthetic fixture with test-only fingerprint
+=== nativewasmtv-full/tools/web-compat/test-huangshan-source-adapter.py
+warning: [options] bootstrap class path not set in conjunction with -source 1.7
+1 warning
+PASS original empty-carousel failure; empty-only guard; nonempty circular/noncircular, zero-width, chain return, later containers, real exceptions unchanged
+PASS Huangshan fingerprint guards: synthetic fixture with test-only fingerprint
+=== nativewasmtv-full/tools/web-compat/test-injector.py
+PASS streamed early injection, first-script ordering, fragmented markup, comments, BOM, GBK and upstream closure
+=== nativewasmtv-full/tools/web-compat/test-process-dns.py
+warning: [options] bootstrap class path not set in conjunction with -source 8
+warning: [options] source value 8 is obsolete and will be removed in a future release
+warning: [options] target value 8 is obsolete and will be removed in a future release
+warning: [options] To suppress warnings about obsolete options, use -Xlint:-options.
+4 warnings
+BURST 10/10 distinct hosts at 100-500ms: 1703ms
+PASS 82 assertions: real ProcessDns 5s wall deadline, two-worker/eight-queue cap, normal ten-host bursts, expired queued-task cleanup, sharing, interruption, saturation recovery, immutable cache and invalidation race
+=== nativewasmtv-full/tools/web-compat/test-script-source-adapter.py
+warning: [options] bootstrap class path not set in conjunction with -source 1.7
+1 warning
+PASS source adapter: synthetic fixture with test-only fingerprint ; host/url/version/body/site/auth mismatch, idempotence, denial unchanged
+=== nativewasmtv-full/tools/web-compat/test-site-adapter.py
+Compiler: /tmp/ntv-jdk8-compat/bin/javac
+PASS 70 offline adapter cases / 603 assertions: Hebei and Guizhou routing, compatibility gate, fixed public APIs, 10s client budget, no redirects/retries, 256KiB byte cap, stream closure and disconnects
+LIMITS: declaration/test-double coverage only; no Android JSON/runtime, real timeout enforcement, upstream network, WebView, or playback proof.
+PASS real API19 compile: production adapter + compatibility gate, only NetworkClient declaration stub; runtime/playback remain unverified.
+=== nativewasmtv-full/tools/web-compat/test-strict-preflight.py
+warning: [options] bootstrap class path not set in conjunction with -source 8
+warning: [options] source value 8 is obsolete and will be removed in a future release
+warning: [options] target value 8 is obsolete and will be removed in a future release
+warning: [options] To suppress warnings about obsolete options, use -Xlint:-options.
+4 warnings
+PASS native lexical route: strict-only, inherited, switch, comments, Unicode names; classic fast path
+=== nativewasmtv-full/tools/web-compat/test-syntax.py
+PASS modern syntax preflight, classic pass-through, strings/comments and regex flags
+=== nativewasmtv-full/tools/web-compat/test-xian-source-adapter.py
+PASS original absent-body failure; fixed absent-body only; live-DOM recursion; live-body null/undefined/real error propagation
+PASS Xi’an fingerprint guards: synthetic fixture with test-only fingerprint

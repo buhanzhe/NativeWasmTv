@@ -1,0 +1,118 @@
+[
+  {
+    "case": "typed-from-before-expanded",
+    "samples": 8,
+    "ua_profile": "Windows native Chrome30 UA string, actual Android4.4.2/API19 WebView",
+    "result": {
+      "passed": 0,
+      "total": 1,
+      "checks": [
+        {
+          "name": "Uint8Array.from exists",
+          "pass": false
+        }
+      ]
+    },
+    "window_errors": [],
+    "scope": "Synthetic standard TypedArray.from semantics, not live website or native compiler claim",
+    "compat_sha256": "3dbac4bfe743befb41b64db650d5f1784b428fdba14f9d88e3f98492747e5f3c",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.0.0 Safari/537.36",
+    "sdk": 19
+  },
+  {
+    "case": "typed-from-after",
+    "samples": 8,
+    "ua_profile": "Windows native Chrome30 UA string, actual Android4.4.2/API19 WebView",
+    "result": {
+      "passed": 20,
+      "total": 20,
+      "checks": [
+        {
+          "name": "Uint8Array.from exists",
+          "pass": true
+        },
+        {
+          "name": "typed result and coercion",
+          "pass": true
+        },
+        {
+          "name": "array-like source",
+          "pass": true
+        },
+        {
+          "name": "mapping and thisArg",
+          "pass": true
+        },
+        {
+          "name": "iterable source",
+          "pass": true
+        },
+        {
+          "name": "clamped conversion",
+          "pass": true
+        },
+        {
+          "name": "null throws",
+          "pass": true
+        },
+        {
+          "name": "invalid constructor throws",
+          "pass": true
+        },
+        {
+          "name": "existing typed constructors preserved",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Int8Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Uint8Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Uint8ClampedArray",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Int16Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Uint16Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Int32Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Uint32Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Float32Array",
+          "pass": true
+        },
+        {
+          "name": "native identity and from Float64Array",
+          "pass": true
+        },
+        {
+          "name": "invalid map function throws",
+          "pass": true
+        },
+        {
+          "name": "ES5 linked subclass",
+          "pass": true
+        }
+      ]
+    },
+    "window_errors": [],
+    "scope": "Synthetic standard TypedArray.from semantics, not live website or native compiler claim",
+    "compat_sha256": "0282e7d89e5c3e9d0d19aa6d6ccf7e381bc762156eaedb3403f689679262c63c",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.0.0 Safari/537.36",
+    "sdk": 19
+  }
+]

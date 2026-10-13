@@ -2,16 +2,17 @@
   "version": "3.50.0",
   "targets": { "chrome": "33" },
   "modules": [
-    "es.symbol", "es.array.iterator", "es.string.iterator",
+    "es.global-this", "es.symbol", "es.array.iterator", "es.string.iterator",
     "es.map", "es.set", "es.weak-map", "es.weak-set",
     "es.promise", "es.reflect",
     "es.object.assign", "es.object.values", "es.object.entries",
-    "es.object.set-prototype-of",
+    "es.object.set-prototype-of", "es.object.get-own-property-descriptors",
     "es.array.from", "es.array.includes", "es.array.find",
+    "es.typed-array.from",
     "es.number.is-finite", "es.number.is-nan",
     "es.string.includes", "es.string.starts-with", "es.string.ends-with",
     "es.string.repeat", "es.string.pad-start", "es.string.pad-end",
     "web.url", "web.url-search-params", "web.dom-collections.iterator",
-    "web.dom-collections.for-each"
+    "web.dom-collections.for-each", "web.dom-exception"
   ]
 }

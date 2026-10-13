@@ -5,7 +5,7 @@
     "file": "legacy.min.js",
     "upstream": "https://github.com/zloirock/core-js",
     "license": "MIT",
-    "sha256": "408877822f7cfb8f707a1d3a8e959308577f9cc01239ddb4eaad735caa1a027a"
+    "sha256": "fd0c8fd0a0e459afa21f420f9a8e90e73402cabf8ad9e59c41ddbdc3c95b8c0b"
   },
   {
     "name": "whatwg-fetch",

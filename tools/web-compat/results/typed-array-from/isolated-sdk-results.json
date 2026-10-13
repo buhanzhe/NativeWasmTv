@@ -1,0 +1,28 @@
+[
+  {
+    "case": "typed-sdk-before",
+    "sdk": 19,
+    "samples": 8,
+    "compat_sha256": "3dbac4bfe743befb41b64db650d5f1784b428fdba14f9d88e3f98492747e5f3c",
+    "original_sdk_url": "https://gh5tc-cos.mp.sztv.com.cn/ysz_web_static/ysz-sdk-utils/1.0.43/yszsdk.min.js",
+    "original_sdk_sha256": "88a1e77d12f784d731e50939413a07b675318602f12397039e420eb3826ff5ec",
+    "window_errors": [
+      "Script error. "
+    ],
+    "console_errors": [
+      "ERROR https://gh5tc-cos.mp.sztv.com.cn/ysz_web_static/ysz-sdk-utils/1.0.43/yszsdk.min.js:1 Uncaught TypeError: Object function Uint8Array() { [native code] } has no method 'from'"
+    ],
+    "scope": "Isolated unchanged captured public SDK startup, not entire webpage, live network, SDK feature completeness, or native compiler-budget success."
+  },
+  {
+    "case": "typed-sdk-after",
+    "sdk": 19,
+    "samples": 8,
+    "compat_sha256": "0282e7d89e5c3e9d0d19aa6d6ccf7e381bc762156eaedb3403f689679262c63c",
+    "original_sdk_url": "https://gh5tc-cos.mp.sztv.com.cn/ysz_web_static/ysz-sdk-utils/1.0.43/yszsdk.min.js",
+    "original_sdk_sha256": "88a1e77d12f784d731e50939413a07b675318602f12397039e420eb3826ff5ec",
+    "window_errors": [],
+    "console_errors": [],
+    "scope": "Isolated unchanged captured public SDK startup, not entire webpage, live network, SDK feature completeness, or native compiler-budget success."
+  }
+]

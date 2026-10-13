@@ -1,0 +1,26 @@
+=== nativewasmtv-full/tools/web-compat/test-domexception.cjs
+PASS missing and nonconstructible DOMException, real name/message/code/constants, Error semantics, site stack-check, constructor enforcement, idempotence
+=== nativewasmtv-full/tools/web-compat/test-globalthis.cjs
+PASS globalThis: missing/correct-existing global, strict function access, nonenumerable writable configurable descriptor, repeated-load identity, configurable delete/reinstall, writable assignment, no media/Wasm fabrication
+=== nativewasmtv-full/tools/web-compat/test-guizhou.cjs
+PASS Guizhou 7 channels, strict scope/schema, exact server-issued URL preservation, stale metadata guard, denial/no-retry, deferred shell and idempotence
+=== nativewasmtv-full/tools/web-compat/test-jquery-size.cjs
+PASS generic jQuery size: jQuery 3.0–3.7, delayed external loads, document/window events, replacement libraries, count semantics, idempotence, existing/inherited properties, frozen prototypes, excluded versions and inline boundary
+PASS nonextensible compatibility marker: fail closed without listeners or prototype mutation
+=== nativewasmtv-full/tools/web-compat/test-object-descriptors.cjs
+PASS descriptors: own keys, symbols/native+polyfill, nonenumerables, getter nonexecution, flags, __proto__, primitive coercion, null errors, idempotence, native preservation, no media/Wasm fabrication
+=== nativewasmtv-full/tools/web-compat/test-page-adapters.cjs
+PASS Hainan fingerprinted helper: exact scope, early readyState guard, HTTP errors visible, native XHR unchanged
+=== nativewasmtv-full/tools/web-compat/test-regex-selection.cjs
+PASS selective ES5 regex, full modern regex transforms, matching semantics, original ES5 pass-through, malformed input
+PASS strict block declarations lowered to function expressions
+=== nativewasmtv-full/tools/web-compat/test-sites.cjs
+PASS site adapters: seven Hebei indexes, public signing, query preservation, denial/schema/index failures, deferred shell, idempotence and three existing adapters
+=== nativewasmtv-full/tools/web-compat/test-strict-preflight.cjs
+PASS runtime and generated parser: strict-only/inherited/switch/comment/unicode declarations, ordinary function bodies, escaped and non-directive strict strings
+=== nativewasmtv-full/tools/web-compat/test-transpiler.cjs
+PASS ES5 validation, async/classes/iteration behavior, module output, import.meta and malformed input
+=== nativewasmtv-full/tools/web-compat/test-typed-array-from.cjs
+PASS TypedArray.from: nine types, native/polyfill Symbol, arraylike/iterables, mapping/thisArg/order, clamping, errors, subclass, native preservation, repeat-install semantics, no media/Wasm fabrication
+=== nativewasmtv-full/tools/web-compat/test.cjs
+PASS ES5 bundle, missing APIs, Set/Map/WeakMap/Symbol/Reflect, iterable Array.from, Promise, fetch, URL, errors, idempotence, site scope and native media capability preservation

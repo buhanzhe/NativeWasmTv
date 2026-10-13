@@ -1,0 +1,31 @@
+{
+  "core_js": "3.50.0",
+  "added_module": "es.typed-array.from",
+  "selected_modules": 88,
+  "files": {
+    "tools/web-compat/corejs/config.json": {
+      "bytes": 787,
+      "sha256": "d1367127b67777c7aeffede4d027892174802e84f697031fa05d23dddb4c7412"
+    },
+    "third_party/web-compat/core-js/legacy.min.js": {
+      "bytes": 106462,
+      "sha256": "fd0c8fd0a0e459afa21f420f9a8e90e73402cabf8ad9e59c41ddbdc3c95b8c0b"
+    },
+    "third_party/web-compat/core-js/modules.json": {
+      "bytes": 2559,
+      "sha256": "a68f404751c6739559d96a11830f3a8265a7400670d612b585049ad7cd0a3e2c"
+    },
+    "third_party/web-compat/core-js/LICENSE.txt": {
+      "bytes": 1134,
+      "sha256": "b87653fff2d44426ab5cd4723cee3b1364dc8d35a0acdf098c54689543123bf8"
+    },
+    "tools/web-compat/vendors.json": {
+      "bytes": 748,
+      "sha256": "6939edcd91cbbe814b198cc5f1f57ad2acd2d9ed24f0559eb7702107e5125d1f"
+    },
+    "app/src/main/assets/control/userscripts/kitkat-tv.user.js": {
+      "bytes": 153085,
+      "sha256": "0282e7d89e5c3e9d0d19aa6d6ccf7e381bc762156eaedb3403f689679262c63c"
+    }
+  }
+}

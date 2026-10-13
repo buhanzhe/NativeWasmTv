@@ -2,7 +2,7 @@
 globalThis.ntvTransform=function(source,filename,module){
   var started=Date.now(),syntaxMs=0;
   if(!module){
-    try{acorn.parse(source,{ecmaVersion:5,sourceType:'script',allowHashBang:false});
+    try{if(!ntvLegacyEs5(source,false))throw new Error('Legacy syntax requires lowering');
       return JSON.stringify({code:source,changed:false,module:false,syntaxMs:Date.now()-started,transformMs:0});
     }catch(unsupported){}
   }
@@ -16,6 +16,8 @@ globalThis.ntvTransform=function(source,filename,module){
     if(Array.isArray(node)){for(var i=0;i<node.length;i++)scan(node[i],parent);return;}
     var type=node.type;
     if(type==='VariableDeclaration'&&node.kind!=='var')need('block-scoping');
+    // Chromium 30 rejects strict block functions even though Acorn accepts them as ES5.
+    if(type==='FunctionDeclaration')need('block-scoped-functions');
     if(type==='ArrowFunctionExpression')need('arrow-functions');
     if(type==='ClassDeclaration'||type==='ClassExpression')need('classes');
     if(type==='PropertyDefinition'){need('class-properties');if(node.key&&node.key.type==='PrivateIdentifier')need('private-methods');}
@@ -32,17 +34,20 @@ globalThis.ntvTransform=function(source,filename,module){
     if(node.async){need('async-to-generator');need('regenerator');if(node.generator)need('async-generator-functions');}
     if(node.generator)need('regenerator');
     if(type==='BinaryExpression'&&node.operator==='**')need('exponentiation-operator');
-    if(type==='LogicalExpression'&&node.operator==='??')need('nullish-coalescing-operator');
-    if(type==='AssignmentExpression'&&/^(\\?\\?=|&&=|\\|\\|=)$/.test(node.operator))need('logical-assignment-operators');
+    // Lowering ??= emits ??, so select its lowering transform too.
+    if((type==='LogicalExpression'&&node.operator==='??')||(type==='AssignmentExpression'&&node.operator==='??='))need('nullish-coalescing-operator');
+    if(type==='AssignmentExpression'&&(node.operator==='??='||node.operator==='&&='||node.operator==='||='))need('logical-assignment-operators');
     if(type==='ChainExpression'||node.optional)need('optional-chaining');
     if(type==='CatchClause'&&!node.param)need('optional-catch-binding');
     if(type==='Super')need('object-super');
     if(type==='MetaProperty'&&node.meta.name==='new')need('new-target');
-    if(node.regex){all=true;}
+    // Ordinary ES5 regex literals do not require every Babel transform.
+    // Parse each literal as ES5 so newer flags/patterns still take preset-env.
+    if(node.regex)try{acorn.parse(node.raw,{ecmaVersion:5,sourceType:'script'});}catch(modernRegex){all=true;}
     for(var key in node)if(key!=='start'&&key!=='end')scan(node[key],node);
   }
   try{scan(acorn.parse(source,{ecmaVersion:'latest',sourceType:module?'module':'script'}),null);}catch(parseError){all=true;}
-  var order=['class-static-block','private-property-in-object','private-methods','class-properties','object-rest-spread','optional-chaining','nullish-coalescing-operator','logical-assignment-operators','async-generator-functions','async-to-generator','arrow-functions','parameters','classes','object-super','for-of','spread','destructuring','computed-properties','shorthand-properties','template-literals','exponentiation-operator','optional-catch-binding','new-target','regenerator','block-scoping'];
+  var order=['class-static-block','private-property-in-object','private-methods','class-properties','object-rest-spread','optional-chaining','nullish-coalescing-operator','logical-assignment-operators','async-generator-functions','async-to-generator','arrow-functions','parameters','classes','object-super','for-of','spread','destructuring','computed-properties','shorthand-properties','template-literals','exponentiation-operator','optional-catch-binding','new-target','regenerator','block-scoped-functions','block-scoping'];
   var selected=[];for(var j=0;j<order.length;j++)if(needed['transform-'+order[j]])selected.push('transform-'+order[j]);
   if(module)selected.push('transform-modules-systemjs');
   var options={
@@ -59,7 +64,7 @@ globalThis.ntvTransform=function(source,filename,module){
     }}};}]
   };
   var special=options.plugins[0],output;
-  if(!all)try{options.plugins=[special].concat(selected);output=Babel.transform(source,options).code;acorn.parse(output,{ecmaVersion:5,sourceType:'script'});}catch(uncovered){all=true;}
-  if(all){options.plugins=[special];options.presets=[['env',{targets:{chrome:'33'},forceAllTransforms:true,modules:module?'systemjs':false,useBuiltIns:false}]];output=Babel.transform(source,options).code;acorn.parse(output,{ecmaVersion:5,sourceType:'script'});}
+  if(!all)try{options.plugins=[special].concat(selected);output=Babel.transform(source,options).code;if(!ntvLegacyEs5(output,false))throw new Error('Output is not Chromium 30 compatible syntax');}catch(uncovered){all=true;}
+  if(all){options.plugins=[special];options.presets=[['env',{targets:{chrome:'33'},forceAllTransforms:true,modules:module?'systemjs':false,useBuiltIns:false}]];output=Babel.transform(source,options).code;if(!ntvLegacyEs5(output,false))throw new Error('Output is not Chromium 30 compatible syntax');}
   return JSON.stringify({code:output,changed:true,module:module||/System\.register\(/.test(output),syntaxMs:syntaxMs,transformMs:Date.now()-started});
 };

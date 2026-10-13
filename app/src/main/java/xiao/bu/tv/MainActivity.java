@@ -1776,6 +1776,12 @@ public final class MainActivity extends Activity {
         }
         dispatchFlyMouseButtonUp(true);
         String pageUrl = configuredUrl.substring("webview://".length());
+        String verifiedTarget = VerifiedIappNavigation.targetFor(pageUrl);
+        if (!pageUrl.equals(verifiedTarget)) {
+            Log.i(TAG, "Verified iapp navigation: " + pageUrl + " -> " + verifiedTarget);
+            Toast.makeText(this, "已从旧入口转到同站分享页", Toast.LENGTH_SHORT).show();
+            pageUrl = verifiedTarget;
+        }
         if (!pageUrl.startsWith("http://") && !pageUrl.startsWith("https://")) {
             abortChannelSwitchAnimation();
             hideLoading();

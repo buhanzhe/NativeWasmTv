@@ -22,6 +22,8 @@ out+='\n(function(){if(!window.__ntvTvCompatibility||window.__ntvMd5)return;var 
   fs.readFileSync(path.join(root,'third_party/web-compat/blueimp-md5/md5.min.js'),'utf8').replace(/\/\/# sourceMappingURL=.*$/gm,'')+
   '\n}).call({set md5(value){window.__ntvMd5=value;}});\n';
 out+=fs.readFileSync(path.join(__dirname,'sites.js'),'utf8');
+out+=fs.readFileSync(path.join(__dirname,'page-adapters.js'),'utf8');
+out+=fs.readFileSync(path.join(__dirname,'jquery-size-compat.js'),'utf8');
 const dest=path.join(root,'app/src/main/assets/control/userscripts/kitkat-tv.user.js');
 fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,out);
 console.log('Built',hosts.length,'hosts,',Buffer.byteLength(out),'bytes');

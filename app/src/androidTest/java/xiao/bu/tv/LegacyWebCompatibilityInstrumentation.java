@@ -17,6 +17,9 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
         Field f=object.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(object);
     }
     @Override public void onStart() {
+        if (args.containsKey("navigationPairs")) { MainNavigationProbe.run(this,"after".equals(args.getString("expected"))); return; }
+        if (args.containsKey("strictRuntime")) { StrictRuntimeProbe.run(this); return; }
+        if (args.containsKey("nativeNetwork")) { NativeNetworkProbe.run(this); return; }
         if (args.containsKey("generic")) { generic(); return; }
         if (args.containsKey("transpiler")) { transpiler(); return; }
         if (args.containsKey("benchmark")) { benchmark(); return; }
@@ -30,6 +33,7 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
             final MainActivity owner=activity;
             WebSourceView source=(WebSourceView)field(activity,"webSourceView");
             runOnMainSync(()->source.setLegacyTranspilation(args.containsKey("transpile")));
+            if(args.containsKey("nativeProfile"))runOnMainSync(()->source.applyConfiguration("720p",true,"native","native",1f,true,false,false,"[]"));
             runOnMainSync(()->{try{
                 ((java.util.concurrent.atomic.AtomicInteger)field(owner,"catalogLoadGeneration")).incrementAndGet();
                 Field auto=MainActivity.class.getDeclaredField("webViewAutoPlaySniffed");auto.setAccessible(true);auto.setBoolean(owner,false);
@@ -76,6 +80,11 @@ public final class LegacyWebCompatibilityInstrumentation extends Instrumentation
                 JSONObject row=new JSONObject().put("requested",url).put("elapsedMs",SystemClock.elapsedRealtime()-begin)
                         .put("snapshot",snapshot).put("retained",source.hasRetainedPage()).put("complete",complete)
                         .put("playbackAdvanced",playedAt>0&&snapshot.optJSONObject("video")!=null&&snapshot.optJSONObject("video").optDouble("time")-firstTime>=8);
+                if(args.containsKey("pageShots")){
+                    android.graphics.Bitmap shot=getUiAutomation().takeScreenshot();
+                    if(shot!=null){String name="page-"+args.getString("label","test")+"-"+Integer.toHexString(url.hashCode())+".png";
+                        try(FileOutputStream output=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),name))){shot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output);row.put("screenshot",name);}finally{shot.recycle();}}
+                }
                 writer.println(row);writer.flush();System.out.println(row);
                 if(args.containsKey("proof")&&!"PASS".equals(snapshot.optString("genericProof")))throw new AssertionError("Production generic proof missing: "+row);
                 runOnMainSync(source::closePage);SystemClock.sleep(400);

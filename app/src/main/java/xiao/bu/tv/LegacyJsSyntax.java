@@ -19,7 +19,11 @@ final class LegacyJsSyntax {
             }
             code.append(c);
         }
-        return MODERN.matcher(code).find();
+        // Parse strict function-bearing scripts even when there is no other ES2015 token.
+        // Use raw text: regex literals can contain quotes that confuse this cheap lexer.
+        // The shared AST preflight decides whether a declaration really needs lowering.
+        boolean strict=source.contains("\"use strict\"")||source.contains("'use strict'");
+        return (strict&&source.contains("function"))||MODERN.matcher(code).find();
     }
     private LegacyJsSyntax(){}
 }

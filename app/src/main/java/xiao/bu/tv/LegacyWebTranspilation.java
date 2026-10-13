@@ -12,7 +12,7 @@ import java.util.regex.*;
 import org.json.JSONObject;
 import okhttp3.MediaType;
 
-/** Generic, bounded syntax adaptation. No host rules and no DOM executed in QuickJS. */
+/** Bounded syntax adaptation with fingerprinted source repair; no DOM executes in QuickJS. */
 final class LegacyWebTranspilation {
     private static final String MARKER="__ntv_qjs_module=1";
     private static final Pattern ATTRIBUTE=Pattern.compile("([\\w:-]+)(?:\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+)))?");
@@ -122,6 +122,7 @@ final class LegacyWebTranspilation {
                 }finally{if(connection!=null)body.close();}break;
             }}
             if(source==null)return null;
+            source=LegacyScriptSourceAdapter.adapt(page,url,source);
             String output=source;try{output=transform(source,url,module).getString("code");}catch(Exception fallback){}
             return new WebResourceResponse("application/javascript","UTF-8",new ByteArrayInputStream(output.getBytes("UTF-8")));
         }catch(Exception error){Log.w("LegacyTranspile","Resource fallback: "+error.getClass().getSimpleName());return null;}
