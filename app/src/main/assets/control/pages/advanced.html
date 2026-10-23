@@ -87,9 +87,9 @@
           <div class="field">
             <label for="decoder">解码模式</label>
             <select id="decoder" onchange="saveDecoder()">
-              <option value="auto">自动（无画面转软解）</option>
+              <option value="auto">自动</option>
               <option value="hardware">仅硬解</option>
-              <option value="software">软解（BWDIF 去隔行）</option>
+              <option value="software">软解</option>
             </select>
           </div>
           <div class="field">
@@ -101,10 +101,9 @@
           <div class="field">
             <label for="hdrMode">HDR 模式</label>
             <select id="hdrMode" onchange="saveHdrMode()">
-              <option value="hardware">自动（默认）</option>
-              <option value="mapping">转为 SDR</option>
-              <option value="hardware_sdr">GPU 转为 SDR</option>
-              <option value="bt709">强制 BT.709（色彩修正）</option>
+              <option value="hardware">自动</option>
+              <option value="mapping">转 SDR</option>
+              <option value="bt709">强制 BT.709</option>
             </select>
           </div>
           <div class="field">
@@ -127,7 +126,7 @@
         </p>
         <p class="hint">SPS 兼容清理仅用于央视频、央视网专用解密流程；普通未加密码流不做清理，也无需因此重新播放。</p>
         <p class="hint">隔行视频追求画质可选软解：自动使用 BWDIF 逐场去隔行，1080i50 输出目标为 50fps；逐行视频直接播放。处理速度取决于 CPU 性能。硬解由系统处理去隔行，应用无法统一保证其算法与输出场率。</p>
-        <p class="hint">自动：屏幕支持对应 HDR 格式且系统为 Android 8.0 及以上时直出，否则转为 SDR。转为 SDR：Android 12 及以上优先使用解码器映射，旧系统使用 GPU。GPU 转为 SDR：硬解时固定使用 GPU 映射，适合解码器映射颜色异常的设备。强制 BT.709：仅用于源色彩标记异常，不做 HDR 亮度映射。解码方式仍由解码设置控制；切换后重新播放当前频道。</p>
+        <p class="hint">自动：屏幕支持对应 HDR 格式且系统为 Android 8.0 及以上时直出，否则转 SDR。转 SDR：Android 12 及以上优先使用解码器映射，不支持时回退 GPU；旧系统使用 GPU。强制 BT.709：仅用于源色彩标记异常，不做 HDR 亮度映射。解码方式仍由解码设置控制；切换后重新播放当前频道。</p>
       </section>
       <section class="browser-section">
         <div class="browser-settings-list">

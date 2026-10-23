@@ -190,21 +190,21 @@ $artifacts = @(
     [pscustomobject]@{
         Name = 'nTv.apk'
         Flavor = 'arm32'
-        CopyAs = '网页电视32位.apk'
+        CopyAs = 'nTv-v7a-电视盒子专用-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm32\release\app-arm32-release.apk'
         ExpectedAbi = 'armeabi-v7a'
     },
     [pscustomobject]@{
         Name = 'nTv64.apk'
         Flavor = 'arm64'
-        CopyAs = '网页电视64位.apk'
+        CopyAs = 'nTv-v8a-手机或高版本设备-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm64\release\app-arm64-release.apk'
         ExpectedAbi = 'arm64-v8a'
     },
     [pscustomobject]@{
         Name = 'nTvX86.apk'
         Flavor = 'x86'
-        CopyAs = '网页电视x86.apk'
+        CopyAs = 'nTv-x86-模拟器专用-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\x86\release\app-x86-release.apk'
         ExpectedAbi = 'x86'
     }
@@ -260,7 +260,14 @@ $results = foreach ($artifact in $artifacts) {
     $mappingDestination = Join-Path $mappingDirectory 'mapping.txt'
     Copy-Item -LiteralPath $mappingSource -Destination $mappingDestination -Force
     $file = Get-Item -LiteralPath $destination
-    $aliasPath = Join-Path $OutputDirectory $artifact.CopyAs
+    if ($badging -notmatch "versionName='([^']+)'") {
+        throw "APK versionName is missing: $destination"
+    }
+    $apkVersionName = $Matches[1]
+    if ($apkVersionName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        throw "APK versionName contains invalid filename characters: $apkVersionName"
+    }
+    $aliasPath = Join-Path $OutputDirectory ($artifact.CopyAs -f $apkVersionName)
     Copy-Item -LiteralPath $destination -Destination $aliasPath -Force
     [pscustomobject]@{
         APK = $artifact.Name

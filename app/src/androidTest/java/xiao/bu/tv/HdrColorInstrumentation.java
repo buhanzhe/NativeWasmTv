@@ -73,8 +73,8 @@ public final class HdrColorInstrumentation extends Instrumentation {
                 while ((n=input.read(buffer))>0) bytes.write(buffer,0,n);
             }
             int vs = shader(GLES20.GL_VERTEX_SHADER,"attribute vec2 position;void main(){gl_Position=vec4(position,0.,1.);}");
-            int fs = shader(GLES20.GL_FRAGMENT_SHADER,"precision highp float;uniform vec3 color;\n"
-                    + bytes.toString("UTF-8") + "\nvoid main(){gl_FragColor=vec4(ntvToSdr(color),1.);}");
+            int fs = shader(GLES20.GL_FRAGMENT_SHADER,"precision highp float;uniform vec3 color;uniform float benchmark;\n"
+                    + bytes.toString("UTF-8") + HdrToneMapLut.LOOKUP + "\nvoid main(){gl_FragColor=vec4(ntvFastToSdr(benchmark>0.5?vec3(fract(gl_FragCoord.x/1920.0),fract(gl_FragCoord.y/1080.0),fract((gl_FragCoord.x+gl_FragCoord.y)/3000.0)):color),1.);}");
             program=GLES20.glCreateProgram(); GLES20.glAttachShader(program,vs); GLES20.glAttachShader(program,fs);
             GLES20.glLinkProgram(program); GLES20.glDeleteShader(vs); GLES20.glDeleteShader(fs);
             int[] linked=new int[1]; GLES20.glGetProgramiv(program,GLES20.GL_LINK_STATUS,linked,0);
@@ -118,6 +118,49 @@ public final class HdrColorInstrumentation extends Instrumentation {
                     throw new AssertionError("Nonmonotonic/nonneutral HLG ramp at "+i);
                 previous=rgb[0];
             }
+            HdrToneMapLut lut=new HdrToneMapLut(bytes.toString("UTF-8"));
+            // This differential fixture compares the legacy two-sample lookup.
+            // The optional 3D upload is covered by HdrVolumeInstrumentation.
+            lut.disableVolume();
+            try {
+                for(int trc:new int[]{6,7}) {
+                    GLES20.glUseProgram(program);GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"benchmark"),0);
+                    int texture=lut.update(trc,1000);
+                    GLES20.glUseProgram(program);GLES20.glViewport(0,0,1,1);
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE1);GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,texture);
+                    GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"ntvLut"),1);
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                    vertices.position(0);GLES20.glVertexAttribPointer(pos,2,GLES20.GL_FLOAT,false,0,vertices);
+                    java.util.Random random=new java.util.Random(42);int maxError=0;long totalError=0;
+                    for(int n=0;n<600;n++) {
+                        float r=random.nextFloat(),g=random.nextFloat(),b=random.nextFloat();
+                        if(n<129)r=g=b=n/128f;
+                        GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvUseLut"),0);
+                        int[] reference=sample(trc,1000,r,g,b);
+                        GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvUseLut"),1);
+                        int[] mapped=sample(trc,1000,r,g,b);
+                        for(int c=0;c<3;c++){int delta=Math.abs(reference[c]-mapped[c]);maxError=Math.max(maxError,delta);totalError+=delta;}
+                    }
+                    results.append("LUT transfer="+trc+" maxError="+maxError+" meanError="+(totalError/1800f)+"\n");
+                    if(maxError>24 || totalError/1800f>1.5f)throw new AssertionError("LUT colour deviation "+maxError);
+                    // Same full-screen fragment workload; exclude table creation and warmup.
+                    int[] fbo=new int[1],target=new int[1];GLES20.glGenTextures(1,target,0);GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,target[0]);
+                    GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D,0,GLES20.GL_RGBA,1920,1080,0,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,null);
+                    GLES20.glGenFramebuffers(1,fbo,0);GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER,fbo[0]);
+                    GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER,GLES20.GL_COLOR_ATTACHMENT0,GLES20.GL_TEXTURE_2D,target[0],0);
+                    if(GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER)!=GLES20.GL_FRAMEBUFFER_COMPLETE)throw new AssertionError("Benchmark FBO");
+                    GLES20.glViewport(0,0,1920,1080);
+                    GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"benchmark"),1);
+                    for(int mode=0;mode<2;mode++){
+                        GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvUseLut"),mode);
+                        for(int n=0;n<4;n++)GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);GLES20.glFinish();
+                        long start=System.nanoTime();
+                        for(int n=0;n<20;n++){GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);GLES20.glFinish();}
+                        results.append("GPU 1080p transfer="+trc+" LUT="+mode+" ms="+((System.nanoTime()-start)/20000000.0)+"\n");
+                    }
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER,0);GLES20.glDeleteFramebuffers(1,fbo,0);GLES20.glDeleteTextures(1,target,0);
+                }
+            }finally{lut.release();}
             result.putString("stream",results+"checks="+checks+" failures="+failures+"\n");
             finish(failures==0 ? -1 : 0,result);
         } catch(Throwable error) {

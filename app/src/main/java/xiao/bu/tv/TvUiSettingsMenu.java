@@ -14,8 +14,8 @@ final class TvUiSettingsMenu implements TvUi.Events {
     private static Bundle choices(String[] items,int selected){Bundle b=new Bundle();b.putStringArray("items",items);b.putInt("selected",selected);return b;}
     private static String check(String title,boolean checked){return title+(checked?" ●":" ○");}
     public Bundle options(int category){Bundle s=host.state();if(category<0||category>=keys.length)return choices(new String[0],-1);String key=keys[category];
-        if("source".equals(key)){int count=s.getInt("sources");String[] rows=new String[count];for(int i=0;i<count;i++)rows[i]="线路"+(i+1);return choices(rows,s.getInt("source"));}
-        if("ratio".equals(key)){String mode=s.getString("ratio");return choices(new String[]{"全屏显示","原始比例","16:9","4:3","填充"},"stretch".equals(mode)?0:"16:9".equals(mode)?2:"4:3".equals(mode)?3:"fill".equals(mode)?4:1);}
+        if("source".equals(key)){int count=s.getInt("sources");String[] names=s.getStringArray("sourceNames");String[] rows=new String[count];for(int i=0;i<count;i++)rows[i]=names!=null&&i<names.length?names[i]:"线路"+(i+1);return choices(rows,s.getInt("source"));}
+        if("ratio".equals(key)){String mode=s.getString("ratio");return choices(android.os.Build.VERSION.SDK_INT>=24?new String[]{"原始比例","全屏显示","18:9","16:9","4:3","裁剪","背景模糊"}:new String[]{"原始比例","全屏显示","18:9","16:9","4:3","裁剪"},"stretch".equals(mode)?1:"18:9".equals(mode)?2:"16:9".equals(mode)?3:"4:3".equals(mode)?4:"fill".equals(mode)?5:"blur".equals(mode)&&android.os.Build.VERSION.SDK_INT>=24?6:0);}
         if("decode".equals(key)){String mode=s.getString("decode");return choices(new String[]{"智能硬解","硬件解码","软件解码"},"hardware".equals(mode)?1:"software".equals(mode)?2:0);}
         if("timeout".equals(key))return choices(new String[]{"关闭","5 秒换源","10 秒换源"},s.getInt("timeout")==5?1:s.getInt("timeout")==10?2:0);
         if("channels".equals(key)){
@@ -37,7 +37,7 @@ final class TvUiSettingsMenu implements TvUi.Events {
         }
         if(option<0||option>=("source".equals(key)?s.getInt("sources"):options(category).getStringArray("items").length))return;
         if("source".equals(key)){menu.dismiss();host.source(option);}
-        else if("ratio".equals(key))host.setting("videoScaleMode",new String[]{"stretch","fit","16:9","4:3","fill"}[option]);
+        else if("ratio".equals(key))host.setting("videoScaleMode",new String[]{"fit","stretch","18:9","16:9","4:3","fill","blur"}[option]);
         else if("decode".equals(key))host.setting("decodeMode",new String[]{"auto","hardware","software"}[option]);
         else if("timeout".equals(key))host.setting("autoSwitchSourceSeconds",option==1?5:option==2?10:0);
         else if("display".equals(key)){if(option==0)host.setting("showDateTime",!s.getBoolean("clock"));else if(option==1)host.setting("showNetworkSpeed",!s.getBoolean("speed"));else if(option==2)host.setting("showDebugInfo",!s.getBoolean("debug"));else if(option==3)host.setting("showPlaybackPosition",!s.getBoolean("position"));else go(option==4?"ui-size":option==5?"hdr":"guide");}

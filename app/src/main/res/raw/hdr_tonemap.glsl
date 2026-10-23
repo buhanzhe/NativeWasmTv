@@ -12,9 +12,12 @@ float ntvShoulder(float value, float peak) {
     float knee = 0.55;
     if (value <= knee) return value;
     peak = max(peak, 1.0001);
-    float a = -knee * knee * (peak - 1.0) / (knee * knee - 2.0 * knee + peak);
-    float b = (knee * knee - 2.0 * knee * peak + peak) / (peak - 1.0);
-    return min((b + knee) * (b + knee) / (b - a) * (value + a) / (value + b), 1.0);
+    // Algebraically identical Mobius curve with one division. The shifted
+    // form also avoids subtracting large terms when peak approaches one.
+    float distance = value - knee;
+    float shoulder = (1.0 - knee) * (peak - knee);
+    return min(knee + shoulder * distance
+            / (shoulder + (peak - 1.0) * distance), 1.0);
 }
 vec3 ntvToSdr(vec3 encoded) {
     if (ntvBt709Source > 0.5) {
@@ -39,12 +42,15 @@ vec3 ntvToSdr(vec3 encoded) {
         linear = ntvTransfer < 1.5 ? v : pow(v, vec3(2.4));
     } else if (ntvTransfer < 6.5) {
         vec3 p = pow(v, vec3(1.0 / 78.84375));
-        linear = 10000.0 * pow(max(p - 0.8359375, 0.0)
-                / max(18.8515625 - 18.6875 * p, 0.000001), vec3(1.0 / 0.1593017578125));
+        // p is in [0,1], so the denominator is always >= 0.1640625.
+        // Keep PQ in normalized light until the SDR adaptation, avoiding
+        // a 10000x RGB expansion followed by its inverse scaling.
+        linear = pow(max(p - 0.8359375, 0.0)
+                / (18.8515625 - 18.6875 * p), vec3(1.0 / 0.1593017578125));
         // Match PQ to HLG at the 1000-nit bridge, then use the same SDR
         // viewing conditions as HLG below (291 nits, system gamma 1.03).
-        float hdrLuma = max(dot(linear, vec3(0.2627, 0.6780, 0.0593)) / 1000.0, 0.000001);
-        linear *= 0.00291 * pow(hdrLuma, 1.03 / 1.2 - 1.0);
+        float hdrLuma = max(10.0 * dot(linear, vec3(0.2627, 0.6780, 0.0593)), 0.000001);
+        linear *= 29.1 * pow(hdrLuma, 1.03 / 1.2 - 1.0);
         peak = 2.91 * pow(max(ntvPeak, 100.0) / 1000.0, 1.03 / 1.2);
     } else {
         vec3 low = v * v / 3.0;
@@ -65,7 +71,8 @@ vec3 ntvToSdr(vec3 encoded) {
     // every clipped colour toward luma made bright reds/blues visibly grey.
     rgb = max(rgb, 0.0);
     float signal = max(max(rgb.r, rgb.g), rgb.b);
-    if (ntvTransfer > 5.5 && signal > 0.000001)
+    // Below the knee the multiplier is exactly one; skip both divisions.
+    if (ntvTransfer > 5.5 && signal > 0.55)
         rgb *= ntvShoulder(signal, peak) / signal;
     return pow(clamp(rgb, 0.0, 1.0), vec3(1.0 / 2.4));
 }

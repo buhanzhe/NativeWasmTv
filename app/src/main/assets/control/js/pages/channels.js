@@ -107,7 +107,7 @@ function openRecommendedSourcePicker() {
     choices = document.getElementById("recommendedSourceChoices"),
     items = recommendedSources.length
       ? recommendedSources
-      : [{ name: "网页电视台", url: recommended }];
+      : [{ name: "网页电视大全", url: recommended }];
   choices.innerHTML = "";
   for (var i = 0; i < items.length; i++) {
     var source = items[i],
@@ -1209,7 +1209,7 @@ function saveEpg() {
     }
     epgUrls = values;
     renderEpgSources();
-    toast(values.length ? "节目单已保存，正在按顺序更新" : "已恢复自动选择节目单");
+    toast(values.length ? "节目单已保存，正在重建缓存和数据库" : "已恢复自动选择节目单，正在重建缓存和数据库");
     channelBaseEpg = JSON.stringify(values);
     setTimeout(refresh, 500);
   });

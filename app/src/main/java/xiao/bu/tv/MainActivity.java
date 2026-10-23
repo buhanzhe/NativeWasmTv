@@ -142,7 +142,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if(tvUiChrome==null||TvUiPlugin.current()==null||channelName==null)return;
         Bundle b=new Bundle();b.putString("title",channelName.getText().toString());b.putString("number",channelNumberView().getText().toString());
         b.putString("status",statusText.getText().toString());b.putString("epg",channelEpg.getVisibility()==View.VISIBLE?channelEpg.getText().toString():"");
-        b.putString("info",videoInfo.getText().toString());Channel c=currentChannel();b.putString("line",c==null?"":"线路 "+(currentSourceIndex+1)+"/"+c.sourceCount());
+        b.putString("info",videoInfo.getText().toString());Channel c=currentChannel();b.putString("line",c==null?"":sourceLineDescription(c,currentSourceIndex));
         b.putString("dateTime",("ui4".equals(TvUiPlugin.current().id)?tvUiCardDateFormat:tvUiCardTimeFormat).format(new Date()).replace("星期","周"));tvUiChrome.updateCard(b);
     }
     private static final String TAG = "MainActivity";
@@ -1283,7 +1283,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         decodeMode = sanitizeDecodeMode(preferences.getString(DECODE_MODE, DECODE_MODE_AUTO));
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT && DECODE_MODE_AUTO.equals(decodeMode))
             channelDecodeHints = new ChannelDecodeHints(this); // Async disk warmup; never gates prepare.
-        hdrMode = HdrMode.sanitize(preferences.getString(HDR_MODE, HdrMode.DEFAULT));
+        String savedHdrMode=preferences.getString(HDR_MODE,HdrMode.DEFAULT);
+        hdrMode = HdrMode.sanitize(savedHdrMode);
+        if(!hdrMode.equals(savedHdrMode))preferences.edit().putString(HDR_MODE,hdrMode).apply();
         hardwareDecoder = sanitizeHardwareDecoder(preferences.getString(
                 HARDWARE_DECODER, detectedDefaultDecoder));
         surfaceMode = sanitizeSurfaceMode(preferences.getString(
@@ -2304,6 +2306,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             public Bundle state(){
                 Bundle b=new Bundle();Channel channel=currentChannel();b.putInt("sources",channel==null?0:channel.sourceCount());b.putInt("source",currentSourceIndex);
+                String[] sourceNames=new String[channel==null?0:channel.sourceCount()];for(int i=0;i<sourceNames.length;i++)sourceNames[i]=channel.sourceDisplayName(i);b.putStringArray("sourceNames",sourceNames);
                 b.putString("decode",decodeMode);b.putString("ratio",videoScaleMode);b.putInt("timeout",autoSwitchSourceSeconds);
                 b.putBoolean("boot",autoStart);b.putBoolean("reverse",reverseUpDown);b.putBoolean("clock",showDateTime);
                 b.putBoolean("position",showPlaybackPosition);b.putBoolean("speed",showNetworkSpeed);b.putBoolean("debug",showDebugInfo);b.putBoolean("epg",epgEnabled);b.putString("version",BuildConfig.VERSION_NAME);if(autoUpdater!=null){JSONObject u=autoUpdater.stateJson();b.putString("updateState",u.optString("state"));b.putString("updateVersion",u.optString("versionName"));}return b;
@@ -2358,11 +2361,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         });
     }
     private void showTvUiHdrModes(){
-        final String[] modes={HdrMode.HARDWARE,HdrMode.MAPPING,HdrMode.HARDWARE_SDR,HdrMode.BT709};
+        final String[] modes={HdrMode.HARDWARE,HdrMode.MAPPING,HdrMode.BT709};
         Bundle b=new Bundle();b.putStringArray("categories",new String[]{"HDR 模式"});b.putBoolean("focusOptions",true);b.putBoolean("remoteInput",remoteInputMode);
         tvUiMenu.show(root,"menu",b,new xiao.bu.tv.skin.TvUi.Events(){
             public Bundle options(int category){
-                Bundle choices=new Bundle();choices.putStringArray("items",new String[]{"自动","转为 SDR","GPU 映射","BT.709"});
+                Bundle choices=new Bundle();choices.putStringArray("items",new String[]{"自动","转 SDR","强制 BT.709"});
                 int index=0;for(int i=0;i<modes.length;i++)if(modes[i].equals(hdrMode))index=i;
                 choices.putInt("selected",index);return choices;
             }
@@ -3073,7 +3076,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("h264SpsCompatibility", h264SpsCompatibility);
         }
         if (full || "playback".equals(view)) {
-            settings.put("videoScaleMode", videoScaleMode)
+            settings.put("videoBlurSupported", Build.VERSION.SDK_INT >= 24)
+                    .put("videoScaleMode", videoScaleMode)
                     .put("uiScaleMode", uiScaleMode)
                     .put("uiScaleFactor", Math.round(effectiveUiScale * 100f) / 100.0d)
                     .put("resolutionMode", resolutionMode)
@@ -3566,6 +3570,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 .put("screenshotAvailable", isVideoScreenshotAvailable())
                 .put("artworkKey", mediaArtworkKey())
                 .put("outputFps", Math.round(outputFps * 10f) / 10.0d)
+                .put("decodeFps", IjkStreamMetrics.decodeFrameRate(activePlayer))
+                .put("gpuTiming", Build.VERSION.SDK_INT>=17 ? NativeHdrOutput.performance() : new JSONObject().put("available",false))
                 .put("videoCachedDurationMs", videoCachedDurationMs)
                 .put("receiverDelayMs", receiverDelayMs)
                 .put("seekable", prepared && duration > 0L)
@@ -4734,7 +4740,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (request.has("hdrMode")) {
             String raw = request.optString("hdrMode", "");
             String requested = HdrMode.sanitize(raw);
-            if (!requested.equals(raw) && !HdrMode.PASSTHROUGH.equals(raw))
+            if (!requested.equals(raw) && !HdrMode.PASSTHROUGH.equals(raw) && !HdrMode.HARDWARE_SDR.equals(raw))
                 throw new JSONException("不支持的 HDR 模式");
             restartPlayback |= !requested.equals(hdrMode);
             hdrMode = requested;
@@ -4792,6 +4798,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (request.has("videoScaleMode")) {
             String rawMode = request.optString("videoScaleMode", VIDEO_SCALE_FIT);
             final String requestedMode = sanitizeVideoScaleMode(rawMode);
+            if ("blur".equals(requestedMode) && android.os.Build.VERSION.SDK_INT < 24)
+                throw new JSONException("背景模糊全屏需要 Android 7.0 或更高版本");
             if (!requestedMode.equals(rawMode)) {
                 throw new JSONException("不支持的视频画面模式");
             }
@@ -5087,7 +5095,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         .putString(EPG_URLS, epgUrlsJson(epgUrls).toString());
             }
             editor.apply();
-            refreshEpg();
+            rebuildEpgFromSettings();
         }
         if (request.has("flyMouseEnabled")) {
             flyMouseEnabled = request.optBoolean("flyMouseEnabled", false);
@@ -7032,7 +7040,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         startChannel(currentChannelIndex);
         showChannelBar(channel.name, (automatic ? reason + "，自动切换至" : "已切换至")
-                + "线路 " + (currentSourceIndex + 1) + "/" + count);
+                + sourceLineDescription(channel,currentSourceIndex));
         return true;
     }
 
@@ -9423,7 +9431,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private static String sanitizeVideoScaleMode(String mode) {
-        return VIDEO_SCALE_STRETCH.equals(mode)||VIDEO_SCALE_FILL.equals(mode)||"16:9".equals(mode)||"4:3".equals(mode) ? mode : VIDEO_SCALE_FIT;
+        return VIDEO_SCALE_STRETCH.equals(mode)||VIDEO_SCALE_FILL.equals(mode)||("blur".equals(mode)&&Build.VERSION.SDK_INT>=24)||"18:9".equals(mode)||"16:9".equals(mode)||"4:3".equals(mode) ? mode : VIDEO_SCALE_FIT;
     }
 
     private static String sanitizeUiScaleMode(String mode) {
@@ -10306,7 +10314,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         view.setLegacySurfaceMode(SURFACE_MODE_LEGACY.equals(surfaceMode));
         view.setStretchVideo(VIDEO_SCALE_STRETCH.equals(videoScaleMode));
         view.setFillVideo(VIDEO_SCALE_FILL.equals(videoScaleMode));
-        view.setAspectRatio("16:9".equals(videoScaleMode)?16f/9f:"4:3".equals(videoScaleMode)?4f/3f:0);
+        view.setBlurBackground("blur".equals(videoScaleMode));
+        view.setAspectRatio("18:9".equals(videoScaleMode)?2f:"16:9".equals(videoScaleMode)?16f/9f:"4:3".equals(videoScaleMode)?4f/3f:0);
     }
 
     private void applyClockLocation() {
@@ -12026,6 +12035,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         root.postDelayed(deferredEpgRefresh, 1500L);
     }
 
+    private void rebuildEpgFromSettings() {
+        if(epgManager==null)return;
+        if(root!=null)root.removeCallbacks(deferredEpgRefresh);
+        epgRefreshQueuedAt=0L;epgIdleSince=0L;
+        epgManager.rebuild(effectiveEpgUrls(),epgEnabled,()->runOnUiThread(()->{
+            if(!isFinishing()&&!startupMaintenanceDestroyed)refreshEpgViews();
+        }));
+        runOnUiThread(()->{
+            if(!isFinishing()&&!startupMaintenanceDestroyed)refreshEpgViews();
+        });
+    }
+
     private void refreshEpgNow() {
         if (epgManager == null || !epgEnabled) {
             return;
@@ -12453,9 +12474,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return value;
         }
         int count = Math.max(1, channel.sourceCount());
-        int source = (selectedSourceIndex % count + count) % count + 1;
-        return value.length() == 0 ? "线路 " + source + "/" + count
-                : value + " · 线路 " + source + "/" + count;
+        String line = sourceLineDescription(channel, selectedSourceIndex);
+        return value.length() == 0 ? line : value + " · " + line;
+    }
+
+    private static String sourceLineDescription(Channel channel, int index) {
+        int count = Math.max(1, channel.sourceCount());
+        String label = channel.sourceLabel(index);
+        return (label.length() == 0 ? "" : label + " · ") + "线路 "
+                + ((index % count + count) % count + 1) + "/" + count;
     }
 
     private static boolean hasSourceLinePosition(String value) {

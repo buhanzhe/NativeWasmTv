@@ -27,14 +27,16 @@
         <div class="browser-settings-list">
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>画面比例</b><span>自适应保留完整画面，填充等比铺满并居中裁剪，拉伸会改变比例</span>
+              <b>画面比例</b><span>自适应保留完整画面，裁剪等比铺满，背景模糊保持原始比例（Android 7.0+），拉伸会改变比例</span>
             </div>
             <select id="videoScale" aria-label="画面比例" onchange="saveDisplay()">
-              <option value="fit">自适应（默认）</option>
+              <option value="fit">原始比例（默认）</option>
               <option value="stretch">拉伸</option>
-              <option value="fill">填充（居中裁剪）</option>
+              <option value="18:9">18:9</option>
               <option value="16:9">16:9</option>
               <option value="4:3">4:3</option>
+              <option value="fill">裁剪</option>
+              <option value="blur">背景模糊</option>
             </select>
           </div>
           <div class="browser-setting-row">

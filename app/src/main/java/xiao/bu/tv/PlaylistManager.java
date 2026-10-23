@@ -101,7 +101,7 @@ final class PlaylistManager {
                         .put("name", "网页测试")
                         .put("url", BuildConfig.RECOMMENDED_TEST_SOURCE_URL))
                 .put(new JSONObject()
-                        .put("name", "网页电视台")
+                        .put("name", "网页电视大全")
                         .put("url", getRecommendedWebViewUrl()));
     }
 

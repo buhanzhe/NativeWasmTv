@@ -29,6 +29,7 @@ scripts/*
 !scripts/build-launcher-mark.py
 !scripts/build-tv-banner.py
 !scripts/build-video-frame.ps1
+!scripts/build-hdr-test.ps1
 /docs
 /tests/*
 !/tests/hls-cache-performance.test.py
@@ -42,6 +43,7 @@ scripts/*
 !/tests/hls-uri.test.py
 !/tests/sniffed-playback-gate.test.py
 !/tests/hls-probe-failure.test.py
+!/tests/hls-prefetch-transform.test.py
 !/tests/web-channel-identity.test.py
 !/tests/cast-delay-metrics.test.py
 !/tests/channel-startup-timing.test.py
@@ -128,4 +130,18 @@ tools/
 !/tests/debug-refresh.test.py
 !/tests/hdr-codec-fallback.test.py
 !/tests/display-hdr-status.test.py
+!/tests/hdr-algorithm.test.py
+!/tests/hdr-lut-program.test.py
+!/tests/hdr-lut-volume.test.py
+!/tests/fixtures/
+/tests/fixtures/*
+!/tests/fixtures/hdr-tonemap-reference.glsl
+!/tools/ijk/bench-hdr-algorithm.c
+!/tools/ijk/bench-hdr-lut.c
+!/tools/ijk/bench-hdr-cache.c
+!/tools/ijk/ntv_hdr_lut.h
+!/tools/ijk/prepare-hdr-bench.py
+!/tools/ijk/HdrAlgorithmBench.mk
 !/tests/background-completion.test.py
+!/tests/hls-long-playlist-url.test.py
+!/tests/hnyx-live-window.test.cjs

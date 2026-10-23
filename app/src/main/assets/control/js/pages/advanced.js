@@ -132,7 +132,7 @@ function renderPageState() {
   document.getElementById("reverse").checked = s.reverseKeys === true;
   document.getElementById("autoStart").checked = s.autoStart === true;
   document.getElementById("decoder").value = s.decodeMode || "auto";
-  document.getElementById("hdrMode").value = s.hdrMode === "passthrough" ? "hardware" : s.hdrMode || "hardware";
+  document.getElementById("hdrMode").value = s.hdrMode === "hardware_sdr" ? "mapping" : s.hdrMode === "passthrough" ? "hardware" : s.hdrMode || "hardware";
   document.getElementById("rtspTransport").value = s.rtspTransport || "tcp";
   document.getElementById("spsCompatibility").value = String(s.h264SpsCompatibility !== false);
   renderHardwareDecoders();

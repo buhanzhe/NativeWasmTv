@@ -149,6 +149,7 @@ final class HlsProxyServer implements Closeable {
     private volatile boolean readingStartupManifest;
     private final HlsStartupPlaylistCache startupPlaylists = new HlsStartupPlaylistCache();
     private final HlsStartupPlaylistCache resolvedPlaylists = new HlsStartupPlaylistCache();
+    private final HlsPlaylistAliases playlistAliases = new HlsPlaylistAliases();
     // One upcoming manifest for a dynamic live gateway. Media bodies are never
     // prefetched here; the player's next reload joins this same read-only GET.
     private final ExecutorService manifestAheadWorker = Executors.newSingleThreadExecutor();
@@ -209,7 +210,7 @@ final class HlsProxyServer implements Closeable {
             public String origin(String address)throws IOException {
                 String prefix="http://"+loopbackHost+":"+serverSocket.getLocalPort()+"/proxy/";
                 if(!address.startsWith(prefix))throw new IOException("Unrecognized rewritten HLS resource");
-                try{return new String(Base64.decode(address.substring(prefix.length()),Base64.URL_SAFE),UTF_8);}
+                try{return decodeProxyToken(address.substring(prefix.length()));}
                 catch(IllegalArgumentException error){throw new IOException(error);}
             }
         },url);} finally {readingStartupManifest=false;}
@@ -673,15 +674,35 @@ final class HlsProxyServer implements Closeable {
     String probeOriginUrl(String value) {
         String prefix="http://"+loopbackHost+":"+serverSocket.getLocalPort()+"/proxy/";
         if(!value.startsWith(prefix))return value;
-        String token=value.substring(prefix.length());
+        String token=stripProxyTokenSuffix(value.substring(prefix.length()));
         synchronized(recordingTokens) { if(!recordingTokens.containsKey(token))return value; }
-        try { return new String(Base64.decode(token,Base64.URL_SAFE),UTF_8); }
+        try { return decodeProxyToken(token); }
         catch(IllegalArgumentException invalid){return value;}
     }
 
     /** Android 4.0 selects its native HLS engine from the URL's m3u8 suffix. */
     String systemPlayerHlsUrl(String originUrl) {
-        return proxyUrl(originUrl) + ".m3u8";
+        String encoded = proxyUrl(originUrl) + ".m3u8";
+        if (encoded.length() < 1024) return encoded;
+        // IJK's ijklongurl wrapper opens the first manifest, but its HLS reload
+        // loses the real URL option and reaches EOF after the initial segments.
+        // Alias only the player entry; upstream URLs/signatures stay byte-exact.
+        String token = playlistAliases.token(originUrl);
+        synchronized (recordingTokens) { recordingTokens.put(token, Boolean.TRUE); }
+        return "http://" + loopbackHost + ":" + serverSocket.getLocalPort()
+                + "/proxy/" + token + ".m3u8";
+    }
+
+    private String decodeProxyToken(String token) {
+        token = stripProxyTokenSuffix(token);
+        if (token.startsWith("~")) return playlistAliases.resolve(token);
+        return new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
+    }
+
+    private static String stripProxyTokenSuffix(String token) {
+        if (token.endsWith(".m3u8")) return token.substring(0, token.length() - 5);
+        if (token.endsWith(".mp3")) return token.substring(0, token.length() - 4);
+        return token;
     }
 
     /** Keep the MP3 type visible to Android 4.0's native media service. */
@@ -730,13 +751,14 @@ final class HlsProxyServer implements Closeable {
             throws IOException {
         String requestedUrl = originUrl;
         if (token != null) {
+            token = stripProxyTokenSuffix(token);
             synchronized (recordingTokens) {
                 if (!recordingTokens.containsKey(token)) {
                     throw new IOException("录制资源令牌无效或已过期");
                 }
             }
             try {
-                requestedUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
+                requestedUrl = decodeProxyToken(token);
             } catch (IllegalArgumentException error) {
                 throw new IOException("录制资源令牌格式错误");
             }
@@ -904,7 +926,7 @@ final class HlsProxyServer implements Closeable {
             } else if (directMedia && token.endsWith(".mp3")) {
                 token = token.substring(0, token.length() - ".mp3".length());
             }
-            String originUrl = new String(Base64.decode(token, Base64.URL_SAFE), UTF_8);
+            String originUrl = decodeProxyToken(token);
             if (!running || playbackSuspended) throw new java.io.InterruptedIOException("Playback suspended");
             PlaybackReplayCache.Hit cached = replayCache.open(originUrl, rangeHeader);
             if (cached != null) {
@@ -1782,7 +1804,10 @@ final class HlsProxyServer implements Closeable {
                     @Override
                     public byte[] call() throws Exception {
                         AesSegmentKey key = aesSegmentKey(url);
-                        return key == null ? downloadRaw(url) : decryptAes128Segment(url, key);
+                        if (key != null) return decryptAes128Segment(url, key);
+                        // Cached segments are served directly to the decoder, so they
+                        // must be transformed just like a normal foreground fetch.
+                        return needsCjsTransform(url) ? transformCjsSegment(url) : downloadRaw(url);
                     }
                 });
                 genericSegmentTasks.put(url, task);
@@ -3797,6 +3822,7 @@ final class HlsProxyServer implements Closeable {
         synchronized (recordingTokens) {
             recordingTokens.clear();
         }
+        playlistAliases.clear();
         List<FutureTask<byte[]>> pendingGenericTasks;
         synchronized (genericSegmentTasks) {
             pendingGenericTasks =

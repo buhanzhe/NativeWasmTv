@@ -133,7 +133,7 @@ http://your-iptv-server/channel/index.m3u8
 
 双击项目根目录的 `build-release.bat`，即可调用 `scripts/build-release.ps1`，生成 ARM32、ARM64、x86 正式包并更新版本文件。打包结束后窗口会保留，方便查看成功信息或错误原因。
 
-默认输出为 `output/nTv.apk`（32 位）、`output/nTv64.apk`（64 位）和 `output/nTvX86.apk`（x86），同时复制生成 `网页电视32位.apk`、`网页电视64位.apk`、`网页电视x86.apk`；同架构两个文件内容完全一致。更新清单使用英文名 GitHub Release 附件，上传时保留大小写，兼容已发布客户端。需要先配置 Android SDK（`local.properties`）和正式签名（`.signing`），无需管理员权限。
+默认输出为 `output/nTv.apk`（32 位）、`output/nTv64.apk`（64 位）和 `output/nTvX86.apk`（x86），同时复制生成 `nTv-v7a-电视盒子专用-v<版本号>.apk`、`nTv-v8a-手机或高版本设备-v<版本号>.apk`、`nTv-x86-模拟器专用-v<版本号>.apk`（版本号从实际 APK 自动读取）；同架构两个文件内容完全一致。更新清单使用英文名 GitHub Release 附件，上传时保留大小写，兼容已发布客户端。需要先配置 Android SDK（`local.properties`）和正式签名（`.signing`），无需管理员权限。
 
 默认采用增量构建，避免 Windows 文件占用导致 `:app:clean` 失败；需要完整清理时可执行 `build-release.bat -Clean`。命令行也可继续传递 `-SkipClean` 等原脚本参数。
 

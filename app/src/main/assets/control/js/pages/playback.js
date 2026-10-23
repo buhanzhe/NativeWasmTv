@@ -249,7 +249,15 @@ function renderPageState() {
   var checked = ["showColorDebugInfo", "showLoadTiming", "showDebugInfo", "showNetworkSpeed", "showDateTime", "showPlaybackPosition"];
   for (var i = 0; i < checked.length; i++)
     document.getElementById(checked[i]).checked = s[checked[i]] === true;
-  document.getElementById("videoScale").value = s.videoScaleMode || "fit";
+  var scaleSelect = document.getElementById("videoScale");
+  var blurOption = scaleSelect.querySelector('option[value="blur"]');
+  if (s.videoBlurSupported !== true && blurOption) scaleSelect.removeChild(blurOption);
+  if (s.videoBlurSupported === true && !blurOption) {
+    blurOption = document.createElement("option");
+    blurOption.value = "blur"; blurOption.textContent = "背景模糊";
+    scaleSelect.appendChild(blurOption);
+  }
+  scaleSelect.value = s.videoScaleMode === "blur" && s.videoBlurSupported !== true ? "fit" : (s.videoScaleMode || "fit");
   document.getElementById("autoSwitchSourceSeconds").value = String(
     s.autoSwitchSourceSeconds == null ? (s.autoSwitchSource === true ? 5 : 0) : s.autoSwitchSourceSeconds);
   renderSiteQualities();

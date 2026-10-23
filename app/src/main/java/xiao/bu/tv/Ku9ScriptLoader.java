@@ -15,7 +15,6 @@ import java.util.regex.Pattern;
 /** Locates local scripts and maintains the short-lived online script cache. */
 final class Ku9ScriptLoader {
     private static final String TAG = "Ku9ScriptLoader";
-    private static final String SCRIPT_MARKER = "/ku9/js/";
     private static final String HNYX_SCRIPT = "hnyx.js";
     private static final String SCRIPT_DIRECTORY = "js";
     private static final int MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
@@ -109,10 +108,15 @@ final class Ku9ScriptLoader {
         }
         try {
             String path = URI.create(lower).getPath();
-            return path != null && path.contains(SCRIPT_MARKER);
+            return isScriptPath(path);
         } catch (RuntimeException error) {
-            return lower.contains(SCRIPT_MARKER);
+            return false;
         }
+    }
+
+    private static boolean isScriptPath(String path) {
+        if (path == null) return false;
+        return path.toLowerCase(Locale.US).endsWith(".js");
     }
 
     String load(String sourceUrl) throws IOException {
@@ -127,8 +131,7 @@ final class Ku9ScriptLoader {
             throw new IOException("酷9脚本地址格式错误", error);
         }
         String path = uri.getPath();
-        String lowerPath = path == null ? "" : path.toLowerCase(Locale.US);
-        if (!lowerPath.contains(SCRIPT_MARKER)) {
+        if (!isScriptPath(path)) {
             throw new IOException("不是有效的酷9脚本地址");
         }
         String fileName = path.substring(path.lastIndexOf('/') + 1);
@@ -138,7 +141,7 @@ final class Ku9ScriptLoader {
 
         String script;
         // Placeholder hosts (usually "A") use local scripts; real hosts load online
-        // scripts regardless of the path prefix before /ku9/js/.
+        // scripts regardless of their directory.
         String host = uri.getHost();
         boolean localPlaceholder = host != null && host.indexOf('.') < 0
                 && host.indexOf(':') < 0;

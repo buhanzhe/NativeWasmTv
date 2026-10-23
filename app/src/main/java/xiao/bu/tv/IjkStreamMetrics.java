@@ -31,6 +31,14 @@ final class IjkStreamMetrics {
         return value == 0L ? VideoStreamDescription.UNKNOWN : new VideoStreamDescription(value);
     }
 
+    static float decodeFrameRate(tv.danmaku.ijk.media.player.IMediaPlayer player) {
+        if(player instanceof IjkMediaPlayer)try{
+            float value=((IjkMediaPlayer)player).getVideoDecodeFramesPerSecond();
+            if(!Float.isNaN(value)&&!Float.isInfinite(value)&&value>=0)return value;
+        }catch(RuntimeException ignored){}
+        return 0f;
+    }
+
     static boolean sourceDescriptionAvailable(IjkMediaPlayer player) {
         // Zero means not parsed yet; -1 means this native build lacks the property.
         return longProperty(player, VIDEO_DESCRIPTION, -1L) >= 0L;

@@ -61,6 +61,8 @@ android {
         versionName '1.8.1'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',
                 project.findProperty('castLatencyTrace') == 'true' ? 'true' : 'false'
+        buildConfigField 'boolean', 'HDR_LUT_TEST_128',
+                project.findProperty('hdrLutTest128') == 'true' ? 'true' : 'false'
         testInstrumentationRunner project.hasProperty('testRunner')
                 ? project.property('testRunner').toString() : 'xiao.bu.tv.DolbyPlaybackInstrumentation'
     }

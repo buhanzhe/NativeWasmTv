@@ -11,13 +11,13 @@ final class HdrMode {
 
     static String sanitize(String value) {
         // The former passthrough selection uses the same output policy as auto.
-        return MAPPING.equals(value) || BT709.equals(value) || HARDWARE_SDR.equals(value)
+        if(HARDWARE_SDR.equals(value))return MAPPING;
+        return MAPPING.equals(value) || BT709.equals(value)
                 ? value : DEFAULT;
     }
 
     static int nativeValue(String value) {
-        // Automatic hardware mode shares the capability-gated HDR route.
-        // Explicit hardware_sdr keeps the GPU bridge on every display.
-        return MAPPING.equals(value) ? 0 : BT709.equals(value) ? 2 : PASSTHROUGH.equals(value) || HARDWARE.equals(value) ? 1 : 3;
+        String mode=sanitize(value);
+        return MAPPING.equals(mode)?0:BT709.equals(mode)?2:1;
     }
 }

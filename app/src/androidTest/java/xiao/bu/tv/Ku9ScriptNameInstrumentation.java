@@ -15,6 +15,13 @@ public final class Ku9ScriptNameInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            check(Ku9ScriptLoader.isSource("https://tvt.hrtj.ccwu.cc/js/ku9.js?id=https://m.gdtv.cn/tvChannelDetail/43"), "Short JS path rejected");
+            check(Ku9ScriptLoader.isSource("https://example.com/custom.JS?id=43"), "Root JS path rejected");
+            check(Ku9ScriptLoader.isSource("http://A/ku9/js/local.js?id=43"), "Local placeholder rejected");
+            check(Ku9ScriptLoader.isSource("https://example.com/k-web/ku9/js/test.js?id=43"), "Legacy path rejected");
+            check(!Ku9ScriptLoader.isSource("https://example.com/live?id=https://example.com/ku9/js/test.js"), "Query mistaken for script path");
+            check(!Ku9ScriptLoader.isSource("https://example.com/video.m3u8"), "Video mistaken for JS");
+            check(!Ku9ScriptLoader.isSource("file:///js/ku9.js"), "Non-HTTP URL accepted");
             check(Ku9ScriptLoader.isSafeScriptName("江苏综艺.js"), "Chinese name rejected");
             check(Ku9ScriptLoader.isSafeScriptName("湖北教育-高清_2.js"),
                     "mixed Unicode name rejected");

@@ -108,6 +108,31 @@ final class EpgManager {
         StoredGuide(Guide g,String r,long v){guide=g;resolved=r;validated=v;}
     }
     private final Object databaseLock=new Object();
+    // One disk writer prevents superseded downloads from repopulating a rebuild.
+    private final java.util.concurrent.Executor cacheWorker = new java.util.concurrent.ThreadPoolExecutor(
+            0,1,30L,java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<Runnable>(), runnable -> {
+                Thread thread=new Thread(runnable,"epg-cache-worker");thread.setDaemon(true);return thread;
+            });
+
+    private void clearPersistentCache() throws IOException {
+        synchronized(databaseLock){
+            android.database.sqlite.SQLiteDatabase db=database.getWritableDatabase();
+            db.beginTransaction();
+            try{
+                for(String table:new String[]{"aliases","logos","programmes","sources"})db.delete(table,null,null);
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
+            if(!context.getSharedPreferences(CACHE_PREFS,Context.MODE_PRIVATE).edit().clear().commit())
+                throw new IOException("节目单缓存信息清理失败");
+            File[] files=context.getFilesDir().listFiles();
+            if(files!=null)for(File file:files){
+                String name=file.getName();
+                if((CACHE_FILE.equals(name)||name.startsWith("epg-guide-cache-")&&name.endsWith(".xml"))
+                        && file.isFile()&&!file.delete())throw new IOException("节目单 XML 缓存清理失败");
+            }
+        }
+    }
     private StoredGuide readDatabase(String source){
         synchronized(databaseLock){
             try{
@@ -183,6 +208,8 @@ final class EpgManager {
     private volatile Guide guide = new Guide();
     private volatile boolean loading;
     private volatile int refreshGeneration;
+    private volatile HttpURLConnection activeDownload;
+    private int workerGeneration;
     private volatile String lastError = "";
     private volatile String loadedUrl = "";
     private String attemptedSource;
@@ -283,7 +310,7 @@ final class EpgManager {
         final List<String> sources=sanitizeSources(sourceUrls);
         final int generation;
         synchronized(this){if(restoringCache||!guide.programsByChannel.isEmpty())return;restoringCache=true;generation=refreshGeneration;}
-        new Thread(()->{
+        cacheWorker.execute(()->{
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             boolean restored=false;
             try{
@@ -299,7 +326,7 @@ final class EpgManager {
                 }
             }finally{synchronized(EpgManager.this){restoringCache=false;}}
             if(restored)notifyListener(listener);
-        },"epg-cache-restore").start();
+        });
     }
 
     void refresh(final String sourceUrl, final Listener listener) {
@@ -307,13 +334,22 @@ final class EpgManager {
     }
 
     void refresh(final String[] sourceUrls, final Listener listener) {
-        final List<String> sources = sanitizeSources(sourceUrls);
+        refresh(sourceUrls,false,true,listener);
+    }
+
+    void rebuild(final String[] sourceUrls, boolean fetch, final Listener listener) {
+        refresh(sourceUrls,true,fetch,listener);
+    }
+
+    private void refresh(final String[] sourceUrls, final boolean force, boolean fetch, final Listener listener) {
+        final List<String> sources = fetch ? sanitizeSources(sourceUrls) : Collections.<String>emptyList();
         final String sourceSignature = joinSources(sources);
         final int requestId;
+        final HttpURLConnection supersededDownload;
         synchronized (this) {
             long day = dayStart(System.currentTimeMillis());
             long now=android.os.SystemClock.elapsedRealtime();
-            if (sourceSignature.equals(attemptedSource) && attemptedDay == day
+            if (!force && sourceSignature.equals(attemptedSource) && attemptedDay == day
                     && (loading || lastError.length()==0 || !guide.programsByChannel.isEmpty()
                             || now-attemptedAt<300000L)) return;
             attemptedSource = sourceSignature;
@@ -322,12 +358,19 @@ final class EpgManager {
             requestId = ++refreshGeneration;
             loading = true;
             lastError = "";
+            if(force){guide=new Guide();loadedUrl="";}
+            supersededDownload=force?activeDownload:null;
         }
-        new Thread(new Runnable() {
+        if(supersededDownload!=null)supersededDownload.disconnect();
+        cacheWorker.execute(new Runnable() {
             @Override
             public void run() {
                 android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
                 try {
+                    if(requestId!=refreshGeneration)return;
+                    workerGeneration=requestId;
+                    if(force)clearPersistentCache();
+                    if(sources.isEmpty())return;
                     Map<String,StoredGuide> restoredSources=new HashMap<String,StoredGuide>();
                     // Restore disk data before waiting for a stale source's network
                     // validation. Cold starts and theme changes must not blank EPG.
@@ -367,7 +410,7 @@ final class EpgManager {
                         if (requestId != refreshGeneration) return;
                         String source = sources.get(index);
                         try {
-                            LoadedGuide loaded = loadGuide(source, cacheSlot(source, index), restoredSources.containsKey(source)?restoredSources.get(source):readCachedGuide(source,index));
+                            LoadedGuide loaded = loadGuide(source, cacheSlot(source, index), restoredSources.containsKey(source)?restoredSources.get(source):readCachedGuide(source,index),force);
                             mergeGuide(merged, loaded.guide);
                             loadedSources.add(loaded.sourceUrl);
                             // Expose the first usable cold-load source before a
@@ -410,16 +453,16 @@ final class EpgManager {
                     }
                     Log.w(TAG, "Unable to refresh EPG", error);
                 } finally {
-                    if (requestId == refreshGeneration) {
-                        loading = false;
+                    synchronized(EpgManager.this){
+                        if(requestId==refreshGeneration)loading=false;
                     }
                     notifyListener(listener);
                 }
             }
-        }, "epg-refresh").start();
+        });
     }
 
-    private LoadedGuide loadGuide(String sourceUrl, CacheSlot slot,StoredGuide stored) throws Exception {
+    private LoadedGuide loadGuide(String sourceUrl, CacheSlot slot,StoredGuide stored,boolean force) throws Exception {
         SharedPreferences preferences = context.getSharedPreferences(CACHE_PREFS,
                 Context.MODE_PRIVATE);
         boolean cacheMatches = sourceUrl.equals(preferences.getString(slot.sourceKey, ""));
@@ -445,11 +488,11 @@ final class EpgManager {
         try {
             Download downloaded;
             try {
-                downloaded = download(sourceUrl, previous, slot.file);
+                downloaded = download(sourceUrl, previous, slot.file,force);
             } catch (Exception primaryError) {
                 if (!DEFAULT_URL.equals(sourceUrl)) throw primaryError;
                 Log.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
-                downloaded = download(FALLBACK_URL, previous, slot.file);
+                downloaded = download(FALLBACK_URL, previous, slot.file,force);
             }
             if (downloaded.notModified) {
                 refreshCacheValidation(slot, downloaded.metadata, downloaded.url);
@@ -677,13 +720,13 @@ final class EpgManager {
         }
     }
 
-    private static Download download(String sourceUrl, RemoteFileMetadata previous,
-            File cachedFile) throws IOException {
+    private Download download(String sourceUrl, RemoteFileMetadata previous,
+            File cachedFile, boolean force) throws IOException {
         if (sourceUrl == null || sourceUrl.trim().length() == 0) {
             throw new IOException("未配置节目单地址");
         }
         URL current = checkedHttpUrl(new URL(sourceUrl.trim()));
-        boolean reusableCache = previous != null && previous.matchesLocal(cachedFile);
+        boolean reusableCache = !force && previous != null && previous.matchesLocal(cachedFile);
         for (int redirects = 0; redirects <= 5; redirects++) {
             // Apply the shared accelerator to GitHub EPGs and release redirects.
             // Keep the logical source URL for cache identity and relative icons.
@@ -695,6 +738,11 @@ final class EpgManager {
                         previous, true);
             }
             HttpURLConnection connection = NetworkClient.open(requestUrl);
+            synchronized(this){
+                if(workerGeneration!=refreshGeneration){connection.disconnect();throw new IOException("节目单刷新已被新的保存替代");}
+                activeDownload=connection;
+            }
+            if(force){connection.setUseCaches(false);connection.setRequestProperty("Cache-Control","no-cache");connection.setRequestProperty("Pragma","no-cache");}
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(25000);
             // Android 7 does not reliably follow an HTTP -> HTTPS redirect. Handle
@@ -743,6 +791,7 @@ final class EpgManager {
                 return new Download(body, resolved, response, false);
             } finally {
                 connection.disconnect();
+                if(activeDownload==connection)activeDownload=null;
             }
         }
         throw new IOException("节目单重定向次数过多");

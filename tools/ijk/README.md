@@ -228,6 +228,48 @@ The source overlays target the existing `.codex-tmp/ijkplayer-0.8.8` checkout, i
 
 The IJK overlays are LGPL-2.1-or-later, like their host sources. Keep these source changes alongside the redistributed native libraries.
 
+## Hardware HDR lookup acceleration
+
+The hardware SurfaceTexture bridge caches one 64³ RGBA8 colour table for the
+current transfer/peak. Its LUT-only shader is separate from formula fallback.
+On GPUs supporting 3D texture sampling, the CPU rearranges the generated 2D
+atlas once and `NativeHdrOutput.uploadLut3d(ByteBuffer)` uploads that cube through
+the optional JNI entry in `ntv_hdr_jni.h` / `ntv_hdr_lut.h`. Steady-state frames
+use one hardware trilinear sample. The generation atlas is then released; the
+retained colour texture is 1 MiB. There is no per-frame CPU conversion or reuse
+of the previous picture. Unsupported extensions, missing older native methods,
+upload/allocation errors or 3D shader rejection retain the 2D lookup; formula
+fallback remains available if that lookup also fails.
+
+This change requires rebuilding/copying `libijksdl.so` for each ABI using the
+native steps above; Gradle does not rebuild the JNI upload helper. R8's existing
+public `NativeHdrOutput` keep rule preserves its registered method name. It
+does not alter the software decoding renderer.
+
+For isolated mapping benchmarks, extract the actual Java shader constants with
+`python tools/ijk/prepare-hdr-bench.py`. Build `HdrAlgorithmBench.mk` with NDK
+r17c, `APP_ABI=armeabi-v7a APP_PLATFORM=android-19 APP_STL=system
+NDK_TOOLCHAIN_VERSION=4.9 APP_OPTIM=release`, and task-specific `NDK_OUT` /
+`NDK_LIBS_OUT` paths. Push `ntv-hdr-lut-bench` and the extracted shader directory
+to `/data/local/tmp`, chmod the executable, then run:
+
+```text
+lut-bench SHADER_DIRECTORY 3840 2160 7 4 3d
+lut-bench SHADER_DIRECTORY 1920 1080 7 8 3d
+```
+
+Run tests serially on each GPU. The optional `3d` argument compares the previous
+2D-only kernel with native 3D lookup; without it, the benchmark compares the old
+combined reference/LUT shader with the 2D-only shader. AB/BA paired batches use
+`glFinish`, exclude table generation and readback, and report milliseconds per
+draw rather than decoder or playback FPS. Colour probes compare the candidate
+against both the old lookup and full formula; GPU filter rounding can differ
+by up to two 8-bit codes in the validated samples. Host checks include
+`tests/hdr-algorithm.test.py`, `tests/hdr-lut-volume.test.py` and
+`tests/hdr-lut-program.test.py`. `HdrVolumeInstrumentation` additionally validates
+the production release JNI upload and buffer bounds on an EGL pbuffer, without
+launching an Activity or decoder.
+
 ## Interactive cast latency
 
 Realtime RTSP PCM uses the first audio output's monotonic clock to correct slow
@@ -563,3 +605,58 @@ checks are in `tests/adaptive-probe.test.c`; overlay rerun checks are in
 `tests/adaptive-probe.test.cjs`. TLS streaming checks in
 `tests/hls-stream-failure.test.py` verify first-body-byte delivery, short-read
 flushing, exact ranges, bounded retry and encrypted-media path separation.
+
+PQ LUT generation projects the six off-axis corners of each neutral cell onto
+bounded RGB control sums `2*A+D` and `A+2*D`. Its grey diagonal then follows the
+straight interpolation of the two reference endpoints rather than dipping in
+highlights. Only 378 of the 262144 nodes can change, once per transfer/peak
+change. The 2D/3D sampling shaders, texture dimensions and retained 1 MiB cache
+are unchanged. Near-white chroma remains an interpolation approximation; this
+does not establish full perceptual equivalence to the reference formula.
+
+`tests/hdr-algorithm.test.py` covers 1024 grey levels at PQ mastering peaks
+100/400/1000/4000/10000 nits, colour bounds and the 2D fallback. For actual
+production playback, `tools/regression/hdr-playback-colour.py` supports
+`NTV_COLOUR_OUTPUT`, `NTV_COLOUR_CASES=pq:mapping` and
+`NTV_COLOUR_PATCH_SET=near-neutral`. The latter adds 48 near-white colour probes.
+The isolated LUT benchmark accepts `fix` after rounds/frames and expects a
+frozen `lookup-before.glsl` next to extracted current shaders. It compares
+separate original/corrected textures with alternating timing order; decoding,
+LUT generation and upload are excluded from these GPU kernel measurements.
+
+`ntv-hdr-cache-bench SHADER_DIRECTORY 3840 2160 12 6` compares 64/96/128/192
+cubed RGBA8 tables (1/3.375/8/27 MiB). It keeps one trilinear sample per pixel,
+rotates variant order, and compares PQ/HLG output with the full shader formula.
+It also checks 64 generated nodes, 24 grey levels and 48 near-neutral probes.
+Generation-node errors are reported separately: the large 192-cubed atlas
+showed legacy Adreno 306 generation errors and must not be treated as a valid
+precision upgrade on that path. These experiments do not change production's
+64-cubed cache or establish actual playback FPS for the larger tables.
+
+The production 3D lookup uses `c*0.984375+0.0078125`; all three texture wrap
+axes must remain `CLAMP_TO_EDGE`. Its half-texel coordinate clamp is equivalent
+to clamping RGB before `(c*63+.5)/64`, including finite out-of-range RGB.
+Coordinates and sampler stay highp. The separate 2D fallback still clamps RGB
+explicitly because atlas tile boundaries are not texture edges.
+
+For addressing experiments, add `address 64` (or `address 128`) to
+`ntv-hdr-cache-bench`. It compares original, folded constants, hardware clamping
+and three transposed cube layouts, with 65536 colours plus boundary probes.
+`ntv-hdr-lut-bench ... address` compares the frozen original shader against the
+current shader using identical corrected tables; put `lookup-before.glsl` in
+its shader directory. It rejects output differences above one code value.
+
+`ntv-hdr-cache-bench ... precision 64` compares sampler/result/coordinate
+precision against the current highp kernel. It reports rejected experiments
+instead of applying the normal two-code differential gate. No consistent
+throughput benefit was established on Adreno 306/540 or Mali-G52.
+
+`ntv-hdr-cache-bench ... center` evaluates a different sampling grid: interior
+nodes are evaluated at hardware texel centres, endpoints stay anchored to
+0/1, and the pixel shader samples directly at RGB without scale/bias. It
+compares the production 64-cubed grid with centered 64/96/128-cubed candidates.
+These are colour approximations, not algebraically identical shaders. The
+centered 64-cubed variant increased worst-case HLG error and is not adopted.
+Centered 128-cubed improved isolated Adreno 306 timing and aggregate accuracy,
+but costs 8 MiB and slowed Adreno 540. It remains an experiment, without
+production integration or actual video playback validation for that profile.
