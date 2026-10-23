@@ -1,9 +1,9 @@
 {
     "versionCode": 6,
     "versionName": "1.8.1",
-    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.8.1/nTv.apk",
-    "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.8.1/nTv.apk",
-    "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/download/v1.8.1/nTv64.apk",
+    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+    "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+    "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
     "sha256": "bbfe7f95974628e15590b01070171cefc8b5388f66dec6a01c843e60e1081141",
     "sha25632": "bbfe7f95974628e15590b01070171cefc8b5388f66dec6a01c843e60e1081141",
     "sha25664": "9989f5ce55be0793e522d3ba22efe8c219f97fd2158c947818424b8af3f8624b",
