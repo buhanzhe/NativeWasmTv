@@ -34,6 +34,7 @@ module.exports = function applyHdr(root) {
     copy('ntv_hdr_codec.h','ijkmedia/ijkplayer/ntv_hdr_codec.h');
     copy('ntv_hdr_jni.h','ijkmedia/ijksdl/android/ntv_hdr_jni.h');
     copy('ntv_hdr_render.h','ijkmedia/ijksdl/gles2/ntv_hdr_render.h');
+    copy('ntv_hdr_lut.h','ijkmedia/ijksdl/gles2/ntv_hdr_lut.h');
     edit('ijkmedia/ijkplayer/ff_ffplay_def.h','    int mediacodec_hevc;',
         '    int ntv_hdr_mode; /* 0: mapping, 1: hardware HDR, 2: BT.709 override, 3: hardware SDR */\n    int mediacodec_hevc;');
     edit('ijkmedia/ijkplayer/ff_ffplay_def.h','    ffp->mediacodec_hevc                = 0;',

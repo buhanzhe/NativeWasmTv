@@ -105,7 +105,9 @@ static void ntv_deinterlace_destroy(NtvDeinterlace *s)
 
 static int ntv_deinterlace_pool(NtvDeinterlace *s)
 {
-    if(s->threads) return 0;
+    /* SD can initialise a single-thread path before an adaptive switch to HD.
+     * A created mutex also marks an attempted pool, even if no worker started. */
+    if(s->threads>1 || s->mutex) return 0;
     s->threads=1;
     if(s->cur->height<576) return 0;
     int wanted=FFMIN(4,av_cpu_count());
@@ -128,7 +130,8 @@ static int ntv_deinterlace_pool(NtvDeinterlace *s)
 
 static int ntv_deinterlace_render(NtvDeinterlace *s, int second, int last)
 {
-    av_frame_free(&s->out); s->out=av_frame_alloc();
+    if(s->out) av_frame_unref(s->out);
+    else s->out=av_frame_alloc();
     if(!s->out) return AVERROR(ENOMEM);
     s->out->format=s->cur->format; s->out->width=s->cur->width; s->out->height=s->cur->height;
     int ret=av_frame_get_buffer(s->out,32); if(ret<0) return ret;
@@ -159,16 +162,37 @@ static int ntv_deinterlace_normalise(AVFrame **value)
     av_frame_free(value); *value=out; return 0;
 }
 
+/* Resolve cadence and discontinuity together so pixel history and output
+ * timestamps always use the same decision. */
+static double ntv_deinterlace_timing(NtvDeinterlace *s, AVRational tb, AVRational rate,
+        int *gap)
+{
+    double seconds=av_q2d(tb);
+    double duration=rate.num>0 && rate.den>0 ? av_q2d(av_inv_q(rate)) : .04;
+    int known=0;
+    /* A field-coded packet may describe half a decoded picture. Prefer the
+     * preceding PTS pair, then confirm the initial cadence with the next PTS. */
+    double packet=s->cur->pkt_duration*seconds;
+    if(packet>0 && packet<1) duration=packet;
+    if(s->prev->pts!=AV_NOPTS_VALUE && s->cur->pts!=AV_NOPTS_VALUE) {
+        double step=((double)s->cur->pts-(double)s->prev->pts)*seconds;
+        if(step>0 && step<1) { known=1; duration=step; }
+    }
+    *gap=0;
+    if(s->cur->pts!=AV_NOPTS_VALUE && s->next->pts!=AV_NOPTS_VALUE) {
+        double step=((double)s->next->pts-(double)s->cur->pts)*seconds;
+        /* SPS frame_rate may count fields until the first PTS pair arrives. */
+        *gap=step<=0 || step>duration*(known?1.5:2.5);
+        if(step>0 && step<1 && !*gap) duration=step;
+    }
+    return duration;
+}
+
 static int ntv_deinterlace_emit(FFPlayer *ffp, NtvDeinterlace *s, AVRational tb,
-        AVRational rate, int last)
+        double duration, int last)
 {
     VideoState *is=ffp->is;
     double pts=s->cur->pts==AV_NOPTS_VALUE ? NAN : s->cur->pts*av_q2d(tb);
-    double duration=rate.num && rate.den ? av_q2d((AVRational){rate.den,rate.num}) : 0.04;
-    if(s->cur->pts!=AV_NOPTS_VALUE && s->next->pts!=AV_NOPTS_VALUE) {
-        double step=(s->next->pts-s->cur->pts)*av_q2d(tb);
-        if(step>0 && step<1) duration=step;
-    }
     __atomic_store_n(&ffp->ntv_video_description,
             ntv_describe_video(is->video_st,is->viddec.avctx,s->cur)|NTV_DESCRIPTION_FRAME
             |(s->cur->interlaced_frame ? 1U<<30 : 0),__ATOMIC_RELAXED);
@@ -208,8 +232,19 @@ static int ntv_deinterlace_push(FFPlayer *ffp, NtvDeinterlace *s, AVFrame *frame
         av_frame_unref(frame); return 1;
     }
     s->next=av_frame_clone(frame); if(!s->next) return AVERROR(ENOMEM);
-    int ret=ntv_deinterlace_emit(ffp,s,tb,rate,0); if(ret<0) return ret;
-    av_frame_free(&s->prev); s->prev=s->cur; s->cur=s->next; s->next=NULL;
+    int gap;
+    double duration=ntv_deinterlace_timing(s,tb,rate,&gap);
+    /* Never interpolate temporal pixels across a discontinuity. Drain the
+     * delayed picture spatially, then start fresh at the new source timestamp. */
+    if(gap) s->first_field=1;
+    int ret=ntv_deinterlace_emit(ffp,s,tb,duration,gap); if(ret<0) return ret;
+    av_frame_free(&s->prev);
+    if(gap) av_frame_free(&s->cur);
+    s->prev=s->cur; s->cur=s->next; s->next=NULL;
+    if(gap) {
+        s->prev=av_frame_clone(s->cur);if(!s->prev)return AVERROR(ENOMEM);
+        s->first_field=1;
+    }
     av_frame_unref(frame); return 1;
 }
 
@@ -220,7 +255,9 @@ static int ntv_deinterlace_flush(FFPlayer *ffp, NtvDeinterlace *s, AVRational tb
     s->next=av_frame_clone(s->cur); if(!s->next) return AVERROR(ENOMEM);
     if(s->prev->pts!=AV_NOPTS_VALUE && s->cur->pts!=AV_NOPTS_VALUE)
         s->next->pts=s->cur->pts+(s->cur->pts-s->prev->pts);
-    int ret=ntv_deinterlace_emit(ffp,s,tb,rate,1);
+    int gap;
+    double duration=ntv_deinterlace_timing(s,tb,rate,&gap);
+    int ret=ntv_deinterlace_emit(ffp,s,tb,duration,1);
     ntv_deinterlace_clear(s); return ret;
 }
 #endif

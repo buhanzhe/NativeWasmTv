@@ -1,109 +1,105 @@
-/* Full-screen player controls; the still preview never runs as a video stream. */
-body.media-page-shell { background: #202529; color: #fff; }
-.media-backdrop-frame { position: absolute; top: 0; left: 0; overflow: hidden; }
-.media-backdrop-frame[hidden] { display: none; }
-.media-backdrop-image { position: absolute; max-width: none; }
-.media-backdrop-shade { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: linear-gradient(180deg,rgba(13,17,21,.4),rgba(13,17,21,.08) 30%,rgba(23,28,32,.85) 67%,#202529); }
-#mediaControllerPage { position: relative; width: 100%; max-width: none; padding: 8px 20px 18px; padding-bottom: max(18px,env(safe-area-inset-bottom)); }
-#mediaControllerPage .page-title { color: #fff; font-weight: 650; }
-#mediaControllerPage .online { color: #eee; background: transparent; }
-#mediaControllerPage .back-button { padding-left: 0; }
-#mediaControllerBody { min-height: 0; }
-#mediaControllerBody .media-player-card { position: relative; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
-#mediaControllerBody .media-scene { position: relative; flex: 1; display: flex; align-items: flex-end; justify-content: space-between; min-height: 36px; padding-bottom: 18px; }
-#mediaControllerBody .media-live-badge { margin-left: 60px; color: #fff; padding: 6px 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: rgba(0,0,0,.25); font-size: 12px; }
-#mediaControllerBody .media-live-badge::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #ff375f; margin-right: 7px; }
-#mediaControllerBody .media-circle-action { width: 40px; height: 40px; min-height: 40px; color: white; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.15); }
-#mediaControllerBody #mediaScreenshot .media-icon { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-#mediaControllerBody .media-now { flex: 0 0 auto; padding-bottom: 10px; }
-#mediaControllerBody .media-now b { color: white; font-size: 26px; line-height: 1.3; }
-#mediaControllerBody .media-now span { display: none; }
-#mediaControllerBody .media-now small { color: #c1c5c9; font-size: 13px; margin-top: 7px; }
-#mediaControllerBody .media-progress { margin: 8px 0 0; }
-#mediaControllerBody .media-time { margin-top: 0; padding: 0 8px; color: #c1c5c9; font-size: 11px; }
-#mediaControllerBody .media-transport { display: flex; justify-content: space-around; align-items: center; width: 100%; max-width: 360px; margin: 20px auto 14px; }
-#mediaControllerBody .media-transport button { color: white; background: transparent; }
-#mediaControllerBody .media-transport button span { color: #d0d3d6; font-size: 11px; }
-#mediaControllerBody .media-transport .media-play-button { background: white; color: #111; width: 64px; height: 64px; min-height: 64px; box-shadow: none; }
-#mediaControllerPage .media-toolbar { flex: 0 0 60px; display: flex; justify-content: space-between; align-items: center; }
-#mediaControllerPage .media-toolbar button { min-width: 44px; min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; border: 0; border-radius: 0; color: white; background: transparent; box-shadow: none; }
-#mediaControllerPage .media-toolbar button[hidden] { display: none; }
-#mediaControllerPage .media-toolbar .media-icon { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-#mediaControllerPage .media-toolbar span { margin-top: 7px; font-size: 11px; color: #d0d3d6; }
-#mediaControllerPage .media-favorite.selected { color: #ff375f; }
-#mediaControllerPage .media-favorite.selected path { fill: currentColor; }
-.media-page-shell .media-sniffed-sheet { height: 50vh; height: 50dvh; max-height: 50vh; display: flex; flex-direction: column; }
-.media-page-shell .media-sniffed-sheet .media-sheet-header { flex-shrink: 0; }
-.media-page-shell .media-sniffed-sheet .media-sniffed-list { overflow-y: auto; min-height: 0; flex: 1; -webkit-overflow-scrolling: touch; }
-.media-shot-sheet img { display: block; max-width: 100%; max-height: 48vh; margin: auto; object-fit: contain; }
-.media-shot-sheet a { display: block; text-align: center; padding: 12px; color: #007aff; }
-.media-shot-sheet a[hidden], .media-shot-sheet p[hidden] { display: none; }
-.media-shot-sheet p { text-align: center; padding: 12px; color: #6c7278; }
-@media (max-height: 560px) {
-  #mediaControllerBody .media-scene { padding-bottom: 8px; }
-  #mediaControllerBody .media-now b { font-size: 22px; }
-  #mediaControllerBody .media-transport { margin: 8px auto; }
-  #mediaControllerPage { padding-bottom: 8px; }
+body.media-page-shell{background:#202529;color:#fff}
+.media-backdrop-frame{position:absolute;top:0;left:0;overflow:hidden}
+.media-backdrop-frame[hidden]{display:none}
+.media-backdrop-image{position:absolute;max-width:none}
+.media-backdrop-shade{position:absolute;top:0;right:0;bottom:0;left:0;background:linear-gradient(180deg,rgba(13,17,21,.4),rgba(13,17,21,.08) 30%,rgba(23,28,32,.85) 67%,#202529)}
+#mediaControllerPage{position:relative;width:100%;max-width:none;padding:8px 20px 18px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+#mediaControllerPage .page-title{color:#fff;font-weight:650}
+#mediaControllerPage .online{color:#eee;background:transparent}
+#mediaControllerPage .back-button{padding-left:0}
+#mediaControllerBody{min-height:0}
+#mediaControllerBody .media-player-card{position:relative;display:-webkit-box;display:flex;-webkit-box-orient:vertical;flex-direction:column;justify-content:flex-end;height:100%;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
+#mediaControllerBody .media-scene{position:relative;-webkit-box-flex:1;flex:1;display:-webkit-box;display:flex;align-items:flex-end;-webkit-box-pack:justify;justify-content:space-between;min-height:36px;padding-bottom:18px}
+#mediaControllerBody .media-live-badge{margin-left:0;color:#fff;padding:6px 10px;border:1px solid rgba(255,255,255,.12);border-radius:20px;background:rgba(0,0,0,.25);font-size:12px}
+#mediaControllerBody .media-live-badge::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff375f;margin-right:7px}
+#mediaControllerBody .media-circle-action{width:40px;height:40px;min-height:40px;color:white;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15)}
+#mediaControllerBody #mediaScreenshot .media-icon{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#mediaControllerBody .media-now{flex:0 0 auto;padding-bottom:10px}
+#mediaControllerBody .media-now b{color:white;font-size:26px;line-height:1.3}
+#mediaControllerBody .media-now span{display:none}
+#mediaControllerBody .media-now small{color:#c1c5c9;font-size:13px;margin-top:7px}
+#mediaControllerBody .media-progress{margin:8px 0 0}
+#mediaControllerBody .media-time{margin-top:0;padding:0 8px;color:#c1c5c9;font-size:11px}
+#mediaControllerBody .media-transport{display:-webkit-box;display:flex;justify-content:space-around;-webkit-box-align:center;align-items:center;width:100%;max-width:360px;margin:20px auto 14px}
+#mediaControllerBody .media-transport button{color:white;background:transparent}
+#mediaControllerBody .media-transport button span{color:#d0d3d6;font-size:11px}
+#mediaControllerBody .media-transport .media-play-button{background:white;color:#111;width:64px;height:64px;min-height:64px;box-shadow:none}
+#mediaControllerPage .media-toolbar{flex:0 0 60px;display:-webkit-box;display:flex;-webkit-box-pack:justify;justify-content:space-between;-webkit-box-align:center;align-items:center}
+#mediaControllerPage .media-toolbar button{min-width:44px;min-height:54px;display:-webkit-box;display:flex;-webkit-box-orient:vertical;flex-direction:column;-webkit-box-align:center;align-items:center;-webkit-box-pack:center;justify-content:center;padding:4px;border:0;border-radius:0;color:white;background:transparent;box-shadow:none}
+#mediaControllerPage .media-toolbar button[hidden]{display:none}
+#mediaControllerPage .media-toolbar .media-icon{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#mediaControllerPage .media-toolbar span{margin-top:7px;font-size:11px;color:#d0d3d6}
+#mediaControllerPage .media-favorite.selected{color:#ff375f}
+#mediaControllerPage .media-favorite.selected path{fill:currentColor}
+.media-page-shell .media-sniffed-sheet{height:50vh;height:50dvh;max-height:50vh;display:-webkit-box;display:flex;-webkit-box-orient:vertical;flex-direction:column}
+body.media-page-shell #mediaSniffedBackdrop .media-sniffed-sheet{top:auto;bottom:12px;bottom:calc(12px + env(safe-area-inset-bottom))}
+.media-page-shell .media-sniffed-sheet .media-sheet-header{flex-shrink:0}
+.media-page-shell .media-sniffed-sheet .media-sniffed-list{overflow-y:auto;min-height:0;-webkit-box-flex:1;flex:1;-webkit-overflow-scrolling:touch}
+.media-shot-sheet img{display:block;max-width:100%;max-height:48vh;margin:auto;object-fit:contain}
+.media-shot-sheet a{display:block;text-align:center;padding:12px;color:#007aff}
+.media-shot-sheet a[hidden],.media-shot-sheet p[hidden]{display:none}
+.media-shot-sheet p{text-align:center;padding:12px;color:#6c7278}
+@media (max-height:560px){#mediaControllerBody .media-scene{padding-bottom:8px}
+#mediaControllerBody .media-now b{font-size:22px}
+#mediaControllerBody .media-transport{margin:8px auto}
+#mediaControllerPage{padding-bottom:8px}
 }
-@media (max-height: 420px) {
-  #mediaControllerBody .media-scene { min-height: 32px; padding-bottom: 2px; }
-  #mediaControllerBody .media-now { padding-bottom: 0; }
-  #mediaControllerBody .media-now small { display: none; }
-  #mediaControllerBody .media-transport .media-play-button { width: 44px; height: 44px; min-height: 44px; }
-  #mediaControllerPage .media-toolbar { flex-basis: 48px; }
+@media (max-height:420px){#mediaControllerBody .media-scene{min-height:32px;padding-bottom:2px}
+#mediaControllerBody .media-now{padding-bottom:0}
+#mediaControllerBody .media-now small{display:none}
+#mediaControllerBody .media-transport .media-play-button{width:44px;height:44px;min-height:44px}
+#mediaControllerPage .media-toolbar{flex-basis:48px}
 }
-
-.media-sniffed-item.selected { border-color:#0a84ff; }
-.media-sniffed-item.selected b { color:#0a84ff; }
-
-/* Draw the range ourselves: older Android renders a rectangular native thumb. */
-.media-seekbar { position: relative; height: 32px; }
-.media-seek-track { position: absolute; left: 8px; right: 8px; top: 14px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.24); }
-#mediaSeekFill { display: block; width: 0; height: 4px; border-radius: 2px; background: #0a84ff; }
-#mediaSeekKnob { position: absolute; top: -6px; left: 0; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
-#mediaControllerBody #mediaProgress { position: absolute; left: 0; top: 0; width: 100%; height: 32px; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
-.media-seekbar:focus-within #mediaSeekKnob { box-shadow: 0 0 0 4px rgba(10,132,255,.25); }
-.media-seekbar.unavailable #mediaSeekKnob, .media-seekbar.unavailable #mediaSeekFill { display: none; }
-#mediaControllerBody .media-scene-actions { display: flex; align-items: center; gap: 12px; }
-#mediaControllerBody .media-circle-action[hidden] { display: none; }
-
-.media-page-shell .channel-picker-sheet { color: #1d1d1f; }
-
-/* Rotate a native range for touch/keyboard support on older WebViews too. */
-#mediaControllerBody .media-volume-control { position: absolute; z-index: 6; top: 16px; right: 0; width: 48px; padding: 10px 0; display: flex; flex-direction: column; align-items: center; color: #fff; background: rgba(0,0,0,.38); border: 1px solid rgba(255,255,255,.18); border-radius: 24px; pointer-events: auto; }
-#mediaControllerBody .media-brightness-control { left: 0; right: auto; }
-.media-volume-control > span { font-size: 11px; line-height: 18px; font-variant-numeric: tabular-nums; }
-.media-volume-control > svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.media-volume-range { position: relative; width: 44px; height: 140px; margin: 6px 0; }
-.media-volume-track { position: absolute; top: 8px; bottom: 8px; left: 20px; width: 4px; border-radius: 2px; background: rgba(255,255,255,.28); pointer-events: none; }
-.media-level-fill { position: absolute; bottom: 0; width: 4px; border-radius: 2px; background: #0a84ff; }
-.media-level-knob { position: absolute; left: -6px; width: 16px; height: 16px; margin-bottom: -8px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
-#mediaControllerBody .media-level-input { position: absolute; top: 48px; left: -48px; width: 140px; height: 44px; min-height: 0; margin: 0; padding: 0; opacity: 0; transform: rotate(-90deg); -webkit-transform: rotate(-90deg); cursor: pointer; touch-action: none; }
-.media-volume-range:focus-within .media-level-knob { box-shadow: 0 0 0 4px rgba(10,132,255,.4); }
-.media-volume-control.unavailable { opacity: .45; }
-@media (max-height: 650px) {
-  #mediaControllerBody .media-volume-control { top: 0; padding: 6px 0; }
-  .media-volume-range { height: 84px; }
-  #mediaControllerBody .media-level-input { width: 84px; top: 20px; left: -20px; }
-  #mediaControllerBody .media-scene-actions { margin-right: 60px; }
-  #mediaControllerBody .media-now { padding-left: 60px; padding-right: 60px; }
+.media-sniffed-item.selected{border-color:#0a84ff}
+.media-sniffed-item.selected b{color:#0a84ff}
+.media-seekbar{position:relative;height:32px}
+.media-seek-track{position:absolute;left:8px;right:8px;top:14px;height:4px;border-radius:2px;background:rgba(255,255,255,.24)}
+#mediaSeekFill{display:block;width:0;height:4px;border-radius:2px;background:#0a84ff}
+#mediaSeekKnob{position:absolute;top:-6px;left:0;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+#mediaControllerBody #mediaProgress{position:absolute;left:0;top:0;width:100%;height:32px;margin:0;padding:0;opacity:0;cursor:pointer}
+.media-seekbar:focus-within #mediaSeekKnob{box-shadow:0 0 0 4px rgba(10,132,255,.25)}
+.media-seekbar.unavailable #mediaSeekKnob,.media-seekbar.unavailable #mediaSeekFill{display:none}
+.media-seekbar.live-buffer .media-seek-track{background:rgba(10,132,255,.35)}
+.media-live-buffer-actions{display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;-webkit-box-pack:justify;justify-content:space-between;gap:12px;margin-top:8px}
+.media-live-buffer-actions[hidden]{display:none}
+.media-live-buffer-actions small{color:#8e8e93;font-size:11px}
+.media-live-buffer-actions button{min-height:32px;padding:5px 10px;border:0;border-radius:9px;font-size:12px;color:#0a84ff;background:rgba(10,132,255,.1)}
+#mediaControllerBody .media-scene-actions{display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;gap:12px}
+#mediaControllerBody .media-circle-action[hidden]{display:none}
+.media-page-shell .channel-picker-sheet{color:#1d1d1f}
+#mediaControllerBody .media-volume-control{position:absolute;z-index:6;top:16px;right:0;width:48px;padding:10px 0;display:-webkit-box;display:flex;-webkit-box-orient:vertical;flex-direction:column;-webkit-box-align:center;align-items:center;color:#fff;background:rgba(0,0,0,.38);border:1px solid rgba(255,255,255,.18);border-radius:24px;pointer-events:auto}
+#mediaControllerBody .media-brightness-control{left:0;right:auto}
+.media-volume-control > span{font-size:11px;line-height:18px;font-variant-numeric:tabular-nums}
+.media-volume-control > svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.media-volume-range{position:relative;width:44px;height:140px;margin:6px 0}
+.media-volume-track{position:absolute;top:8px;bottom:8px;left:20px;width:4px;border-radius:2px;background:rgba(255,255,255,.28);pointer-events:none}
+.media-level-fill{position:absolute;bottom:0;width:4px;border-radius:2px;background:#0a84ff}
+.media-level-knob{position:absolute;left:-6px;width:16px;height:16px;margin-bottom:-8px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+#mediaControllerBody .media-level-input{position:absolute;top:48px;left:-48px;width:140px;height:44px;min-height:0;margin:0;padding:0;opacity:0;transform:rotate(-90deg);-webkit-transform:rotate(-90deg);cursor:pointer;touch-action:none}
+.media-volume-range:focus-within .media-level-knob{box-shadow:0 0 0 4px rgba(10,132,255,.4)}
+.media-volume-control.unavailable{opacity:.45}
+@media (max-height:650px){#mediaControllerBody .media-volume-control{top:0;padding:6px 0}
+.media-volume-range{height:84px}
+#mediaControllerBody .media-level-input{width:84px;top:20px;left:-20px}
+#mediaControllerBody .media-live-badge{margin-left:60px}
+#mediaControllerBody .media-scene-actions{margin-right:60px}
+#mediaControllerBody .media-now{padding-left:60px;padding-right:60px}
 }
-@media (max-height: 420px) {
-  #mediaControllerBody .media-player-card { padding-left: 60px; padding-right: 60px; }
-  #mediaControllerBody .media-scene-actions { margin-right: 0; }
-  #mediaControllerBody .media-now { padding-left: 0; padding-right: 0; }
+@media (max-height:420px){#mediaControllerBody .media-player-card{padding-left:60px;padding-right:60px}
+#mediaControllerBody .media-live-badge{margin-left:0}
+#mediaControllerBody .media-scene-actions{margin-right:0}
+#mediaControllerBody .media-now{padding-left:0;padding-right:0}
 }
-
-/* Album art stays within the flexible scene, leaving transport controls visible. */
-#mediaControllerBody .media-artwork { position: absolute; z-index: 0; left: 50%; top: calc(50% - 24px); transform: translate(-50%,-50%); max-width: 80%; max-height: calc(100% - 64px); width: auto; height: auto; border-radius: 12px; pointer-events: none; }
-#mediaControllerBody .media-artwork[hidden], #mediaProgressSection[hidden] { display: none; }
-
-/* Portrait controller: keep the established controls and use the upper area for the still preview. */
-@media (min-height: 651px) {
-  #mediaControllerBody .media-player-card { justify-content: flex-start; }
-  /* vh can include the mobile browser bars; reserve transport first and give
-     artwork only the remaining controller height, not a slice of the screen. */
-  #mediaControllerBody .media-scene { flex: 1 1 0; height: auto; min-height: 80px; }
-  #mediaControllerBody .media-now { position: absolute; z-index: 2; top: 0; left: 60px; right: 60px; padding: 0; }
-  #mediaControllerBody .media-transport { margin-top: auto; }
+#mediaControllerBody .media-artwork{position:absolute;z-index:0;left:50%;top:calc(50% - 24px);transform:translate(-50%,-50%);max-width:80%;max-height:calc(100% - 64px);width:auto;height:auto;border-radius:12px;pointer-events:none}
+#mediaControllerBody .media-artwork[hidden],#mediaProgressSection[hidden]{display:none}
+@media (min-height:651px){#mediaControllerBody .media-player-card{justify-content:flex-start}
+#mediaControllerBody .media-scene{flex:1 1 0;height:auto;min-height:80px}
+#mediaControllerBody .media-now{position:absolute;z-index:2;top:0;left:60px;right:60px;padding:0}
+#mediaControllerBody .media-transport{margin-top:auto}
 }
+body.media-page-shell #mediaControllerPage .back-button{position:relative;width:44px;min-width:44px;height:44px;min-height:44px;padding:0;border:0;background:transparent;color:#fff;box-shadow:none}
+body.media-page-shell #mediaControllerPage .back-button svg{position:absolute;left:10px;top:10px;width:20px;height:24px}
+#mediaControllerPage>.media-page-top{position:relative;min-height:44px;height:44px}
+#mediaControllerPage #mediaTitle{position:absolute;left:54px;right:54px;top:0;display:block;height:44px;margin:0;color:#fff;font-size:18px;font-weight:500;line-height:44px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+
+#mediaControllerBody .media-now{display:none}

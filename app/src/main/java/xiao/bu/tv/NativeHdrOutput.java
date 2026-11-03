@@ -17,6 +17,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.Process;
 import android.os.SystemClock;
 import android.util.Log;
 import android.view.Surface;
@@ -29,17 +30,19 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.lang.ref.WeakReference;
 
 /** API 17+ GPU tone mapping/BT.709 bridge. Hardware decoding and SurfaceView remain. */
 public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableListener {
     private static final String TAG = "nTvHdr";
     private static volatile Context context;
     private static volatile Display targetDisplay;
+    private static volatile WeakReference<DirectVideoView> outputView = new WeakReference<>(null);
     private static volatile NativeHdrOutput active;
     private static volatile String outputRoute = "";
     private static final LinkedHashMap<String,Boolean> rejectedMapping = new LinkedHashMap<>();
     private final CountDownLatch stopped = new CountDownLatch(1);
-    private final HandlerThread thread = new HandlerThread("nTv HDR output");
+    private final HandlerThread thread = new HandlerThread("nTv HDR output", Process.THREAD_PRIORITY_DISPLAY);
     private Handler handler;
     private final Surface target;
     private final int width, height, transfer;
@@ -56,21 +59,38 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
     private EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
     private EGLSurface window = EGL14.EGL_NO_SURFACE;
     private int program, textureId, position, texcoord, transform;
-    private int renderWidth, renderHeight;
+    private int referenceProgram, lutProgram, sdrProgram, sdrTransfer;
+    private HdrSdrCurve sdrCurve;
+    private boolean sdrCurveFailed, sdrProgramUsesCurve;
+    private volatile boolean sdrCurveActive, sdrCurveFloating;
+    private String glVersion = "", glRenderer = "";
+    private volatile boolean lutProgramVolume;
+    private String toneReference;
+    private HdrToneMapLut toneLut;
+    private boolean lutFailed;
+    private volatile boolean lutActive;
+    private volatile int renderWidth, renderHeight;
+    private int swapInterval = 1;
     private final float[] matrix = new float[16];
     private final int[] windowSize = new int[1];
+    private boolean drawStateDirty=true, viewportDirty=true;
+    private long nextWindowCheck;
     private final FloatBuffer vertices = ByteBuffer.allocateDirect(16 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer();
     private long lastTextureTimestamp, rateStart, rateFrames;
     private volatile long renderedFrames, lastRenderedAt;
     private volatile float renderedRate;
+    private long timingLatch, timingSubmit, timingSwap, timingCount, timingStart;
+    private volatile double latchMs, submitMs, swapMs;
     private volatile String decoderColor = "";
+    private volatile int[] decoderGeometry = new int[0];
 
     static void initialize(Context value, View output) {
         context = value.getApplicationContext();
         // Bind the display that owns this SurfaceView, including external displays.
         // Called on the UI thread; native configure can query the saved Display later.
         targetDisplay = output == null ? null : output.getDisplay();
+        outputView = new WeakReference<>(output instanceof DirectVideoView ? (DirectVideoView) output : null);
     }
 
     private static int[] supportedHdrTypes() {
@@ -233,6 +253,10 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
 
     public Surface getSurface() { return input; }
 
+    /** Optional native GL extension entry point; called only while building a LUT. */
+    public static native boolean uploadLut3d(ByteBuffer pixels);
+    public static native boolean uploadLut3d128(ByteBuffer pixels);
+
     public static void prepareSoftwareOutput() {
         NativeHdrOutput previous=active;
         if (previous == null) return;
@@ -254,6 +278,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
 
     public void outputFormat(MediaFormat format) {
         Log.i(TAG,"HDR decoder output " + format);
+        updateOutputGeometry(format);
         int reportedTransfer = integer(format,"color-transfer",0);
         int reportedStandard = integer(format,"color-standard",0);
         int outputStandard = knownStandard(reportedStandard) ? reportedStandard : configuredStandard;
@@ -278,11 +303,14 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         if (!closed) handler.post(() -> {
             if (closed || program == 0) return;
             GLES20.glUseProgram(program);
-            updateYuvColor(forceBt709?1:outputStandard,integer(format,"color-range",configuredRange));
             if (forceBt709) {
-                GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvBt709Source"),rawYuv?1:outputStandard);
+                updateYuvColor(1,integer(format,"color-range",configuredRange));
+                updateBt709Color(outputStandard);
                 return;
             }
+            refreshToneLut((outputTransfer == 1 || outputTransfer == 3) && outputStandard != 6
+                    ? 0 : outputTransfer, outputPeak);
+            updateYuvColor(outputStandard,integer(format,"color-range",configuredRange));
             GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvPeak"),outputPeak);
             if (outputTransfer == 6 || outputTransfer == 7) {
                 GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvTransfer"),outputTransfer);
@@ -298,6 +326,33 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         return value == 1 || value == 2 || value == 4 || value == 6;
     }
 
+    private void updateOutputGeometry(MediaFormat format) {
+        int w=integer(format,"width",0),h=integer(format,"height",0);
+        int left=integer(format,"crop-left",-1),top=integer(format,"crop-top",-1);
+        int right=integer(format,"crop-right",-1),bottom=integer(format,"crop-bottom",-1);
+        boolean valid=w>0&&h>0&&left>=0&&top>=0&&right>=left&&bottom>=top&&right<w&&bottom<h;
+        int cw=valid?right-left+1:0,ch=valid?bottom-top+1:0;
+        decoderGeometry=new int[]{w,h,cw,ch};
+        // Some codecs downsample their GPU output even though the coded size is
+        // 4K. Match that real input; rendering an enlarged copy wastes bandwidth.
+        // Require a substantial, proportional reduction, not ordinary edge crop.
+        boolean reduced=valid && (long)cw*4<= (long)w*3 && (long)ch*4<= (long)h*3
+                && Math.abs((double)cw*h/(ch*(double)w)-1)<0.02;
+        requestBufferSize(target,reduced?cw:0,reduced?ch:0,this);
+    }
+
+    private static void requestBufferSize(Surface surface,int width,int height,NativeHdrOutput expected) {
+        DirectVideoView view=outputView.get();
+        if(view==null)return;
+        view.post(()->{
+            if(view.getVideoSurface()!=surface)return;
+            NativeHdrOutput current=active;
+            if(expected!=null ? current!=expected||expected.closed
+                    : current!=null&&!current.closed&&current.target==surface)return;
+            view.setGpuBufferSize(width,height);
+        });
+    }
+
     static float renderedFrameRate() {
         NativeHdrOutput output = active;
         if (output == null || output.closed) return Float.NaN;
@@ -310,7 +365,24 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
 
     static String decoderColor() {
         NativeHdrOutput output = active;
-        return output == null || output.closed ? "" : output.decoderColor;
+        return output == null || output.closed ? "" : output.decoderColor
+                + (output.lutActive ? " mapping=LUT"+(BuildConfig.HDR_LUT_TEST_128?"128-center":"64")+(output.lutProgramVolume?"-3D":"-2D") : "");
+    }
+
+    static org.json.JSONObject performance() throws org.json.JSONException {
+        NativeHdrOutput v=active;
+        org.json.JSONObject result=new org.json.JSONObject().put("available",v!=null&&!v.closed);
+        if(v==null||v.closed)return result;
+        int[] geometry=v.decoderGeometry;
+        if(geometry.length==4)result.put("decoderWidth",geometry[0]).put("decoderHeight",geometry[1])
+                .put("decoderCropWidth",geometry[2]).put("decoderCropHeight",geometry[3]);
+        return result.put("latchMs",v.latchMs).put("submitMs",v.submitMs).put("swapMs",v.swapMs)
+                .put("lut",v.lutActive).put("lut3d",v.lutActive&&v.lutProgramVolume).put("frames",v.renderedFrames)
+                .put("inputWidth",v.width).put("inputHeight",v.height)
+                .put("outputWidth",v.renderWidth).put("outputHeight",v.renderHeight)
+                .put("swapInterval",v.swapInterval)
+                .put("sdrCurve",v.sdrCurveActive).put("sdrCurveFloat",v.sdrCurveFloating)
+                .put("glVersion",v.glVersion).put("glRenderer",v.glRenderer);
     }
 
     public static long renderedFrameCount() {
@@ -321,47 +393,41 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
         int[] version = new int[2];
         if (!EGL14.eglInitialize(display, version, 0, version, 1)) throw new IllegalStateException("eglInitialize");
-        EGLConfig[] configs = new EGLConfig[1]; int[] count = new int[1];
-        int[] attrs = {EGL14.EGL_RED_SIZE,8,EGL14.EGL_GREEN_SIZE,8,EGL14.EGL_BLUE_SIZE,8,
-                EGL14.EGL_RENDERABLE_TYPE,EGL14.EGL_OPENGL_ES2_BIT,
-                EGL14.EGL_SURFACE_TYPE,EGL14.EGL_WINDOW_BIT,EGL14.EGL_NONE};
-        if (!EGL14.eglChooseConfig(display, attrs, 0, configs, 0, 1, count, 0) || count[0] == 0)
-            throw new IllegalStateException("eglChooseConfig");
-        if(Build.VERSION.SDK_INT>=29){
-            eglContext=EGL14.eglCreateContext(display,configs[0],EGL14.EGL_NO_CONTEXT,
-                    new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION,3,EGL14.EGL_NONE},0);
-        }
-        if(eglContext==EGL14.EGL_NO_CONTEXT)eglContext = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
-                new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION,2,EGL14.EGL_NONE}, 0);
-        window = EGL14.eglCreateWindowSurface(display, configs[0], target, new int[]{EGL14.EGL_NONE}, 0);
+        EGLConfig config = createOutputContext();
+        window = EGL14.eglCreateWindowSurface(display, config, target, new int[]{EGL14.EGL_NONE}, 0);
         if (window == EGL14.EGL_NO_SURFACE || eglContext == EGL14.EGL_NO_CONTEXT
                 || !EGL14.eglMakeCurrent(display, window, window, eglContext))
             throw new IllegalStateException("HDR EGL window error " + EGL14.eglGetError());
-        EGL14.eglSwapInterval(display, 1);
+        configurePresentation(config);
         int[] size = new int[1];
         EGL14.eglQuerySurface(display, window, EGL14.EGL_WIDTH, size, 0); renderWidth = size[0];
         EGL14.eglQuerySurface(display, window, EGL14.EGL_HEIGHT, size, 0); renderHeight = size[0];
         String extensions=GLES20.glGetString(GLES20.GL_EXTENSIONS);
         String versionString=GLES20.glGetString(GLES20.GL_VERSION);
+        glVersion=versionString;glRenderer=GLES20.glGetString(GLES20.GL_RENDERER);
         rawYuv=HdrDisplayPolicy.rawYuv(Build.VERSION.SDK_INT,versionString,extensions);
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (InputStream source = context.getResources().openRawResource(R.raw.hdr_tonemap)) {
-            byte[] buffer = new byte[4096]; int n;
-            while ((n = source.read(buffer)) > 0) bytes.write(buffer, 0, n);
+        String tone = "";
+        if (!forceBt709) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            try (InputStream source = context.getResources().openRawResource(R.raw.hdr_tonemap)) {
+                byte[] buffer = new byte[4096]; int n;
+                while ((n = source.read(buffer)) > 0) bytes.write(buffer, 0, n);
+            }
+            tone=bytes.toString("UTF-8");
+            toneLut=new HdrToneMapLut(tone);
         }
-        String tone=bytes.toString("UTF-8");
-        try{program=buildProgram(tone,rawYuv);}catch(RuntimeException failure){
+        toneReference=tone;
+        try{referenceProgram=buildProgram(tone,rawYuv,false);}catch(RuntimeException failure){
             if(!rawYuv)throw failure;
             Log.w(TAG,"Raw YUV shader unavailable; use legacy RGB compatibility output",failure);
-            rawYuv=false;program=buildProgram(tone,false);
+            rawYuv=false;referenceProgram=buildProgram(tone,false,false);
         }
-        position = GLES20.glGetAttribLocation(program,"position"); texcoord = GLES20.glGetAttribLocation(program,"texcoord");
-        transform = GLES20.glGetUniformLocation(program,"transform"); GLES20.glUseProgram(program);
+        selectProgram(referenceProgram);
+        refreshToneLut(transfer,peak);
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvTransfer"), transfer);
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvBt709Source"),forceBt709 ? 1f : 0f);
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvPeak"), peak);
-        GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"video"), 0);
-        yuvMatrix=GLES20.glGetUniformLocation(program,"yuvMatrix");yuvOffset=GLES20.glGetUniformLocation(program,"yuvOffset");
+        if(forceBt709)updateBt709Color(1);
         updateYuvColor(forceBt709?1:configuredStandard,configuredRange);
         int[] textures = new int[1]; GLES20.glGenTextures(1, textures, 0); textureId = textures[0];
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId);
@@ -373,11 +439,58 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         texture.setOnFrameAvailableListener(this); input = new Surface(texture);
     }
 
-    private int buildProgram(String tone,boolean yuv){
+    private EGLConfig createOutputContext() {
+        EGLConfig[] configs=new EGLConfig[1];int[] count=new int[1];
+        boolean es3=Build.VERSION.SDK_INT>=18;
+        int[] attrs={EGL14.EGL_RED_SIZE,8,EGL14.EGL_GREEN_SIZE,8,EGL14.EGL_BLUE_SIZE,8,
+                EGL14.EGL_RENDERABLE_TYPE,EGL14.EGL_OPENGL_ES2_BIT | (es3 ? 0x40 : 0),
+                EGL14.EGL_SURFACE_TYPE,EGL14.EGL_WINDOW_BIT,EGL14.EGL_NONE};
+        // EGL_OPENGL_ES3_BIT_KHR is 0x40. Require both bits so a rejected
+        // ES3 context can safely fall back to ES2 using this same configuration.
+        boolean chosen=EGL14.eglChooseConfig(display,attrs,0,configs,0,1,count,0)&&count[0]>0;
+        if(!chosen&&es3){
+            es3=false;attrs[7]=EGL14.EGL_OPENGL_ES2_BIT;
+            chosen=EGL14.eglChooseConfig(display,attrs,0,configs,0,1,count,0)&&count[0]>0;
+        }
+        if(!chosen)throw new IllegalStateException("eglChooseConfig");
+        if(es3)eglContext=EGL14.eglCreateContext(display,configs[0],EGL14.EGL_NO_CONTEXT,
+                new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION,3,EGL14.EGL_NONE},0);
+        if(eglContext==EGL14.EGL_NO_CONTEXT)eglContext=EGL14.eglCreateContext(display,configs[0],EGL14.EGL_NO_CONTEXT,
+                new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION,2,EGL14.EGL_NONE},0);
+        return configs[0];
+    }
+
+    private void configurePresentation(EGLConfig config) {
+        // IJK releases these frames against its A/V clock already. Avoid adding
+        // another refresh-period wait after GPU conversion when EGL permits it.
+        int[] minimum = {1};
+        if (EGL14.eglGetConfigAttrib(display, config, EGL14.EGL_MIN_SWAP_INTERVAL, minimum, 0))
+            swapInterval = Math.max(0, minimum[0]);
+        if (!EGL14.eglSwapInterval(display, swapInterval)) {
+            swapInterval = 1;
+            EGL14.eglSwapInterval(display, swapInterval);
+        }
+    }
+
+    private int buildProgram(String tone,boolean yuv,boolean lookup){
+        if(forceBt709)tone=HdrDisplayPolicy.BT709_SHADER;
+        else if(lookup){
+            tone=toneLut.isVolume()
+                    ?BuildConfig.HDR_LUT_TEST_128?HdrToneMapLut.LOOKUP_3D_128:HdrToneMapLut.LOOKUP_3D
+                    :BuildConfig.HDR_LUT_TEST_128?HdrToneMapLut.LOOKUP_ONLY_128:HdrToneMapLut.LOOKUP_ONLY;
+            if(yuv)tone=tone.replace("texture2D(","texture(").replace("texture3D(","texture(");
+        }
+        else tone+="\nvec3 ntvFastToSdr(vec3 c){return ntvToSdr(c);}\n";
         String vertex=yuv?"#version 300 es\nin vec2 position;in vec2 texcoord;uniform mat4 transform;out vec2 uv;void main(){gl_Position=vec4(position,0.,1.);uv=(transform*vec4(texcoord,0.,1.)).xy;}":
                 "attribute vec2 position;attribute vec2 texcoord;uniform mat4 transform;varying vec2 uv;void main(){gl_Position=vec4(position,0.,1.);uv=(transform*vec4(texcoord,0.,1.)).xy;}";
-        String fragment=yuv?"#version 300 es\n#extension GL_EXT_YUV_target : require\nprecision highp float;uniform highp __samplerExternal2DY2YEXT video;uniform mat3 yuvMatrix;uniform vec3 yuvOffset;in vec2 uv;out vec4 pixel;\n"+tone+"\nvoid main(){pixel=vec4(ntvToSdr(yuvMatrix*(texture(video,uv).xyz-yuvOffset)),1.);}":
-                "#extension GL_OES_EGL_image_external : require\nprecision highp float;uniform samplerExternalOES video;varying vec2 uv;\n"+tone+"\nvoid main(){gl_FragColor=vec4(ntvToSdr(texture2D(video,uv).rgb),1.);}";
+        String fragment=yuv?"#version 300 es\n#extension GL_EXT_YUV_target : require\nprecision highp float;uniform highp __samplerExternal2DY2YEXT video;uniform mat3 yuvMatrix;uniform vec3 yuvOffset;in vec2 uv;out vec4 pixel;\n"+tone+"\nvoid main(){pixel=vec4(ntvFastToSdr(yuvMatrix*(texture(video,uv).xyz-yuvOffset)),1.);}":
+                "#extension GL_OES_EGL_image_external : require\n"
+                +(lookup&&toneLut.isVolume()?"#extension GL_OES_texture_3D : require\n":"")
+                +"precision highp float;uniform samplerExternalOES video;varying vec2 uv;\n"+tone+"\nvoid main(){gl_FragColor=vec4(ntvFastToSdr(texture2D(video,uv).rgb),1.);}";
+        return linkProgram(vertex,fragment);
+    }
+
+    static int linkProgram(String vertex,String fragment) {
         int vs=0,fs=0,id=0;
         try{
             vs=shader(GLES20.GL_VERTEX_SHADER,vertex);fs=shader(GLES20.GL_FRAGMENT_SHADER,fragment);
@@ -387,10 +500,122 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         }catch(RuntimeException error){if(id!=0)GLES20.glDeleteProgram(id);throw error;}
         finally{if(vs!=0)GLES20.glDeleteShader(vs);if(fs!=0)GLES20.glDeleteShader(fs);}
     }
+    private void refreshToneLut(float trc,float maximum) {
+        if(forceBt709)return;
+        boolean use = !forceBt709 && (trc == 6 || trc == 7) && !lutFailed;
+        if (use) try {
+            int lut = toneLut.update(trc,maximum);
+            if(lutProgram==0||lutProgramVolume!=toneLut.isVolume()){
+                int next;
+                try{next=buildProgram(toneReference,rawYuv,true);}
+                catch(RuntimeException error){
+                    if(!toneLut.isVolume())throw error;
+                    Log.w(TAG,"3D LUT shader unavailable; keep 2D lookup",error);
+                    toneLut.disableVolume();lut=toneLut.update(trc,maximum);
+                    next=buildProgram(toneReference,rawYuv,true);
+                }
+                if(lutProgram!=0)GLES20.glDeleteProgram(lutProgram);
+                lutProgram=next;lutProgramVolume=toneLut.isVolume();
+            }
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+            GLES20.glBindTexture(toneLut.target(),lut);
+        } catch (RuntimeException error) {
+            lutFailed=true;use=false;toneLut.release();
+            Log.w(TAG,"HDR LUT unavailable; retain reference tone mapping",error);
+        }
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        int selected = use ? lutProgram : referenceProgram;
+        if (trc == 1 || trc == 3) {
+            if (sdrProgram == 0 || sdrTransfer != (int) trc) {
+                try {
+                    int next;
+                    boolean curve = false;
+                    // Selecting another transfer can replace the curve texture.
+                    if (sdrProgramUsesCurve && sdrProgram != 0) {
+                        if (program == sdrProgram) selectProgram(referenceProgram);
+                        GLES20.glDeleteProgram(sdrProgram); sdrProgram = 0; sdrProgramUsesCurve = false;
+                    }
+                    try {
+                        if (!sdrCurveFailed) {
+                            if (sdrCurve == null) sdrCurve = new HdrSdrCurve();
+                            curve = sdrCurve.select(toneReference, (int) trc);
+                        }
+                        next = buildProgram(curve ? sdrCurve.programSource((int) trc, rawYuv)
+                                : HdrDisplayPolicy.sdrShader(toneReference, (int) trc), rawYuv, false);
+                    } catch (RuntimeException | OutOfMemoryError error) {
+                        curve = false;
+                        if (!sdrCurveFailed) Log.w(TAG,"SDR curve unavailable; retain specialized formula",error);
+                        sdrCurveFailed = true;
+                        if (sdrCurve != null) { sdrCurve.release(); sdrCurve = null; }
+                        for (int i=0; i<16 && GLES20.glGetError()!=GLES20.GL_NO_ERROR; i++) {}
+                        next = buildProgram(HdrDisplayPolicy.sdrShader(toneReference, (int) trc), rawYuv, false);
+                    }
+                    sdrProgramUsesCurve = curve;
+                    if (sdrProgram != 0) GLES20.glDeleteProgram(sdrProgram);
+                    sdrProgram = next; sdrTransfer = (int) trc;
+                } catch (RuntimeException | OutOfMemoryError error) {
+                    Log.w(TAG, "Specialized SDR shader unavailable; retain reference", error);
+                }
+            }
+            if (sdrProgram != 0 && sdrTransfer == (int) trc) {
+                if (sdrProgramUsesCurve) sdrCurve.bind();
+                selected = sdrProgram;
+            }
+        }
+        selectProgram(selected);
+        sdrCurveActive = selected == sdrProgram && sdrProgramUsesCurve;
+        sdrCurveFloating = sdrCurveActive && sdrCurve != null && sdrCurve.isFloating();
+        lutActive=use;
+        // LUT generation changes vertex pointers and viewport in this GL context.
+        drawStateDirty=true;viewportDirty=true;
+    }
+
+    private void selectProgram(int selected) {
+        program=selected;GLES20.glUseProgram(program);
+        position=GLES20.glGetAttribLocation(program,"position");
+        texcoord=GLES20.glGetAttribLocation(program,"texcoord");
+        transform=GLES20.glGetUniformLocation(program,"transform");
+        yuvMatrix=GLES20.glGetUniformLocation(program,"yuvMatrix");
+        yuvOffset=GLES20.glGetUniformLocation(program,"yuvOffset");
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"video"),0);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program,"ntvLut"),1);
+        drawStateDirty=true;
+    }
+
+    static void surfaceSizeChanged(Surface surface) {
+        NativeHdrOutput v=active;
+        if(v!=null&&!v.closed&&v.target==surface)v.handler.post(()->{
+            if(!v.closed)v.viewportDirty=true;
+        });
+    }
+
+    private void prepareDrawState(long now) {
+        // Surface callbacks invalidate immediately. The one-second query also
+        // covers vendor window changes that arrive without a holder callback.
+        if(viewportDirty||now>=nextWindowCheck){
+            if(EGL14.eglQuerySurface(display,window,EGL14.EGL_WIDTH,windowSize,0)&&windowSize[0]>0)renderWidth=windowSize[0];
+            if(EGL14.eglQuerySurface(display,window,EGL14.EGL_HEIGHT,windowSize,0)&&windowSize[0]>0)renderHeight=windowSize[0];
+            GLES20.glViewport(0,0,renderWidth,renderHeight);
+            viewportDirty=false;nextWindowCheck=now+1000000000L;
+        }
+        if(drawStateDirty){
+            GLES20.glUseProgram(program);
+            vertices.position(0);GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,16,vertices);
+            vertices.position(2);GLES20.glVertexAttribPointer(texcoord,2,GLES20.GL_FLOAT,false,16,vertices);
+            GLES20.glEnableVertexAttribArray(position);GLES20.glEnableVertexAttribArray(texcoord);
+            drawStateDirty=false;
+        }
+    }
+
     private void updateYuvColor(int standard,int range){
         if(!rawYuv)return;
         float[] color=HdrDisplayPolicy.yuvColor(standard,range,sourceDepth);
         GLES20.glUniformMatrix3fv(yuvMatrix,1,false,color,0);GLES20.glUniform3fv(yuvOffset,1,color,9);
+    }
+
+    private void updateBt709Color(int standard) {
+        GLES20.glUniformMatrix3fv(GLES20.glGetUniformLocation(program,"ntvBt709Matrix"),
+                1,false,HdrDisplayPolicy.bt709Reinterpretation(standard,rawYuv),0);
     }
 
     private static int shader(int kind, String text) {
@@ -407,19 +632,25 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         if (closed) return;
         // Created on this HandlerThread; SurfaceTexture delivers callbacks on its Looper.
         try {
+            long timingBegin=System.nanoTime();
             texture.updateTexImage();
+            long latched=System.nanoTime();
             long timestamp=texture.getTimestamp();
             if (timestamp == lastTextureTimestamp && renderedFrames > 0) return;
             lastTextureTimestamp=timestamp; texture.getTransformMatrix(matrix);
-            EGL14.eglQuerySurface(display,window,EGL14.EGL_WIDTH,windowSize,0); renderWidth=windowSize[0];
-            EGL14.eglQuerySurface(display,window,EGL14.EGL_HEIGHT,windowSize,0); renderHeight=windowSize[0];
-            GLES20.glViewport(0,0,renderWidth,renderHeight); GLES20.glUseProgram(program);
+            prepareDrawState(latched);
             GLES20.glUniformMatrix4fv(transform,1,false,matrix,0);
-            vertices.position(0); GLES20.glVertexAttribPointer(position,2,GLES20.GL_FLOAT,false,16,vertices);
-            vertices.position(2); GLES20.glVertexAttribPointer(texcoord,2,GLES20.GL_FLOAT,false,16,vertices);
-            GLES20.glEnableVertexAttribArray(position); GLES20.glEnableVertexAttribArray(texcoord);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4);
+            long submitted=System.nanoTime();
             if (!EGL14.eglSwapBuffers(display,window)) throw new IllegalStateException("HDR swap failed");
+            long swapped=System.nanoTime();
+            timingLatch+=latched-timingBegin;timingSubmit+=submitted-latched;timingSwap+=swapped-submitted;timingCount++;
+            if(timingStart==0)timingStart=swapped;
+            if(swapped-timingStart>=1000000000L){
+                double divisor=timingCount*1000000.0;
+                latchMs=timingLatch/divisor;submitMs=timingSubmit/divisor;swapMs=timingSwap/divisor;
+                timingLatch=timingSubmit=timingSwap=timingCount=0;timingStart=swapped;
+            }
             long now=SystemClock.elapsedRealtime();
             renderedFrames++; lastRenderedAt=now;
             if (rateStart == 0) {rateStart=now;rateFrames=renderedFrames;}
@@ -434,6 +665,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
 
     public void release() {
         if (closed) return; closed = true;
+        requestBufferSize(target,0,0,null);
         Runnable close = () -> {
             try { destroyGl(); }
             finally { stopped.countDown(); thread.quit(); if (active==this) active=null; }
@@ -447,7 +679,11 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         if (input != null) { input.release(); input = null; }
         if (texture != null) { texture.release(); texture = null; }
         if (display != EGL14.EGL_NO_DISPLAY) {
-            if (program != 0) GLES20.glDeleteProgram(program);
+            if (toneLut != null) {toneLut.release();toneLut=null;}
+            if (sdrCurve != null) {sdrCurve.release();sdrCurve=null;}
+            if (referenceProgram != 0) GLES20.glDeleteProgram(referenceProgram);
+            if (lutProgram != 0) GLES20.glDeleteProgram(lutProgram);
+            if (sdrProgram != 0) GLES20.glDeleteProgram(sdrProgram);
             if (textureId != 0) GLES20.glDeleteTextures(1,new int[]{textureId},0);
             EGL14.eglMakeCurrent(display,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_SURFACE,EGL14.EGL_NO_CONTEXT);
             if (window != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display,window);
@@ -455,7 +691,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
             EGL14.eglTerminate(display); EGL14.eglReleaseThread();
         }
         display = EGL14.EGL_NO_DISPLAY; window = EGL14.EGL_NO_SURFACE; eglContext = EGL14.EGL_NO_CONTEXT;
-        program = textureId = 0;
+        program = referenceProgram = lutProgram = sdrProgram = textureId = 0;
     }
 
 }

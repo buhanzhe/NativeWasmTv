@@ -3,12 +3,13 @@ param(
     [string]$OutputDirectory,
     [string]$JavaHome,
     [string]$ReleaseNotes = '修复问题并提升播放体验。',
-    [switch]$ImportantUpdate,
+    [switch]$ImportantUpdate, # Compatibility only; all manifests are always generated.
     [switch]$Clean,
     [switch]$SkipClean,
     [string]$NdkRoot,
     [switch]$RebuildQuickJs,
-    [switch]$RebuildTls
+    [switch]$RebuildTls,
+    [switch]$DisableH5eStreaming # Compatibility: release APKs no longer bundle H5E streaming.
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,6 +156,7 @@ $apksigner = Find-BuildTool $sdkDirectory 'apksigner.bat'
 $aapt = Find-BuildTool $sdkDirectory 'aapt.exe'
 
 $gradleTasks = @()
+# Whole-segment CJS decryption remains available; omit the optional streaming SO.
 if ($RebuildQuickJs -or $NdkRoot) {
     if (!$NdkRoot) { $NdkRoot = $env:ANDROID_NDK_HOME }
     & (Join-Path $PSScriptRoot 'build-quickjs.ps1') -NdkRoot $NdkRoot
@@ -175,7 +177,7 @@ foreach ($abi in @('armeabi-v7a','x86')) {
 }
 if ($Clean -and -not $SkipClean) { $gradleTasks += 'clean' }
 $gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release',
-    ':app:assembleX86Release', '--no-daemon')
+    ':app:assembleX86Release', ':app:assembleNtvBroRelease', '--no-daemon')
 
 Push-Location $repoRoot
 try {
@@ -188,23 +190,30 @@ try {
 
 $artifacts = @(
     [pscustomobject]@{
+        Name = 'ntv_bro.apk'
+        Flavor = 'ntvBro'
+        CopyAs = 'nTv-bro-v7a-电视盒子专用-含轻量内核-v{0}.apk'
+        Source = Join-Path $repoRoot 'app\build\outputs\apk\ntvBro\release\app-ntvBro-release.apk'
+        ExpectedAbi = 'armeabi-v7a'
+    },
+    [pscustomobject]@{
         Name = 'nTv.apk'
         Flavor = 'arm32'
-        CopyAs = '网页电视32位.apk'
+        CopyAs = 'nTv-v7a-电视盒子专用-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm32\release\app-arm32-release.apk'
         ExpectedAbi = 'armeabi-v7a'
     },
     [pscustomobject]@{
         Name = 'nTv64.apk'
         Flavor = 'arm64'
-        CopyAs = '网页电视64位.apk'
+        CopyAs = 'nTv-v8a-手机或高版本设备-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\arm64\release\app-arm64-release.apk'
         ExpectedAbi = 'arm64-v8a'
     },
     [pscustomobject]@{
         Name = 'nTvX86.apk'
         Flavor = 'x86'
-        CopyAs = '网页电视x86.apk'
+        CopyAs = 'nTv-x86-模拟器专用-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\x86\release\app-x86-release.apk'
         ExpectedAbi = 'x86'
     }
@@ -223,14 +232,25 @@ $results = foreach ($artifact in $artifacts) {
     # Validate an ABI entry point that must retain its name even in an obfuscated APK.
     $archive = [System.IO.Compression.ZipFile]::OpenRead($artifact.Source)
     try {
+        if ($null -ne $archive.GetEntry("lib/$($artifact.ExpectedAbi)/libh5estream.so")) {
+            throw "Release APK unexpectedly bundles H5E streaming: $($artifact.Source)"
+        }
+        $liteLibrary = $archive.GetEntry("lib/$($artifact.ExpectedAbi)/libntvLitebro.so")
+        $hasLiteAssets = $null -ne $archive.GetEntry('assets/browser.js')
+        if ($artifact.Flavor -eq 'ntvBro') {
+            if ($null -eq $liteLibrary -or -not $hasLiteAssets) { throw "Browser edition is missing its lightweight core: $($artifact.Source)" }
+        } elseif ($null -ne $liteLibrary -or $hasLiteAssets) {
+            throw "Standard APK unexpectedly bundles the lightweight core: $($artifact.Source)"
+        }
         $nativeBridge = $false
         foreach ($entry in $archive.Entries) {
             if ($entry.FullName -notmatch '^classes\d*\.dex$') { continue }
             $reader = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::ASCII)
             try { $dex = $reader.ReadToEnd() } finally { $reader.Dispose() }
-            if ($dex.Contains('Lxiao/bu/tv/NativeQuickJs;')) { $nativeBridge = $true; break }
+            if ($dex.Contains('Lxiao/bu/tv/NativeQuickJs;')) { $nativeBridge = $true }
         }
         if (-not $nativeBridge) { throw "Release APK is missing its JNI bridge: $($artifact.Source)" }
+
     } finally { $archive.Dispose() }
     $destination = Join-Path $OutputDirectory $artifact.Name
     Copy-Item -LiteralPath $artifact.Source -Destination $destination -Force
@@ -260,7 +280,18 @@ $results = foreach ($artifact in $artifacts) {
     $mappingDestination = Join-Path $mappingDirectory 'mapping.txt'
     Copy-Item -LiteralPath $mappingSource -Destination $mappingDestination -Force
     $file = Get-Item -LiteralPath $destination
-    $aliasPath = Join-Path $OutputDirectory $artifact.CopyAs
+    if ($badging -notmatch "versionName='([^']+)'") {
+        throw "APK versionName is missing: $destination"
+    }
+    $apkVersionName = $Matches[1]
+    if ($badging -notmatch "versionCode='([0-9]+)'") {
+        throw "APK versionCode is missing: $destination"
+    }
+    $apkVersionCode = [int]$Matches[1]
+    if ($apkVersionName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+        throw "APK versionName contains invalid filename characters: $apkVersionName"
+    }
+    $aliasPath = Join-Path $OutputDirectory ($artifact.CopyAs -f $apkVersionName)
     Copy-Item -LiteralPath $destination -Destination $aliasPath -Force
     [pscustomobject]@{
         APK = $artifact.Name
@@ -268,7 +299,11 @@ $results = foreach ($artifact in $artifacts) {
         ABI = $architectures[0]
         SizeMB = [math]::Round($file.Length / 1MB, 2)
         SHA256 = $hash
+        VersionName = $apkVersionName
+        VersionCode = $apkVersionCode
         Obfuscation = 'R8 enabled'
+        H5eStreaming = $false
+        LightweightBrowser = $artifact.Flavor -eq 'ntvBro'
         Mapping = $mappingDestination
         Metadata = $badging
         Path = $file.FullName
@@ -276,11 +311,12 @@ $results = foreach ($artifact in $artifacts) {
     }
 }
 
-$arm32Result = $results | Where-Object { $_.ABI -eq 'armeabi-v7a' } | Select-Object -First 1
+$arm32Result = $results | Where-Object { $_.Flavor -eq 'arm32' } | Select-Object -First 1
 $arm64Result = $results | Where-Object { $_.ABI -eq 'arm64-v8a' } | Select-Object -First 1
+$broResult = $results | Where-Object { $_.Flavor -eq 'ntvBro' } | Select-Object -First 1
 $x86Result = $results | Where-Object { $_.ABI -eq 'x86' } | Select-Object -First 1
-if (-not $arm32Result -or -not $arm64Result -or -not $x86Result) {
-    throw 'ARM32, ARM64 and x86 artifacts are required to generate update metadata.'
+if (-not $arm32Result -or -not $arm64Result -or -not $x86Result -or -not $broResult) {
+    throw 'ARM32, ARM64, x86 and ARM32 browser artifacts are required to generate update metadata.'
 }
 
 # Package only this build's mappings; retain the hash archives across releases.
@@ -326,12 +362,10 @@ $manifestTasks = @(
     "-PupdateApk32=$($arm32Result.Path)",
     "-PupdateApk64=$($arm64Result.Path)",
     "-PupdateApkX86=$($x86Result.Path)",
+    "-PupdateApkBro=$($broResult.Path)",
     "-PreleaseNotes=$ReleaseNotes",
     '--no-daemon'
 )
-if ($ImportantUpdate) {
-    $manifestTasks += '-PimportantUpdate=true'
-}
 Push-Location $repoRoot
 try {
     & (Join-Path $repoRoot 'gradlew.bat') @manifestTasks
@@ -345,28 +379,34 @@ try {
 $liteVersionPath = Join-Path $repoRoot 'version-lite.json'
 $versionPath = Join-Path $repoRoot 'version.json'
 $legacyVersionPath = Join-Path $repoRoot 'version-iptv.json'
-$version = Get-Content -LiteralPath $liteVersionPath -Raw | ConvertFrom-Json
-if ($version.sha25632 -ne $arm32Result.SHA256 -or
-        $version.sha25664 -ne $arm64Result.SHA256 -or
-        $version.sha256X86 -ne $x86Result.SHA256) {
-    throw 'Generated update metadata does not match the release APK hashes.'
-}
-Copy-Item -LiteralPath $liteVersionPath -Destination (Join-Path $OutputDirectory 'version-lite.json') -Force
-if ($ImportantUpdate) {
-    Copy-Item -LiteralPath $versionPath -Destination (Join-Path $OutputDirectory 'version.json') -Force
-    Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirectory 'version-iptv.json') -Force
-} else {
-    foreach ($staleManifest in @('version.json', 'version-iptv.json')) {
-        $stalePath = Join-Path $OutputDirectory $staleManifest
-        if (Test-Path -LiteralPath $stalePath) {
-            Remove-Item -LiteralPath $stalePath -Force
+foreach ($manifestPath in @($liteVersionPath, $versionPath, $legacyVersionPath)) {
+    $version = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($artifactResult in @($arm32Result, $arm64Result, $x86Result)) {
+        if ($version.versionName -ne $artifactResult.VersionName -or
+                ($manifestPath -eq $liteVersionPath -and
+                    $version.versionCode -ne $artifactResult.VersionCode)) {
+            throw "Update metadata version does not match APK $($artifactResult.APK): $manifestPath"
         }
     }
+    if ($version.sha256 -ne $arm32Result.SHA256 -or
+            $version.sha25632 -ne $arm32Result.SHA256 -or
+            $version.sha25664 -ne $arm64Result.SHA256 -or
+            $version.sha256X86 -ne $x86Result.SHA256 -or
+            $version.sha256Bro -ne $broResult.SHA256) {
+        throw "Generated update metadata does not match the release APK hashes: $manifestPath"
+    }
+    if ($manifestPath -ne $liteVersionPath -and $version.versionCode -ne 6) {
+        throw "Startup update versionCode must stay at 6: $manifestPath"
+    }
 }
+Copy-Item -LiteralPath $liteVersionPath -Destination (Join-Path $OutputDirectory 'version-lite.json') -Force
+Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirectory 'version-iptv.json') -Force
+Copy-Item -LiteralPath $versionPath -Destination (Join-Path $OutputDirectory 'version.json') -Force
 
 Write-Host ''
 Write-Host 'Release artifacts:'
-$results | Format-List APK, ABI, SizeMB, SHA256, Obfuscation, Metadata, Path, AliasPath
+$results | Format-List APK, ABI, SizeMB, SHA256, Obfuscation, H5eStreaming, Metadata, Path, AliasPath
 Write-Host "R8 mappings (all architectures): $mappingZip"
 Write-Host "Lightweight metadata: $liteVersionPath"
-Write-Host ($(if ($ImportantUpdate) { "Important metadata updated: $versionPath" } else { 'Important metadata not included (use -ImportantUpdate when required).' }))
+Write-Host "Legacy metadata: $legacyVersionPath (review and publish to master after uploading matching APKs)"
+Write-Host "Startup metadata: $versionPath (versionCode=6; upload to Release only)"

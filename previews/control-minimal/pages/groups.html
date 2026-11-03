@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>频道分组管理 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=night-hairline1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body data-parent="/pages/channels.html">
+    <main id="groupManagerPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">频道分组管理</div>
+        <div class="online"><span class="dot"></span><span id="groupStatus">电视在线</span></div>
+      </div>
+      <section>
+        <p class="group-manager-intro">同名分组已合并 · 拖动六点排序 · 即时生效</p>
+        <div id="playlistGroupSettings" class="group-list"></div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/navigation.js?v=20260926"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/groups.js?v=micro-dialogs1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

@@ -1,0 +1,11 @@
+# Cold-start diagnostics only; ordinary release builds retain normal optimization.
+-keep class xiao.bu.tv.MainActivity { *; }
+-keep class xiao.bu.tv.ChannelStartupTiming { *; }
+-keep class xiao.bu.tv.ChannelCatalog { *; }
+-keep class xiao.bu.tv.ChannelCatalog$* { *; }
+-keep class xiao.bu.tv.Channel { *; }
+-keepclassmembers class xiao.bu.tv.LiteEngine { static okhttp3.Cache httpCache(android.content.Context); }
+-keep class xiao.bu.tv.Ku9HttpClient { *; }
+-keepclassmembers class xiao.bu.tv.NetworkClient { static void initialize(android.content.Context); }
+-keepclassmembers class xiao.bu.tv.NetworkClient { static okhttp3.OkHttpClient sharedClient(); }
+-keepclassmembers class xiao.bu.tv.LiteEngine { public <init>(android.content.Context,xiao.bu.tv.LiteEngine$Listener,okhttp3.Dns); public java.lang.String host(java.lang.String); }

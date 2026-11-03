@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>系统信息 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=night-hairline1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/system-refine.css?v=copy-ip1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body data-parent="/index.html">
+    <main id="systemInfoPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">系统信息</div>
+        <div class="online"><span class="dot"></span><span id="systemStatus">连接中</span></div>
+      </div>
+      <section class="config-hero">
+        <h2 id="systemDeviceTitle">这台设备</h2>
+        <p id="systemDeviceDescription">
+          查看设备本机的系统、硬件、显示和网络信息。
+        </p>
+      </section>
+      <section>
+        <div class="section-head"><h2>系统与应用</h2></div>
+        <div class="system-info-list">
+          <div class="system-info-row">
+            <span>Android 系统</span><b id="sysAndroid">正在读取…</b>
+          </div>
+          <div class="system-info-row"><span>设备型号</span><b id="sysDevice">正在读取…</b></div>
+          <div class="system-info-row webview-info-row">
+            <span>WebView</span><b id="sysWebViewSummary">正在读取…</b>
+          </div>
+        </div>
+      </section>
+      <section>
+        <div class="section-head"><h2>硬件与显示</h2></div>
+        <div class="system-info-list">
+          <div class="system-info-row"><span>CPU 核心</span><b id="sysCpu">正在读取…</b></div>
+          <div class="system-info-row"><span>CPU 架构</span><b id="sysAbi">正在读取…</b></div>
+          <div class="system-info-row"><span>内存/存储</span><b id="sysMemory">正在读取…</b></div>
+          <div class="system-info-row"><span>显示参数</span><b id="sysDisplay">正在读取…</b></div>
+        </div>
+      </section>
+      <section>
+        <div class="section-head"><h2>网络</h2></div>
+        <div class="system-info-list">
+          <div class="system-info-row copy-address-row" role="button" tabindex="0" aria-label="复制IPv4地址" onclick="copySystemAddress('sysIpv4')" onkeydown="systemAddressKey(event,'sysIpv4')"><span>局域网 IPv4</span><b id="sysIpv4">无</b></div>
+          <div class="system-info-row copy-address-row" role="button" tabindex="0" aria-label="复制IPv6地址" onclick="copySystemAddress('sysIpv6')" onkeydown="systemAddressKey(event,'sysIpv6')"><span>公网 IPv6</span><b id="sysIpv6">无</b></div>
+        </div>
+        <p class="system-info-note">公网 IPv6 仅显示当前网卡上可路由的全局地址。</p>
+      </section>
+      <section id="apkTransferSection">
+        <div class="section-head"><h2>APK 投送</h2></div>
+        <input id="apkFile" class="visually-hidden-file" type="file"
+          accept=".apk,application/vnd.android.package-archive" onchange="sendSelectedApk()" />
+        <div class="actions">
+          <button id="apkTransferButton" class="primary wide" onclick="chooseApk()">
+            选择 APK 并发送
+          </button>
+        </div>
+        <div id="apkTransferProgress" class="upload-progress" aria-hidden="true">
+          <div id="apkTransferProgressBar" class="upload-progress-bar"></div>
+        </div>
+        <p id="apkTransferHint" class="hint">发送到当前网页所在的设备；安装成功后自动清理 APK。</p>
+      </section>
+      <section>
+        <div class="section-head"><h2>应用日志</h2></div>
+        <div class="actions"><button id="appLogsOpen" onclick="openAppLogs()">查看日志</button></div>
+        <div id="appLogsPanel" style="display:none">
+          <div class="actions app-log-toolbar">
+            <select id="appLogFilter" onchange="refreshAppLogs()" aria-label="日志筛选">
+              <option value="all">全部日志</option><option value="error">报错</option><option value="crash">崩溃</option>
+            </select>
+            <button onclick="refreshAppLogs()">刷新</button><button onclick="saveAppLogs()">保存</button>
+          </div>
+          <textarea id="appLogText" readonly aria-label="应用日志" style="width:100%;height:320px;box-sizing:border-box;font:12px monospace;white-space:pre;background:transparent;color:inherit"></textarea>
+          <p id="appLogNote" class="hint"></p>
+        </div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/navigation.js?v=about1"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/system.js?v=copy-ip1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

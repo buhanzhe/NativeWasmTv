@@ -54,6 +54,7 @@ final class DesktopWebProfile {
         if ("118".equals(versionMode)) return "118.0.5993.117";
         if ("128".equals(versionMode)) return "128.0.6613.137";
         if ("138".equals(versionMode)) return "138.0.7204.183";
+        if ("155".equals(versionMode)) return "155.0.8059.40";
         return version(nativeUa);
     }
 

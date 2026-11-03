@@ -9,12 +9,14 @@ import subprocess
 root = Path(__file__).resolve().parent.parent
 source = (root / 'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text(encoding='utf-8')
 start = source.index('            if (playbackPosition >= 0L && playbackPosition != lastPlaybackPosition)')
-end = source.index('            } else if (!isNtVCastSource(activePlayerStreamUrl)', start)
+end = source.index('            } else {', start)
 branch = source[start:end] + '\n}'
 test = '''public class PlaybackProgressCheck {
  long lastPlaybackPosition=-1, lastPlaybackProgressAt, lastPlaybackRecoveryAt;
  int playbackRecoveryAttempts, playbackRecoverySourcesTried;
- boolean playbackProgressObserved;
+ boolean playbackProgressObserved,windowContentActive=true,buffering,audioOnlyPlayback=true,videoRenderingStarted=true;
+ long playbackHealthySince;float outputFps=25;
+ static class Player {boolean isPlaying(){return true;}}static class IjkMediaPlayer extends Player{}Player player=new Player();
  static final long PLAYBACK_RECOVERY_HEALTHY_RESET_MS=30000;
  static final String TAG="test";
  static class Log { static void i(String tag,String text){} }
@@ -38,8 +40,13 @@ test = '''public class PlaybackProgressCheck {
    check(!p.playbackProgressObserved && p.playbackRecoveryAttempts==3,
        "A nonzero first sample is still only a baseline; it must not reset recovery");
    p.sample(5040,41000);
+   check(p.playbackRecoveryAttempts==3,"A single progress sample cannot clear recovery counters");
+   p.sample(6040,71000);
    check(p.playbackRecoveryAttempts==0 && p.playbackRecoverySourcesTried==0,
-       "Healthy playback should clear recovery counters");
+       "30 seconds of healthy playback should clear recovery counters");
+   p.playbackRecoveryAttempts=2;p.lastPlaybackRecoveryAt=72000;p.buffering=true;p.sample(6080,72000);
+   p.buffering=false;p.sample(6120,100000);check(p.playbackRecoveryAttempts==2,"Buffering must restart healthy window");
+   p.sample(6160,130000);check(p.playbackRecoveryAttempts==0,"New continuous healthy window should recover");
    System.out.println("PASS cold-start zero/nonzero baselines, real progress, invalid clocks, live rebase, recovery reset");
  }
 }'''.replace('BRANCH', branch)

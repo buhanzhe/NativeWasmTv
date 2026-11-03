@@ -1,43 +1,14 @@
-function loadTvUi() {
-  api("/api/tv-ui",null,function(error,result){
-    document.getElementById("tvUiStatus").textContent=error?error.message:(result.error || "离线切换，播放不中断");
-    if(!error)document.getElementById("tvUiStyle").value=result.selected;
+var fullscreenSaving=false,fullscreenStateAfter=-1;
+function saveFullscreenStartup(){
+  if(fullscreenSaving||!state||!state.settings||typeof state.settings.fullscreenStartup!=="boolean")return;
+  var input=document.getElementById("fullscreenStartup"),value=input.checked;
+  fullscreenSaving=true;input.disabled=true;
+  api("/api/settings",{fullscreenStartup:value},function(error){
+    fullscreenStateAfter=stateRequestSequence;fullscreenSaving=false;input.disabled=false;
+    input.checked=error?!value:value;
+    state.settings.fullscreenStartup=input.checked;
+    toast(error?error.message:value?"已开启全屏启动":"已关闭全屏启动，状态栏保持隐藏",!!error);refresh();
   });
-}
-function saveTvUiStyle() {
-  var select=document.getElementById("tvUiStyle");select.disabled=true;
-  api("/api/tv-ui",{id:select.value},function(error){
-    select.disabled=false;if(error)toast(error.message,true);else toast("电视界面已切换");loadTvUi();
-  },30000);
-}
-var radioUiSaving=false, radioUiSequence=0, radioUiTimer=null, radioUiOptionsSignature="";
-function loadRadioUi() {
-  if(radioUiSaving)return;
-  var sequence=++radioUiSequence;clearTimeout(radioUiTimer);
-  api("/api/radio-ui",null,function(error,result){
-    if(sequence!==radioUiSequence||radioUiSaving)return;
-    var status=document.getElementById("radioUiStatus"),select=document.getElementById("radioUiStyle");
-    if(error){status.textContent=error.message;return;}
-    var choices=result.choices||[],current=result.selected||result.style||"classic";
-    var signature=JSON.stringify(choices);
-    if(signature!==radioUiOptionsSignature){
-      select.innerHTML="";
-      for(var i=0;i<choices.length;i++){var option=document.createElement("option");option.value=choices[i].id;option.textContent=choices[i].name;select.appendChild(option);}
-      radioUiOptionsSignature=signature;
-    }
-    select.value=current;select.disabled=false;
-    status.textContent=result.error || (result.catalogRefreshing ? "正在刷新可选界面…" : result.catalogError || "已下载的界面可离线使用");
-    if(result.catalogRefreshing)radioUiTimer=setTimeout(loadRadioUi,1000);
-  });
-}
-function saveRadioUiStyle() {
-  if(radioUiSaving)return;
-  var select=document.getElementById("radioUiStyle");radioUiSaving=true;radioUiSequence++;clearTimeout(radioUiTimer);select.disabled=true;
-  document.getElementById("radioUiStatus").textContent="正在应用界面，首次使用会下载…";
-  api("/api/radio-ui",{id:select.value},function(error){
-    radioUiSaving=false;select.disabled=false;
-    toast(error?error.message:"电台界面已切换",!!error);loadRadioUi();
-  },40000);
 }
 function saveReverse() {
   var reverse = document.getElementById("reverse");
@@ -59,6 +30,41 @@ function saveAutoStart() {
       return;
     }
     toast(input.checked ? "已开启开机自启动" : "已关闭开机自启动");
+  });
+}
+var backgroundSaving=false;
+function saveBackgroundPlayback(){
+  if(backgroundSaving||!state||!state.settings)return;
+  var input=document.getElementById("backgroundPlayback"),value=input.checked;
+  backgroundSaving=true;input.disabled=true;
+  api("/api/settings",{backgroundPlayback:value},function(error){
+    backgroundSaving=false;input.disabled=false;
+    if(error){input.checked=!value;toast(error.message,true);refresh();return;}
+    state.settings.backgroundPlayback=value;
+    toast(value?"已开启后台播放":"已关闭后台播放");refresh();
+  });
+}
+var playerEngineSaving = false;
+function renderPlayerEngine() {
+  var select = document.getElementById("playerEngine");
+  if (!playerEngineSaving) select.value = state.settings.playerEngine || "ijk";
+  select.disabled = playerEngineSaving;
+  var system = select.value === "system";
+  var ids = ["decoder", "hardwareDecoder", "hdrMode", "rtspTransport"];
+  for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).disabled = system || playerEngineSaving;
+  document.getElementById("systemPlayerHint").style.display = system ? "" : "none";
+}
+function savePlayerEngine() {
+  if (playerEngineSaving || !state || !state.settings) return;
+  var select = document.getElementById("playerEngine"), value = select.value;
+  playerEngineSaving = true;
+  renderPlayerEngine();
+  api("/api/settings", { playerEngine: value }, function (error) {
+    playerEngineSaving = false;
+    if (!error) state.settings.playerEngine = value;
+    renderPlayerEngine();
+    toast(error ? error.message : "播放器已保存，正在重新播放", !!error);
+    refresh();
   });
 }
 function saveDecoder() {
@@ -121,6 +127,11 @@ function renderHardwareDecoders() {
 }
 function renderPageState() {
   var s = state.settings;
+  if(!fullscreenSaving){
+    var fullscreen=document.getElementById("fullscreenStartup");
+    fullscreen.disabled=typeof s.fullscreenStartup!=="boolean";
+    if(!fullscreen.disabled&&stateRequestSequence>fullscreenStateAfter)fullscreen.checked=s.fullscreenStartup;
+  }
   var proxy = document.getElementById("githubProxyUrl"), mode = document.getElementById("githubConnectionMode");
   if (!mode._dirty) mode.value = s.githubProxyEnabled === false ? "direct"
     : githubProxyChoice(s.githubProxyBaseUrl || "https://gh-proxy.org/");
@@ -128,14 +139,16 @@ function renderPageState() {
     proxy.value = s.githubProxyBaseUrl || "https://gh-proxy.org/";
   }
   renderGithubProxyFields();
-  document.getElementById("dnsMode").value = s.dnsMode || "ali";
+  document.getElementById("dnsMode").value = s.dnsMode || "system";
   document.getElementById("reverse").checked = s.reverseKeys === true;
   document.getElementById("autoStart").checked = s.autoStart === true;
+  if(!backgroundSaving){document.getElementById("backgroundPlayback").checked=s.backgroundPlayback!==false;document.getElementById("backgroundPlayback").disabled=false;}
   document.getElementById("decoder").value = s.decodeMode || "auto";
-  document.getElementById("hdrMode").value = s.hdrMode === "passthrough" ? "hardware" : s.hdrMode || "hardware";
+  document.getElementById("hdrMode").value = s.hdrMode === "hardware_sdr" ? "mapping" : s.hdrMode === "passthrough" ? "hardware" : s.hdrMode || "hardware";
   document.getElementById("rtspTransport").value = s.rtspTransport || "tcp";
   document.getElementById("spsCompatibility").value = String(s.h264SpsCompatibility !== false);
   renderHardwareDecoders();
+  renderPlayerEngine();
 }
 function saveDns(){var dns=document.getElementById('dnsMode');toast('正在切换 DNS…');api('/api/settings',{dnsMode:dns.value},function(error){if(error){toast(error.message,true);refresh();return}toast('DNS 配置已保存')})}
 var githubProxySaving = false;
@@ -184,6 +197,3 @@ function saveGithubProxy() {
 }
 document.getElementById("githubProxyUrl").oninput = function () { this._dirty = true; };
 startPage();
-
-loadRadioUi();
-loadTvUi();

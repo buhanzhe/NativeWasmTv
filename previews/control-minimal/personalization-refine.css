@@ -1,0 +1,17 @@
+#backgroundSettings .compact-select-row,#gestureSettings .compact-select-row{min-height:54px;padding:6px 0}
+#backgroundSettings .compact-select-row .browser-setting-copy label,#gestureSettings .compact-select-row .browser-setting-copy label{margin:0;font-size:14px;font-weight:400;color:#262628}
+#backgroundSettings .compact-select-row select,#gestureSettings .compact-select-row select{min-height:40px}
+#backgroundSettings .hint:empty,#gestureSettings .hint:empty{display:none}
+#backgroundSettings .actions{margin:8px 0 12px}
+#backgroundSettings #backgroundUploadTools .hint{margin:0 0 12px;font-size:11px}
+#backgroundSettings .background-url-editor{position:relative;margin:6px 0 14px;padding-right:60px}
+#backgroundSettings .background-url-editor input{width:100%;font-size:13px;border-color:#e8e8ed;border-radius:9px;min-height:40px}
+#backgroundSettings .background-url-editor button{position:absolute;right:0;top:0;min-width:50px;min-height:40px;padding:7px 8px;border:0;background:#f2f2f7;color:#007aff;font-size:13px}
+#backgroundSettings #backgroundCopyright{font-size:10px;line-height:1.6}
+#backgroundSettings #backgroundPreview{display:block;margin-top:12px}
+#backgroundSettings .bing-gallery{display:block;margin:8px 0}
+#backgroundSettings .bing-card{display:inline-block;width:47%;margin:1%;vertical-align:top}
+#gestureSettings .gesture-footer{position:relative;min-height:40px;margin-top:4px;padding-right:80px;line-height:40px;font-size:11px;color:#96969c}
+#gestureSettings #resetGestures{position:absolute;right:0;top:0;margin:0;padding:0 4px;min-height:40px;border:0;background:transparent;color:#007aff;font-size:12px}
+html[data-theme="dark"] #backgroundSettings .compact-select-row .browser-setting-copy label,html[data-theme="dark"] #gestureSettings .compact-select-row .browser-setting-copy label{color:#f2f2f7}
+#backgroundSettings>h2+.compact-select-row,#gestureSettings>h2+.compact-select-row{border-top:0;padding-top:2px}

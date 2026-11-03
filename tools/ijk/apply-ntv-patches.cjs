@@ -521,4 +521,7 @@ require('./apply-payload-metrics-patches.cjs')(root);
 require('./apply-rtp-buffer-patches.cjs')(root);
 require('./apply-annexb-csd-patches.cjs')(root);
 require('./apply-metadata-probe-patches.cjs')(root);
+require('./apply-live-buffer-patches.cjs')(root);
+require('./apply-software-render-patches.cjs')(root);
+require('./apply-buffer-resume-patches.cjs')(root);
 console.log('Applied nTv native playback overlays to ' + root);

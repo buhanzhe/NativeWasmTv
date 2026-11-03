@@ -1,7 +1,66 @@
 # Native crypto trials
 
-These are experiments for the separately downloaded TvWasm/cjs native plugins.
-They do not change the host APK's version or bundle extra libraries into it.
+These tools work with the separately downloaded TvWasm/cjs native plugins.
+The release script now bundles H5E streaming by default for ARMv7, ARM64 and x86.
+Other site plugins remain separately downloaded. Direct Gradle builds enable the
+bundled implementation with `-Ph5eStreaming`; `-Ph5eStreamingChecks` remains an
+isolated trial using temporary libraries.
+
+## Release packaging
+
+`scripts/build-release.ps1` passes `-Ph5eStreaming`, checks all three libraries
+under `app/src/h5eStreaming/jniLibs`, then verifies each signed APK contains its
+matching library. Missing libraries fail the build instead of silently shipping
+whole-TS playback. The libraries do not depend on `.codex-tmp` at release time.
+Use `-DisableH5eStreaming` on the release script to produce the previous
+downloaded-plugin implementation for compatibility comparisons.
+
+Rebuild the bundled libraries from a CJS source checkout:
+
+```powershell
+python tools/cjs/build-h5e-streaming.py PATH_TO_CJS_CHECKOUT --ndk PATH_TO_NDK_R17C --bundle
+```
+
+ARMv7/x86 target API14; ARM64 targets API21. The bridge loads the bundled
+implementation only for CCTV H5E, and falls back to the site plugin if the
+library cannot load. Existing CMG/Yangshipin, clear IPTV, WebView and decoder
+selection paths are unchanged. This changes encrypted media delivery timing;
+it does not promise to eliminate all buffering on every device. Verify runtime
+logs contain `H5E streaming supported=true` and `H5E progressive segment=`.
+
+## H5E progressive TS trial
+
+The optional `supportsStreamingTransportStream` and `decryptTransportStreamPart`
+JNI calls accept complete video PES units in original TS packet order. The
+first chunk resets the module and captures the segment clock; subsequent chunks
+retain the same module, clock and cancellation generation. Only a complete,
+validated download enters the replay cache. Partial HTTP responses close on
+failure, and retries are allowed only before any body bytes entered the pipe.
+Old plugins without these JNI symbols retain the whole-segment path.
+
+Build from a local CJS checkout, leaving that checkout and remote manifests intact:
+
+```powershell
+python tools/cjs/build-h5e-streaming.py PATH_TO_CJS_CHECKOUT --ndk PATH_TO_NDK_R17C
+.\gradlew.bat :app:assembleArm32Release :app:assembleArm64Release -Ph5eStreamingChecks
+```
+
+The flag loads `libh5estream.so` from `.codex-tmp/h5e-streaming/apk-libs` instead
+of the installed H5E plugin. Build and install the correct ABI; trial libraries
+are ARMv7/API14, ARM64/API21 and x86/API14. Gradle builds without either H5E
+property retain the downloaded plugin path.
+
+Run the proxy failure tests and byte-for-byte native checks on encrypted fixtures:
+
+```powershell
+python tests/h5e-progressive.test.py
+python tools/cjs/run-h5e-stream-check.py --device SERIAL --sdk PATH_TO_ANDROID_SDK --library PATH_TO_LIBH5ESTREAM_SO ENCRYPTED_TS_FILES
+```
+
+The native check uses an isolated `dalvikvm` process, handles fragmented reads,
+and checks cancellation, new-segment restart and whole/stream API interoperation.
+It does not replace installed plugin files. Device results, fixture hashes and
+experimental APKs from 2026-10-29 are under `.codex-tmp/h5e-streaming/`.
 
 ## CCTV scratch reuse
 
@@ -74,6 +133,17 @@ Real CCTV-1/5/8 CMG captures and replay results are under
 `.codex-tmp/cmg-speed/`. `report-cmg-replay.py DIRECTORY` summarizes the
 three-run baseline, region and combined JSON files. These experiments do not
 add libraries to the production APK or publish site plugins.
+
+## H5E PES repacking compatibility
+
+The bundled H5E build also applies `apply-h5e-pes.py`. When removing encryption
+padding makes a video PES shorter than its first TS payload slot, the writer
+must move the PES header together with the ES and preserve existing PCR bytes.
+Otherwise the packet retains PUSI but begins with a raw NAL, which Android 4.0's
+Stagefright rejects with `1/-1007`. `h5e-pes-writer.h` is the production writer.
+Run `test-h5e-pes.py --device SERIAL --ndk NDK_ROOT` for exhaustive payload-length
+checks on Android; `run-h5e-stream-check.py` also checks every output video PES
+header in whole-segment and fragmented decryption of real encrypted fixtures.
 
 ## Android 9 multi-ABI matrix
 

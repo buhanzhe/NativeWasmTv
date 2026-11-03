@@ -17,6 +17,7 @@ public class HlsStartupCacheCheck {
   }
  }
  static class Policy {
+  boolean nativeMediaDownloads;
   java.util.Set<String> allowed=new java.util.HashSet<>(Arrays.asList("master","child","segment"));
   boolean canUseDirectHttpHlsUrl(String url){return allowed.contains(url);}
   SELECT_DIRECT

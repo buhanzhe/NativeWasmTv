@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>脚本 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=night-hairline1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body class="browser-config-shell" data-parent="/pages/browser.html">
+    <main id="scriptConfigPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="scriptPageBack()">‹ 返回</button>
+        <div class="page-title">脚本</div>
+        <div class="online"><span class="dot"></span><span id="scriptStatus">电视在线</span></div>
+      </div>
+      <section class="config-hero">
+        <h2>网页脚本</h2>
+        <p>为不同网站配置独立脚本。保存后对后续加载的页面生效。</p>
+      </section>
+      <section id="scriptOverview" class="browser-section">
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>启用脚本</b><span>关闭后保留脚本内容，但不会注入网页</span>
+            </div>
+            <input id="webViewUserScriptEnabled" class="source-toggle" aria-label="启用脚本"
+              type="checkbox" onchange="saveScriptMasterSwitch()" />
+          </div>
+        </div>
+      </section>
+      <section id="scriptImportSection" class="browser-section">
+        <div class="section-head"><h2>安装脚本</h2></div>
+        <div class="script-import-row">
+          <button id="importLocalScriptButton" onclick="chooseLocalUserScript()">从本地文件安装</button>
+          <input id="scriptLocalFile" type="file" accept=".user.js,.js,text/javascript,application/javascript,text/plain"
+            aria-label="选择本地脚本文件" style="display:none" onchange="importUserScriptFromFile(this)" />
+        </div>
+        <div class="config-note">选择本机的 .user.js 或 .js 文件（UTF-8，含 UserScript 元数据头，最大 256KB）。每次导入新增一项，不覆盖已有脚本。</div>
+        <div class="script-import-row">
+          <input id="scriptInstallUrl" inputmode="url" autocomplete="off"
+            placeholder="粘贴脚本页面或 .user.js 安装地址" />
+          <button id="importScriptButton" onclick="importUserScriptFromUrl()">导入</button>
+        </div>
+        <div class="script-site-links">
+          <a href="https://greasyfork.org/zh-CN" target="_blank" rel="noopener">Greasy Fork</a>
+          <a href="https://gfork.zh-tw.eu.org/zh-hans/scripts" target="_blank" rel="noopener">Greasy Fork 镜像</a>
+          <a href="https://openuserjs.org" target="_blank" rel="noopener">OpenUserJS</a>
+          <a href="https://github.com/topics/userscript" target="_blank" rel="noopener">GitHub</a>
+        </div>
+        <div class="config-note">也可从公开 HTTPS 地址导入。请仅安装可信脚本；导入后先预览，确认保存后才安装，总开关开启时生效。</div>
+      </section>
+      <section id="scriptListSection" class="browser-section">
+        <div class="section-head">
+          <div>
+            <h2>脚本列表</h2>
+            <span id="scriptCountSummary" class="script-count-summary">暂无脚本</span>
+          </div>
+          <button id="addScriptButton" onclick="createUserScript()">＋ 新建</button>
+        </div>
+        <div id="userScriptList" class="source-list script-list"></div>
+        <div class="config-note">
+          每个脚本可以单独启用。支持 @name、@match、@include、@exclude 和 @run-at。
+        </div>
+      </section>
+      <section id="scriptEditor" class="browser-section script-editor" hidden>
+        <div class="section-head">
+          <h2 id="scriptEditorTitle">新建脚本</h2>
+          <button onclick="closeScriptEditor()">取消</button>
+        </div>
+        <div class="browser-settings-list">
+          <label class="script-name-row">
+            <span>脚本名称</span>
+            <input id="webViewUserScriptName" maxlength="80" placeholder="例如：网页播放器优化"
+              oninput="scriptEditorChanged()" />
+          </label>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>单独启用</b><span>总开关开启时才会运行此脚本</span>
+            </div>
+            <input id="webViewUserScriptItemEnabled" class="source-toggle" aria-label="单独启用脚本"
+              type="checkbox" onchange="scriptEditorChanged()" />
+          </div>
+          <div class="browser-script-row">
+            <textarea id="webViewUserScriptSource" aria-label="脚本内容" spellcheck="false"
+              oninput="scriptEditorChanged()"
+              placeholder="// ==UserScript==&#10;// @name 网页播放器优化&#10;// @match https://example.com/*&#10;// @run-at document-end&#10;// ==/UserScript==&#10;console.log('nTv');"></textarea>
+          </div>
+        </div>
+        <div id="scriptImportInfo" class="script-import-info" hidden></div>
+        <div id="scriptCompatibilityWarning" class="script-compatibility-warning" hidden></div>
+        <div class="script-editor-actions">
+          <button id="deleteScriptButton" class="script-delete-button" onclick="deleteEditingScript()">删除</button>
+          <button id="saveScriptButton" class="primary" onclick="saveEditingScript()">保存脚本</button>
+        </div>
+        <div class="config-note">
+          不提供 GM_* API。单个脚本最大 256KB，全部脚本总计最大 512KB。
+        </div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/navigation.js?v=20260926"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/script.js?v=micro-dialogs1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

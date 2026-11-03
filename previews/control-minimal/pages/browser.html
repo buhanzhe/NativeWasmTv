@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>浏览器配置 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=night-hairline1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body class="browser-config-shell" data-parent="/index.html">
+    <main id="browserConfigPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">浏览器配置</div>
+        <div class="online"><span class="dot"></span><span id="browserStatus">电视在线</span></div>
+      </div>
+      <section class="config-hero">
+        <p>网页分辨率和缩放即时生效。</p>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>显示与加载</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>网页内核</b><span>Android 5.0 以下默认轻量嗅探；广东台及关闭自动播放、嗅探接管时使用 WebView 保留网页播放，下次打开频道生效</span></div>
+            <select id="webSourceEngine" disabled aria-label="网页内核" onchange="updateLiteThreadSetting();saveWebViewSettings()">
+              <option value="lite">轻量嗅探</option>
+              <option value="system">系统</option>
+            </select>
+          </div>
+          <div id="liteNetworkThreadRow" class="browser-setting-row" hidden style="display:none">
+            <div class="browser-setting-copy"><b>网络线程倍率</b><span id="liteNetworkThreadSummary">仅轻量内核生效，下次打开网页应用</span></div>
+            <select id="liteNetworkThreadMultiplier" aria-label="轻量内核网络线程倍率" onchange="saveWebViewSettings()">
+              <option value="0">自动（推荐）</option>
+              <option value="2">2 倍</option>
+              <option value="4">4 倍</option>
+              <option value="8">8 倍</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>开启网页遮罩</b><span>初始关闭；只覆盖画面，网页、脚本和嗅探持续运行；点击“显示网页”或纯黑画面可临时查看</span>
+            </div>
+            <input id="webViewPageCover" class="source-toggle" aria-label="开启网页遮罩"
+              type="checkbox" onchange="saveWebViewSettings()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>遮罩样式</b><span>加载信息显示进度；纯黑只显示黑色画面，可点击或按确定、返回显示网页</span></div>
+            <select id="webViewPageCoverStyle" aria-label="遮罩样式" onchange="saveWebViewSettings()">
+              <option value="status">加载信息</option><option value="black">纯黑</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>极简模式</b><span>强制隐藏顶部网页标签和地址栏，默认关闭</span>
+            </div>
+            <input id="webViewMinimalMode" class="source-toggle" type="checkbox"
+              aria-label="浏览器极简模式" onchange="saveWebViewSettings()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>网页分辨率</b><span>分辨率越高，可显示的网页内容越多</span>
+            </div>
+            <select id="webViewResolution" aria-label="网页分辨率" onchange="saveWebViewSettings()">
+              <option value="720p">720P</option>
+              <option value="1080p">1080P</option>
+              <option value="2k">2K</option>
+              <option value="4k">4K</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>屏幕缩放系数</b><span>按电脑浏览器缩放并重新排版；屏幕分辨率不变，200% 时可视网页宽高约减半</span>
+            </div>
+            <select
+              id="webViewPageScale"
+              aria-label="屏幕缩放系数"
+              onchange="saveWebViewSettings()"
+            >
+              <option value="0.5">50%</option>
+              <option value="0.75">75%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+              <option value="2">200%</option>
+              <option value="3">300%</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>浏览器标识</b><span>桌面模式隐藏常见手机字段，不代表匿名浏览；旧 WebView 保护能力有限</span>
+            </div>
+            <select id="webViewUserAgent" aria-label="浏览器标识" onchange="saveWebViewSettings()">
+              <option value="windows">Windows</option>
+              <option value="macos">macOS</option>
+              <option value="ipad">iPad</option>
+              <option value="native">本机</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>浏览器版本</b><span>只改变网站看到的版本标识，不会升级设备的 WebView 内核</span>
+            </div>
+            <select id="webViewBrowserVersion" aria-label="浏览器版本" onchange="saveWebViewSettings()">
+              <option value="native">本机</option>
+              <option value="118">118.0.5993.117</option>
+              <option value="128">128.0.6613.137</option>
+              <option value="138">138.0.7204.183</option>
+              <option value="155">155.0.8059.40</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>加载网页图片</b><span>关闭后可减少流量并加快页面打开</span>
+            </div>
+            <input
+              id="webViewLoadImages"
+              class="source-toggle"
+              aria-label="加载网页图片"
+              type="checkbox"
+              onchange="saveWebViewSettings()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>嗅探资源自动播放</b><span>默认开启；找到资源后由原生播放器接管，关闭后仅收集资源；广东台保留原网页播放，不嗅探</span>
+            </div>
+            <input
+              id="webViewAutoPlaySniffed"
+              class="source-toggle"
+              aria-label="嗅探资源自动播放"
+              type="checkbox"
+              onchange="saveWebViewSettings()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>网页自动播放</b><span>默认开启；播放器出现后自动全屏，并尝试点击播放、继续嗅探，原生接管后停止干预；广东台保留网页播放。关闭后由你手动播放</span></div>
+            <input id="webViewAutoPlay" class="source-toggle" aria-label="网页自动播放" type="checkbox" onchange="saveWebViewSettings()" />
+          </div>
+        </div>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>隐私与脚本</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>广告拦截</b><span>默认关闭，按需开启</span>
+            </div>
+            <input id="webViewAdBlock" class="source-toggle" aria-label="广告拦截"
+              type="checkbox" onchange="saveWebViewSettings()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>WebRTC</b><span>默认关闭，开启后网页可使用实时音视频和点对点连接</span>
+            </div>
+            <input id="webViewWebRtcEnabled" class="source-toggle" aria-label="WebRTC"
+              type="checkbox" onchange="saveWebViewSettings()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>脚本</b><span>启用、编辑和管理网页脚本</span>
+            </div>
+            <button onclick="navigateTo('/pages/script.html')">配置</button>
+          </div>
+        </div>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>存储</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>网页缓存</b><span id="webCacheSize">由系统 WebView 管理</span>
+            </div>
+            <button onclick="clearWebCache()">清除</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/navigation.js?v=20260926"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/browser.js?v=micro-dialogs1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

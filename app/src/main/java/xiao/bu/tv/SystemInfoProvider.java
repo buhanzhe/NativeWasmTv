@@ -23,7 +23,6 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.Inet6Address;
@@ -645,26 +644,14 @@ final class SystemInfoProvider {
             Class<?> properties = Class.forName("android.os.SystemProperties");
             Method get = properties.getMethod("get", String.class, String.class);
             Object value = get.invoke(null, key, "");
-            String result = value == null ? "" : value.toString().trim();
-            if (result.length() > 0) {
-                return result;
-            }
+            // Empty is a valid missing property, particularly ro.soc.* on ICS.
+            // Forking getprop adds no information and can leave a pre-exec child
+            // blocked on old vendor runtimes, holding this snapshot lock forever.
+            return value == null ? "" : value.toString().trim();
         } catch (Exception ignored) {
-        }
-        Process process = null;
-        BufferedReader reader = null;
-        try {
-            process = Runtime.getRuntime().exec(new String[] { "getprop", key });
-            reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String value = reader.readLine();
-            return value == null ? "" : value.trim();
-        } catch (Exception ignored) {
+            // Diagnostics are best-effort. Build fields, sysfs and /proc remain
+            // available when the hidden property API is inaccessible.
             return "";
-        } finally {
-            closeQuietly(reader);
-            if (process != null) {
-                process.destroy();
-            }
         }
     }
 
@@ -803,8 +790,32 @@ final class SystemInfoProvider {
         return String.format(Locale.US, "%.0f KB", bytes / 1024d);
     }
 
-    private static List<String> networkAddresses(boolean publicIpv6) {
+    private String connectedWifiIpv4() {
+        try {
+            ConnectivityManager connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            NetworkInfo network = connectivity == null ? null : connectivity.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
+            if (network != null && !network.isConnected()) return "";
+            WifiManager wifi = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+            android.net.wifi.WifiInfo info = wifi == null ? null : wifi.getConnectionInfo();
+            int ip = info == null ? 0 : info.getIpAddress();
+            if (ip != 0) return (ip & 255) + "." + (ip >>> 8 & 255) + "."
+                    + (ip >>> 16 & 255) + "." + (ip >>> 24 & 255);
+        } catch (RuntimeException unavailable) {
+            // Some systems restrict Wi-Fi information; interface inspection still works.
+        }
+        return "";
+    }
+
+    private static boolean isWifiInterface(String name) {
+        String value = name == null ? "" : name.toLowerCase(Locale.US);
+        return value.startsWith("wlan") || value.startsWith("wifi")
+                || value.startsWith("tiwlan") || value.startsWith("ath") || value.matches("ra[0-9]+");
+    }
+
+    private List<String> networkAddresses(boolean publicIpv6) {
         LinkedHashSet<String> values = new LinkedHashSet<String>();
+        final LinkedHashSet<String> wifiAddresses = new LinkedHashSet<String>();
+        final String wifiIp = publicIpv6 ? "" : connectedWifiIpv4();
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             if (interfaces == null) {
@@ -823,6 +834,7 @@ final class SystemInfoProvider {
                             && !address.isLoopbackAddress()
                             && address.isSiteLocalAddress()) {
                         values.add(address.getHostAddress());
+                        if (isWifiInterface(network.getName())) wifiAddresses.add(address.getHostAddress());
                     }
                 }
             }
@@ -834,6 +846,9 @@ final class SystemInfoProvider {
             Collections.sort(result, new Comparator<String>() {
                 @Override
                 public int compare(String left, String right) {
+                    int leftNetwork = left.equals(wifiIp) ? 0 : wifiAddresses.contains(left) ? 1 : 2;
+                    int rightNetwork = right.equals(wifiIp) ? 0 : wifiAddresses.contains(right) ? 1 : 2;
+                    if (leftNetwork != rightNetwork) return leftNetwork - rightNetwork;
                     return ipv4Preference(left) - ipv4Preference(right);
                 }
             });

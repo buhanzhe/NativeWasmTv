@@ -1,0 +1,16 @@
+{
+  "package": "xiao.bu.tv",
+  "devices": [
+    {"name": "android-4.0.4", "serial": "37ec0711", "sdk": 15},
+    {"name": "android-4.4", "serial": "8ba8ceb8", "sdk": 19},
+    {"name": "android-7.1", "serial": "ff0316c7", "sdk": 25}
+  ],
+  "providers": [
+    {"name": "央视频-CCTV1", "url": "webview://https://yangshipin.cn/tv/home?pid=600001859", "engine": "system"},
+    {"name": "央视网-CCTV1", "url": "webview://https://tv.cctv.com/live/cctv1", "engine": "system"},
+    {"name": "广东珠江-轻量", "url": "webview://https://www.gdtv.cn/tvChannelDetail/44", "engine": "lite"},
+    {"name": "广东珠江-系统", "url": "webview://https://www.gdtv.cn/tvChannelDetail/44", "engine": "system"},
+    {"name": "虎牙-11342412", "url": "webview://https://www.huya.com/11342412", "engine": "lite"},
+    {"name": "虎牙-30631741", "url": "webview://https://www.huya.com/30631741", "engine": "system"}
+  ]
+}

@@ -315,7 +315,7 @@ function scriptEditorChanged() { editorDirty = true; }
 
 function closeScriptEditor(force) {
   if (scriptSaveBusy) return false;
-  if (!force && editorDirty && window.confirm && !window.confirm("放弃未保存的修改？")) return false;
+  if (!force && editorDirty) {setTimeout(function(){NtvDialogs.confirm("放弃未保存的修改？",function(accepted){if(accepted)closeScriptEditor(true);});},0);return false;}
   editingScriptId = "";
   editingInstallUrl = "";
   editingVersion = "";
@@ -365,7 +365,8 @@ function saveEditingScript() {
 function deleteEditingScript() {
   var item = findUserScript(editingScriptId), previous = [], next = [];
   if (!item || scriptSaveBusy) return;
-  if (window.confirm && !window.confirm("删除脚本“" + item.name + "”？")) return;
+  NtvDialogs.confirm("删除脚本“" + item.name + "”？",function(accepted){
+  if(!accepted)return;
   for (var i = 0; i < userScripts.length; i++) {
     previous.push(copyUserScript(userScripts[i]));
     if (userScripts[i].id !== item.id) next.push(userScripts[i]);
@@ -374,6 +375,7 @@ function deleteEditingScript() {
   persistUserScripts("脚本已删除", function (error) {
     if (error) { userScripts = previous; renderScriptList(); return; }
     closeScriptEditor(true);
+  });
   });
 }
 

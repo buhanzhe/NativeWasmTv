@@ -7,10 +7,8 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>播放与显示 · nTv</title>
-    <script src="/js/theme.js"></script>
-    <link rel="stylesheet" href="/css/common.css?v=20261016" />
-    <link rel="stylesheet" href="/css/night.css?v=20261016" />
-  </head>
+    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=date-format-width1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1">
+</head>
   <body data-parent="/index.html">
     <main id="playbackDisplayPage" class="secondary-page channel-config-page">
       <div class="top">
@@ -20,36 +18,38 @@
       </div>
       <section class="config-hero">
         <h2>播放与显示</h2>
-        <p>分别调整视频画面、直播稳定性和屏幕信息。修改后会自动保存到电视。</p>
+        <p>调整画面、直播与屏幕信息</p>
       </section>
       <section class="browser-section">
         <div class="section-head"><h2>画面</h2></div>
         <div class="browser-settings-list">
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>画面比例</b><span>自适应保留完整画面，填充等比铺满并居中裁剪，拉伸会改变比例</span>
+              <b>画面比例</b><span>选择原始比例、裁剪或拉伸</span>
             </div>
             <select id="videoScale" aria-label="画面比例" onchange="saveDisplay()">
-              <option value="fit">自适应（默认）</option>
+              <option value="fit">原始比例</option>
               <option value="stretch">拉伸</option>
-              <option value="fill">填充（居中裁剪）</option>
+              <option value="18:9">18:9</option>
               <option value="16:9">16:9</option>
               <option value="4:3">4:3</option>
+              <option value="fill">裁剪</option>
+              <option value="blur">背景模糊</option>
             </select>
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>分辨率</b><span>多线路频道按照所选档位优先播放</span>
+              <b>分辨率</b><span>按所选清晰度优先播放</span>
             </div>
             <select id="resolutionMode" aria-label="分辨率" onchange="saveDisplay()">
-              <option value="high">最高（默认）</option>
+              <option value="high">最高</option>
               <option value="medium">适中</option>
               <option value="low">最低</option>
             </select>
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>界面大小</b><span id="uiScaleHint">正在识别电视显示参数…</span>
+              <b>界面大小</b><span id="uiScaleHint">随屏幕适配，可调整缩放</span>
             </div>
             <select id="uiScaleMode" aria-label="界面大小" onchange="uiScaleModeChanged()">
               <option value="small">80%</option>
@@ -74,10 +74,10 @@
         <div class="browser-settings-list">
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>直播稳定性</b><span>直播：智能档根据下载与解密耗时自动增加或减少储备；稳定预载 2 个分片，适中预载 1 个，低延迟首个分片可播即启动。HLS 点播：按视频实际时长与下载速度计算储备，稳定档多留余量，网速足够时尽早播放；分片可预存到磁盘，空间不足时使用内存缓冲。网速慢时显示预计等待时间。更改后立即重启当前频道</span>
+              <b>直播稳定性</b><span>调整缓冲，切换后重播当前频道</span>
             </div>
             <select id="liveDelay" aria-label="直播稳定性" onchange="saveLiveDelay()">
-              <option value="stable">稳定（默认）</option>
+              <option value="stable">稳定</option>
               <option value="balanced">适中</option>
               <option value="low">低延迟</option>
               <option value="auto">智能（自动）</option>
@@ -85,16 +85,18 @@
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>超时切换备用线路</b><span>等待所选时长仍未播放时换线；解析失败或地址错误仍立即尝试备用线路</span>
+              <b>超时切换备用线路</b><span>超时未播时换线，解析失败立即换线</span>
             </div>
             <select
               id="autoSwitchSourceSeconds"
               aria-label="超时切换备用线路"
               onchange="saveAutoSwitchSource()"
             >
-              <option value="0">关闭（默认）</option>
+              <option value="0">关闭</option>
               <option value="5">5 秒</option>
               <option value="10">10 秒</option>
+              <option value="15">15 秒</option><option value="20">20 秒</option>
+              <option value="25">25 秒</option><option value="30">30 秒</option>
             </select>
           </div>
         </div>
@@ -104,7 +106,7 @@
         <div class="browser-settings-list">
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>显示调试信息</b><span>分辨率、帧率、编码、码率、CPU 和源路径</span>
+              <b>显示调试信息</b><span>显示画面参数、CPU与源路径</span>
             </div>
             <input
               id="showDebugInfo"
@@ -115,16 +117,16 @@
             />
           </div>
           <div class="browser-setting-row">
-            <div class="browser-setting-copy"><b>显示色彩和解码器信息</b><span>显示 HDR、位深、色域和解码器，可自动换行，默认关闭</span></div>
+            <div class="browser-setting-copy"><b>显示色彩和解码器信息</b><span>显示HDR、位深、色域与解码器</span></div>
             <input id="showColorDebugInfo" class="source-toggle" aria-label="显示色彩和解码器信息" type="checkbox" onchange="saveColorDebugInfo()" />
           </div>
           <div class="browser-setting-row">
-            <div class="browser-setting-copy"><b>显示加载耗时</b><span>显示解析、下载、解密、准备和首帧耗时，可自动换行，默认关闭</span></div>
+            <div class="browser-setting-copy"><b>显示加载耗时</b><span>显示解析、下载到首帧的耗时</span></div>
             <input id="showLoadTiming" class="source-toggle" aria-label="显示加载耗时" type="checkbox" onchange="saveLoadTiming()" />
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>右下角显示网速</b><span>显示源站分片下载速度，约 5 秒平滑</span>
+              <b>右下角显示网速</b><span>显示源站下载速度，约5秒平滑</span>
             </div>
             <input
               id="showNetworkSpeed"
@@ -135,12 +137,12 @@
             />
           </div>
           <div class="browser-setting-row">
-            <div class="browser-setting-copy"><b>显示播放进度</b><span>右上角显示播放位置与总时长，在时间左侧排列；直播不显示，默认关闭</span></div>
+            <div class="browser-setting-copy"><b>显示播放进度</b><span>仅点播显示播放位置与总时长</span></div>
             <input id="showPlaybackPosition" class="source-toggle" aria-label="显示播放进度" type="checkbox" onchange="savePlaybackPosition()" />
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>显示日期时间</b><span>默认关闭，可单独只显示当前时间</span>
+              <b>显示日期时间</b><span>可显示日期时间，或仅显示时间</span>
             </div>
             <input
               id="showDateTime"
@@ -156,12 +158,12 @@
             </div>
             <select id="clockLocation" aria-label="显示位置" onchange="saveDateTime()">
               <option value="left">画面左上角</option>
-              <option value="right">画面右上角（默认）</option>
+              <option value="right">画面右上角</option>
             </select>
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>排列方式</b><span>设置日期、时间和星期的组合顺序</span>
+              <b>排列方式</b><span>设置日期、时间与星期的顺序</span>
             </div>
             <select id="dateTimeFormat" aria-label="排列方式" onchange="saveDateTime()">
               <option value="date_time_week">日期 · 时间 · 星期</option>
@@ -175,17 +177,9 @@
       </section>
     </main>
     <div id="message" class="message"></div>
-    <div id="legacySelectPicker" class="source-picker" onclick="closeLegacySelectPicker(event)">
-      <div class="source-picker-card" onclick="event.stopPropagation()">
-        <div class="source-picker-head">
-          <b id="legacySelectTitle">选择设置</b
-          ><button onclick="closeLegacySelectPicker()">取消</button>
-        </div>
-        <div id="legacySelectChoices" class="legacy-select-choices"></div>
-      </div>
-    </div>
-    <script src="/js/navigation.js?v=20260926"></script>
-    <script src="/js/common.js?v=20260926-nav"></script>
-    <script src="/js/pages/playback.js"></script>
-  </body>
+    <script src="/js/navigation.js?v=20261030-ui"></script>
+    <script src="/js/common.js?v=20261030-ui"></script>
+    <script src="/js/pages/playback.js?v=20261030-ui"></script>
+  <script src="/js/ui.js?v=20261030-ui"></script>
+</body>
 </html>

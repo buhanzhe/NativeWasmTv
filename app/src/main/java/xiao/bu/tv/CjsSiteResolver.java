@@ -41,6 +41,8 @@ final class CjsSiteResolver {
     private final Ku9ScriptEngine engine;
 
     private final Activity activity;
+    private volatile boolean speculative;
+    private final Ku9WarmCache warmCache;
     private volatile Pending pending;
     private volatile int generation;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -52,15 +54,22 @@ final class CjsSiteResolver {
         }
     };
 
-    CjsSiteResolver(Activity activity) {
+    CjsSiteResolver(Activity activity) { this(activity,false); }
+    CjsSiteResolver(Activity activity,boolean speculative) {
         this.activity = activity;
+        this.speculative=speculative;warmCache=speculative?new Ku9WarmCache():null;
         contract = new Ku9JsContract(activity);
-        engine = new Ku9ScriptEngine(activity);
+        engine = new Ku9ScriptEngine(activity,speculative);
     }
 
     void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
             final String sourceUrl,
             final Callback callback) {
+        resolve(requestId, channelName, pageUrl, quality, sourceUrl, false, callback);
+    }
+
+    void resolve(final int requestId, final String channelName, final String pageUrl, final String quality,
+            final String sourceUrl, final boolean fresh, final Callback callback) {
         cancel();
         final int requestGeneration = generation;
         new Thread(new Runnable() {
@@ -76,6 +85,7 @@ final class CjsSiteResolver {
                     if (requestGeneration != generation) return;
                     final Pending request = new Pending(requestId, requestGeneration,
                             channelName, pageUrl, quality, sourceUrl, site, callback);
+                    request.fresh = fresh;
                     Log.i(TAG, "CJS local load site=" + site.id + " request=" + requestId
                             + " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - loadStarted));
                     activity.runOnUiThread(new Runnable() {
@@ -101,8 +111,10 @@ final class CjsSiteResolver {
     }
 
     private void start(Pending request) {
+        if(speculative&&request.browser){request.callback.onFailed(request.requestId,"此脚本的浏览器执行推迟到切台时");return;}
         android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
         String key = request.cacheKey;
+        if (request.fresh) cache.edit().remove(key).remove(key + ":until").apply();
         long now = System.currentTimeMillis();
         long expires = cache.getLong(key + ":until", 0L);
         if (expires > now && expires - now <= 600000L) {
@@ -206,7 +218,7 @@ final class CjsSiteResolver {
                 return;
             }
             long ttl = Math.min(600L, Math.max(0L, value.optLong("ttlSec", 0)));
-            if (ttl > 0) {
+            if (ttl > 0 && !speculative) {
                 android.content.SharedPreferences cache = activity.getSharedPreferences("cjs-result-cache", 0);
                 android.content.SharedPreferences.Editor edit = cache.edit();
                 if (cache.getAll().size() >= 128) edit.clear();
@@ -265,6 +277,7 @@ final class CjsSiteResolver {
     void cancel() { generation++; clearPending(); closePlaylistServer(); }
 
     void destroy() { cancel(); }
+    void promoteWarmup(){speculative=false;engine.setBackground(false);if(warmCache!=null)warmCache.promote();}
 
     private static String cacheKey(Pending request) {
         // Site script digest prevents a new plugin version reusing old resolver output.
@@ -310,9 +323,9 @@ final class CjsSiteResolver {
         @Override protected boolean isRequestCancelled() {
             return generation != request.generation || pending != request || Thread.currentThread().isInterrupted();
         }
-        @Override @android.webkit.JavascriptInterface public String getCache(String key) { return cache.get(key); }
+        @Override @android.webkit.JavascriptInterface public String getCache(String key) { return warmCache==null?cache.get(key):warmCache.get(cache,request.site.id,key); }
         @Override @android.webkit.JavascriptInterface public void setCache(String key, String value, double ttlMs) {
-            cache.put(key, value, ttlMs);
+            if(warmCache==null)cache.put(key,value,ttlMs);else warmCache.put(cache,request.site.id,key,value,ttlMs);
         }
         @Override protected void onComplete(final String json) {
             activity.runOnUiThread(() -> {
@@ -341,6 +354,7 @@ final class CjsSiteResolver {
         String javascript;
         final boolean browser;
         boolean initialCompleted;
+        boolean fresh;
 
         Pending(int requestId, int generation, String channelName, String pageUrl, String quality,
                 String sourceUrl,

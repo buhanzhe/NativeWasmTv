@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="xiao.bu.tv.WebSourceUjsHost" android:exported="true"
+            android:taskAffinity="xiao.bu.tv.ujscheck" />
+    </application>
+    <!-- This fixed loopback fixture host exists only with -PujsWebviewChecks. -->
+</manifest>

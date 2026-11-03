@@ -4,72 +4,6 @@ function setSystemInfo(id, value) {
 }
 
 var apkUploadActive = false;
-var updateCheckRequested = false,
-  updatePollTimer = null;
-
-function updateStatusText(update) {
-  if (!update || !update.state || update.state === "idle") return "点击检查更新";
-  if (update.state === "checking") return "正在检查最新 Release…";
-  if (update.state === "available" && update.architectureUpgrade)
-    return "可升级 64 位版本 · 提升编码性能，但可能会占用更多内存";
-  return update.message || "点击检查更新";
-}
-
-function renderAppUpdate() {
-  var update = (state && state.update) || {},
-    button = document.getElementById("appUpdateButton"),
-    status = document.getElementById("sysUpdateStatus");
-  button.disabled = update.state === "checking" || update.state === "downloading" || appUpdateInstalling;
-  document.getElementById("appUpdateAction").textContent = update.state === "downloading" ? "下载中…"
-    : update.state === "checking" ? "检查中…" : update.state === "ready" ? "安装更新"
-    : update.state === "available" ? (update.architectureUpgrade ? "升级到 64 位" : "立即升级") : "检查更新";
-  status.textContent = updateStatusText(update);
-  if (updatePollTimer) {
-    clearTimeout(updatePollTimer);
-    updatePollTimer = null;
-  }
-  if (update.state === "checking" || update.state === "downloading") {
-    updatePollTimer = setTimeout(refresh, 700);
-  }
-}
-
-var appUpdateInstalling = false;
-function appUpdateClick() {
-  var update = (state && state.update) || {};
-  if (appUpdateInstalling || update.state === "checking" || update.state === "downloading") return;
-  if (update.state !== "available" && update.state !== "ready") { checkAppUpdate(false); return; }
-  var message = "下载并安装更新到当前网页所在的设备？";
-  if (update.architectureUpgrade) message += "\n\n64 位版本可提升编码性能，但可能会占用更多内存。";
-  if (!window.confirm(message)) return;
-  appUpdateInstalling = true;
-  renderAppUpdate();
-  api("/api/update/install", {}, function (error, result) {
-    appUpdateInstalling = false;
-    if (error) { toast(error.message, true); renderAppUpdate(); return; }
-    if (state) state.update = result.update || {};
-    renderAppUpdate();
-    refresh();
-  });
-}
-
-function checkAppUpdate(automatic) {
-  var button = document.getElementById("appUpdateButton");
-  button.disabled = true;
-  document.getElementById("sysUpdateStatus").textContent = "正在检查最新 Release…";
-  api("/api/update/check", {}, function (error, result) {
-    if (error) {
-      button.disabled = false;
-      document.getElementById("sysUpdateStatus").textContent = "检查失败，点击重试";
-      if (!automatic) toast(error.message, true);
-      return;
-    }
-    if (state) state.update = result.update || {};
-    renderAppUpdate();
-    if (!automatic && result.update && result.update.state !== "checking")
-      toast(updateStatusText(result.update), result.update.state === "error");
-  });
-}
-
 function renderApkTransfer() {
   document.getElementById("apkTransferButton").disabled = apkUploadActive;
   if (!apkUploadActive) {
@@ -211,12 +145,6 @@ function renderSystemInfo() {
   setSystemInfo("sysDisplay", displayText);
   setSystemInfo("sysIpv4", info.lanIpv4);
   setSystemInfo("sysIpv6", info.publicIpv6);
-  setSystemInfo("sysApp", info.app);
-  renderAppUpdate();
-  if (!updateCheckRequested) {
-    updateCheckRequested = true;
-    checkAppUpdate(true);
-  }
 }
 function renderPageState() {
   renderSystemInfo();
@@ -234,14 +162,43 @@ function refreshAppLogs() {
   api("/api/logs?filter=" + encodeURIComponent(document.getElementById("appLogFilter").value), null, function (error, data) {
     if (id !== appLogRequestId) return;
     document.getElementById("appLogText").value = error ? error.message : data.text || "";
-    document.getElementById("appLogNote").textContent = error ? "读取失败，请重试" : data.note + (data.text ? "" : " 当前筛选没有日志。");
+    document.getElementById("appLogNote").textContent = error ? "读取失败，请重试" : data.note + (data.text || data.available === false ? "" : " 当前筛选没有日志。");
   });
 }
-function copyAppLogs() {
-  var box = document.getElementById("appLogText");
-  box.focus(); box.select(); box.setSelectionRange(0, box.value.length);
-  try {
-    if (document.execCommand("copy")) { toast("日志已复制"); return; }
-  } catch (ignored) {}
-  toast("已选中日志，可长按复制");
+function saveAppLogs() {
+  location.href = "/api/logs?filter="
+    + encodeURIComponent(document.getElementById("appLogFilter").value) + "&download=1";
+}
+
+// User-initiated copy; insecure LAN and legacy WebKit use execCommand.
+function copySystemAddress(id) {
+  var node = document.getElementById(id), value = node ? node.textContent.replace(/^\s+|\s+$/g, "") : "";
+  if (!value || value === "无" || value === "未知" || /读取/.test(value)) {
+    toast("暂无可复制的IP地址", true); return;
+  }
+  value = value.replace(/[、，,]\s*/g, "\n");
+  function fallback() {
+    var input = document.createElement("textarea"), previous = document.activeElement, copied = false;
+    input.value = value; input.setAttribute("readonly", "readonly");
+    input.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;font-size:16px";
+    document.body.appendChild(input);
+    try {
+      input.select();
+      if (input.setSelectionRange) input.setSelectionRange(0, value.length);
+      copied = document.execCommand("copy");
+    } catch (ignored) {}
+    document.body.removeChild(input);
+    if (previous && previous.focus) previous.focus();
+    toast(copied ? "IP地址已复制" : "复制失败，请长按地址复制", !copied);
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    try { navigator.clipboard.writeText(value).then(function () { toast("IP地址已复制"); }, fallback); }
+    catch (ignored) { fallback(); }
+  } else fallback();
+}
+function systemAddressKey(event, id) {
+  var key = event.key || event.keyCode;
+  if (key === "Enter" || key === " " || key === 13 || key === 32) {
+    event.preventDefault(); copySystemAddress(id);
+  }
 }

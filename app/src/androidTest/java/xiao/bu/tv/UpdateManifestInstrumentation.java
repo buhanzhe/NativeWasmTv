@@ -13,10 +13,12 @@ public final class UpdateManifestInstrumentation extends Instrumentation {
     private volatile String primaryBody = "{\"versionCode\":7}";
     private volatile String lastRequest;
     private boolean live;
+    private boolean install;
     private static final String LEGACY = "{\"versionCode\":6}";
 
     @Override public void onCreate(Bundle args) {
         live=args!=null && "true".equals(args.getString("live"));
+        install=args!=null && "true".equals(args.getString("install"));
         super.onCreate(args); start();
     }
     private void check(boolean ok, String message) { if (!ok) throw new AssertionError(message); }
@@ -98,6 +100,29 @@ public final class UpdateManifestInstrumentation extends Instrumentation {
             Object info = load.invoke(updater, "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version-lite.json", true);
             check(info != null, "Live metadata parsed");
             pass("live GitHub accelerated release check and architecture-specific metadata parsing");
+            if (install) {
+                android.content.Intent intent = new android.content.Intent(getTargetContext(), MainActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                android.app.Activity activity = startActivitySync(intent);
+                AutoUpdater deviceUpdater = new AutoUpdater(activity);
+                Object deviceInfo = load.invoke(deviceUpdater,
+                        "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/version-lite.json", false);
+                java.lang.reflect.Field updateField = AutoUpdater.class.getDeclaredField("liteUpdate");
+                updateField.setAccessible(true); updateField.set(deviceUpdater, deviceInfo);
+                java.lang.reflect.Field stateField = AutoUpdater.class.getDeclaredField("liteState");
+                stateField.setAccessible(true); stateField.set(deviceUpdater, "available");
+                deviceUpdater.installLiteUpdate();
+                long deadline = System.currentTimeMillis() + 120000;
+                while ("downloading".equals(deviceUpdater.stateJson().optString("state"))
+                        && System.currentTimeMillis() < deadline) Thread.sleep(250);
+                check("ready".equals(deviceUpdater.stateJson().optString("state")),
+                        "Real APK download/install handoff failed: " + deviceUpdater.stateJson());
+                waitForIdleSync();
+                check(!deviceUpdater.stateJson().optString("message").contains("无法打开"),
+                        "Installer could not open");
+                pass("real latest APK download, SHA-256/package validation and system installer handoff; "
+                        + "same-version reinstall intentionally bypasses only the availability gate");
+            }
             }
             result.putString("stream", "ALL UPDATE MANIFEST CHECKS PASSED\n");
         } catch (Throwable error) { status = 0; result.putString("stream", android.util.Log.getStackTraceString(error)); }

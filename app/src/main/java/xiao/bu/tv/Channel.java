@@ -334,6 +334,18 @@ final class Channel {
         return urls.length;
     }
 
+    String sourceLabel(int index) {
+        String value = sourceUrl(index);
+        int separator = value == null ? -1 : value.indexOf('$');
+        return separator < 0 ? "" : value.substring(separator + 1).trim();
+    }
+
+    String sourceDisplayName(int index) {
+        String label = sourceLabel(index);
+        int count = Math.max(1, sourceCount());
+        return label.length() > 0 ? label : "线路" + ((index % count + count) % count + 1);
+    }
+
     String sourceUrl(int index) {
         if (urls.length == 0) {
             return null;

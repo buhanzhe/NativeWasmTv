@@ -19,6 +19,8 @@ METHOD
   }catch(JSONException e){if(valid)throw new AssertionError(file,e);}
  }
  public static void main(String[] args)throws Exception {
+  if(supportsArm64(null)||supportsArm64(new String[]{"x86_64"})
+    ||!supportsArm64(new String[]{"arm64-v8a"}))throw new AssertionError("ARM64 compatibility");
   verify("nTv.apk","nTv.apk","网页电视32位.apk",true);
   verify("ntv.apk","nTv.apk","网页电视32位.apk",true);
   verify("ntv64.apk","nTv64.apk","网页电视64位.apk",true);
@@ -39,14 +41,19 @@ with tempfile.TemporaryDirectory() as folder:
     subprocess.run([str(jdk/'javac.exe'), '-encoding', 'UTF-8', '-d', folder, str(tmp/'AssetCheck.java'), str(tmp/'JSONException.java')], check=True)
     subprocess.run([str(jdk/'java.exe'), '-cp', folder, 'xiao.bu.tv.AssetCheck'], check=True)
 
-names = ['nTv.apk', 'nTv64.apk', 'nTvX86.apk']
+names = ['ntv_bro.apk', 'nTv.apk', 'nTv64.apk', 'nTvX86.apk']
 script = (root/'scripts/build-release.ps1').read_text('utf-8-sig')
 gradle = (root/'app/build.gradle').read_text('utf-8')
 assert re.findall(r"Name = '(.*\.apk)'", script) == names
 for name in names:
-    assert "= '" + name + "'" in gradle
+    assert '\"' + name + '\"' in gradle
 manifest = json.loads((root/'version-lite.json').read_text('utf-8'))
-assert [manifest[key].rsplit('/',1)[-1] for key in ['apk32Url','apk64Url','apkX86Url']] == names
+# The checked-in manifest describes the published release. Older releases may
+# predate bro; only the build/export checks below require the new bro fields.
+for key, name in zip(['apkBroUrl','apk32Url','apk64Url','apkX86Url'], names):
+    if key == 'apkBroUrl' and key not in manifest:
+        continue
+    assert manifest[key].rsplit('/',1)[-1] == name, (key, name)
 if os.name == 'nt':
     # Execute the production copy/rename steps over existing lowercase files.
     # Get-Item echoes requested casing; enumerate real directory entries instead.
@@ -63,4 +70,30 @@ if os.name == 'nt':
             subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',command],check=True)
             assert name in [p.name for p in output.iterdir()], name
             assert (output/name).read_bytes()==b'new apk'
-print('PASS release script, manifest and updater asset names; case aliases and ABI rejection')
+    # Exercise the production export gate with stale hashes/versions, including
+    # the deliberate difference between startup code 6 and actual APK code 9.
+    start = script.index('foreach ($manifestPath in @($liteVersionPath, $versionPath, $legacyVersionPath))')
+    end = script.index('Copy-Item -LiteralPath $liteVersionPath', start)
+    gate = script[start:end]
+    with tempfile.TemporaryDirectory(prefix='ntv-manifests-') as folder:
+        paths = [Path(folder)/name for name in ['version-lite.json','version.json','version-iptv.json']]
+        original = dict(versionCode=9, versionName='1.8.1', sha256='a',
+                        sha25632='a', sha25664='b', sha256X86='c', sha256Bro='d')
+        setup = "$ErrorActionPreference='Stop';\n"
+        for var, path in zip(['liteVersionPath','versionPath','legacyVersionPath'], paths):
+            setup += "$" + var + "='" + str(path).replace("'", "''") + "';\n"
+        for var, sha in [('arm32Result','a'),('arm64Result','b'),('x86Result','c'),('broResult','d')]:
+            setup += "$"+var+"=[pscustomobject]@{SHA256='"+sha+"';VersionCode=9;VersionName='1.8.1';APK='test.apk'};\n"
+        for case in ['valid','stale_hash','stale_browser_hash','wrong_name','wrong_lite_code','wrong_startup_code']:
+            for i, path in enumerate(paths):
+                data = dict(original, versionCode=9 if i == 0 else 6)
+                if case == 'stale_hash' and i == 2: data['sha256'] = 'old'
+                if case == 'stale_browser_hash' and i == 0: data['sha256Bro'] = 'old'
+                if case == 'wrong_name' and i == 1: data['versionName'] = 'old'
+                if case == 'wrong_lite_code' and i == 0: data['versionCode'] = 8
+                if case == 'wrong_startup_code' and i == 1: data['versionCode'] = 9
+                path.write_text(json.dumps(data), encoding='utf-8')
+            run = subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',setup+gate],
+                                 capture_output=True, text=True)
+            assert (run.returncode == 0) == (case == 'valid'), (case, run.stderr)
+print('PASS release assets, ABI selection and manifest export gates (hashes, versions, startup threshold)')

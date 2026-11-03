@@ -1,0 +1,57 @@
+#systemInfoPage .config-hero{padding:14px 2px 4px;margin-bottom:2px}
+#systemInfoPage .config-hero h2{color:#1c1c1e;font-size:28px!important;line-height:1.25;letter-spacing:-.6px!important}
+#systemInfoPage .config-hero p{max-width:290px;color:#929298;font-size:12px;line-height:1.7}
+body:not(.media-page-shell) #systemInfoPage section:not(.config-hero){padding:0;margin-top:26px;background:transparent;border:0;border-radius:0}
+#systemInfoPage .section-head{display:block;margin:0;padding:0 16px 9px}
+#systemInfoPage .section-head h2{margin:0;color:#8e8e93;font-size:13px;line-height:1.4;font-weight:400}
+#systemInfoPage .system-info-list{padding:0 16px;border:0;border-radius:14px;background:#fff}
+#systemInfoPage .system-info-row{display:table;table-layout:fixed;width:100%;min-height:0;padding:16px 0;border:0;border-top:1px solid #eeeef1;border-radius:0;background:transparent}
+#systemInfoPage .system-info-row:first-child{border-top:0}
+#systemInfoPage .system-info-row>span,#systemInfoPage .system-info-row>b{display:table-cell;vertical-align:middle;float:none;white-space:normal;font-weight:400;line-height:1.5}
+#systemInfoPage .system-info-row>span{width:39%;font-size:14px;color:#262628;text-align:left}
+#systemInfoPage .system-info-row>b{width:61%;max-width:none;font-size:13px;color:#929298;text-align:right;word-wrap:break-word;word-break:break-all}
+#systemInfoPage .system-update-row{cursor:pointer;min-height:78px;font:inherit}
+#systemInfoPage .system-update-row>span small{font-size:10px;color:#aaaab0;font-weight:400;margin-top:4px}
+#systemInfoPage .system-update-row>b{display:table-cell}
+#systemInfoPage .system-update-row #sysApp{display:block;font-size:13px;line-height:1.5;color:#929298}
+#systemInfoPage .system-update-row .app-update-action{display:inline-block;margin:3px 0 0;padding:0;color:#007aff;background:transparent;border-radius:0;font-size:12px;line-height:1.5;font-weight:400}
+#systemInfoPage .system-update-row:active{background:#fafafa}
+#systemInfoPage .system-info-note,#systemInfoPage #apkTransferHint{margin:9px 16px 0;font-size:11px;line-height:1.7;color:#96969c}
+#systemInfoPage .actions{display:block;margin:0}
+#systemInfoPage #apkTransferButton,#systemInfoPage #appLogsOpen{display:block;position:relative;width:100%;margin:0;padding:16px;text-align:left;border:0;border-radius:14px;background:#fff;color:#007aff;font-size:14px;line-height:1.5;font-weight:400;min-height:53px}
+#systemInfoPage #apkTransferButton:after,#systemInfoPage #appLogsOpen:after{content:"›";position:absolute;right:16px;top:14px;color:#c7c7cc;font-size:22px;font-weight:400;line-height:24px}
+#systemInfoPage #appLogsPanel{margin-top:10px;padding:14px;border:0;border-radius:14px;background:#fff}
+#systemInfoPage .app-log-toolbar{display:table;width:100%;table-layout:fixed;margin:0 0 12px}
+#systemInfoPage .app-log-toolbar select{display:table-cell;width:56%;min-height:36px;padding:5px 8px;font-size:12px;border-color:#eeeef1;background-color:#f6f6f9}
+#systemInfoPage .app-log-toolbar button{display:table-cell;width:20%;margin:0 0 0 2%;padding:5px 0;min-height:36px;border:0;background:#f6f6f9;color:#007aff;font-size:12px}
+#systemInfoPage #appLogText{height:220px!important;display:block;padding:12px;border:0;border-radius:8px;background:#f6f6f9!important;color:#727278!important;line-height:1.8!important;resize:vertical;-webkit-appearance:none}
+#systemInfoPage #appLogNote{margin:9px 0 0;font-size:11px;color:#96969c}
+@media(max-width:360px){#systemInfoPage .system-info-row>span{font-size:13px}
+#systemInfoPage .system-info-row>b{font-size:12px}
+}
+#systemInfoPage #appUpdateButton{display:block;position:relative;min-height:78px}
+#systemInfoPage #appUpdateButton>span{display:block;width:40%;text-align:left}
+#systemInfoPage #appUpdateButton>b{display:block;position:absolute;right:0;top:50%;margin-top:-22px;width:60%;max-width:60%;text-align:right}
+#systemInfoPage .system-info-row>b{white-space:pre-line;word-wrap:break-word;word-break:normal;overflow-wrap:break-word}
+#systemInfoPage .system-info-row>span{width:34%}
+#systemInfoPage .system-info-row>b{width:66%}
+#systemInfoPage .webview-info-row>b,#systemInfoPage #sysIpv6{word-break:break-all;line-height:1.7}
+#systemInfoPage #sysCpu,#systemInfoPage #sysDisplay{line-height:1.7}
+#systemInfoPage #appUpdateButton{min-height:88px}
+#systemInfoPage #appUpdateButton>b{width:66%;max-width:66%;margin-top:-27px}
+#systemInfoPage #sysApp{word-break:normal;white-space:normal}
+#systemInfoPage .webview-info-row>b{word-break:normal;overflow-wrap:break-word;white-space:pre-line;font-size:12px}
+#systemInfoPage #sysIpv6{white-space:pre-line;font-size:12px}
+#systemInfoPage #appLogsPanel .app-log-toolbar{display:block;position:relative;width:100%;height:36px;min-height:36px;margin:0 0 12px;padding:0 148px 0 0}
+#systemInfoPage #appLogsPanel .app-log-toolbar select{display:block;width:100%;height:36px;min-height:36px;margin:0;padding:5px 8px;box-sizing:border-box}
+#systemInfoPage #appLogsPanel .app-log-toolbar button{display:block;position:absolute;top:0;right:0;width:66px;height:36px;min-height:36px;margin:0;padding:0;line-height:36px;box-sizing:border-box}
+#systemInfoPage #appLogsPanel .app-log-toolbar button:first-of-type{right:74px}
+html[data-theme="dark"] #systemInfoPage .system-info-list,html[data-theme="dark"] #systemInfoPage #apkTransferButton,html[data-theme="dark"] #systemInfoPage #appLogsOpen,html[data-theme="dark"] #systemInfoPage #appLogsPanel{background:#1c1c1e}
+html[data-theme="dark"] #systemInfoPage .system-info-row{border-color:#38383a}
+html[data-theme="dark"] #systemInfoPage .system-info-row>span{color:#f2f2f7}
+html[data-theme="dark"] #systemInfoPage #apkTransferButton,html[data-theme="dark"] #systemInfoPage #appLogsOpen{color:#409cff}
+html[data-theme="dark"] #systemInfoPage #appLogText{background:#2c2c2e!important;color:#c7c7cc!important}
+html[data-theme="dark"] #systemInfoPage .app-log-toolbar select,html[data-theme="dark"] #systemInfoPage .app-log-toolbar button{background:#2c2c2e;color:#409cff}
+
+#systemInfoPage .copy-address-row{cursor:pointer}
+#systemInfoPage .copy-address-row:focus{outline:2px solid #64adff;outline-offset:-2px}

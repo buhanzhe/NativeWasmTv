@@ -31,6 +31,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
+            android:singleLine="true"
+            android:marqueeRepeatLimit="marquee_forever"
             android:maxLines="1"
             android:includeFontPadding="false"
             android:textStyle="bold"

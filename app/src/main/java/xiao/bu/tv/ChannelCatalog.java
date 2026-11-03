@@ -519,6 +519,8 @@ final class ChannelCatalog {
 
     static final class Group {
         final String title;
+        final String displayTitle;
+        final String password;
         final int source;
         final Channel[] channels;
         final String playlistSourceId;
@@ -530,6 +532,9 @@ final class ChannelCatalog {
 
         Group(String title, int source, Channel[] channels, String sourceId, String sourceName) {
             this.title = title;
+            GroupPassword protection = new GroupPassword(title, source == SOURCE_CUSTOM);
+            this.displayTitle = protection.title;
+            this.password = protection.password;
             this.source = source;
             this.channels = nonNullChannels(channels);
             this.playlistSourceId = sourceId == null ? "" : sourceId;

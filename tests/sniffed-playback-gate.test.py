@@ -15,10 +15,12 @@ def method(name):
         end += 1
     return source[begin:end]
 
-guard = method('void startSniffedResource(')
+guard = method('void startSniffedResource(SniffedResource resource, boolean automatic)')
 guard = guard[:guard.index('        Channel channel = currentChannel();')] + '        opened++;\n    }'
+guard = method('void startSniffedResource(SniffedResource resource)')+'\n'+guard
 callback = method('void probeSniffedResource(')
 hls = method('static boolean isHttpHlsSource(')
+recovery = method('boolean returnFromFailedSniffedPlayback(')
 
 harness = r'''import java.util.*;
 class SniffedGateCheck {
@@ -32,24 +34,42 @@ static class Probe {
  Callback callback;
  void submit(String u,String p,String a,String c,Callback cb){callback=cb;}
 }
-static class Web {String key="1:1";boolean visible=true;boolean hasRetainedPage(){return true;}
+static class Web {int fullscreen;void showPlaybackFullscreen(){fullscreen++;}String key="1:1";boolean visible=true;boolean hasRetainedPage(){return true;}
  boolean isPageVisible(){return visible;}String currentResourcePageKey(){return key;}}
 static class Toast {static final int LENGTH_SHORT=0,LENGTH_LONG=1;static String text;
  static Toast makeText(Object c,String t,int duration){text=t;return new Toast();}void show(){}}
-static class Log {static void i(String t,String message){}}
+static class Log {static void i(String t,String message){}static void w(String t,String message){}}
 Map<String,SniffedResource> sniffedResources=new HashMap<>();Object sniffedResourcesSnapshot;
-SniffedResource pendingSniffedResource;String pendingSniffedPageKey="";
+SniffedResource pendingSniffedResource;String pendingSniffedPageKey="";boolean pendingSniffedAutomatic;
 Probe sniffedMediaProbe=new Probe();Web webSourceView=new Web();int playRequestId=1,opened;
-boolean finishing;boolean isFinishing(){return finishing;}
+int webOriginalFallbackRequestId=-1;boolean finishing;boolean isFinishing(){return finishing;}
+Runnable liteWebFallback;boolean playingDiscoveredWebStream,playingSniffedAutomatic,restore=true;
+boolean retryLegacyGdtvPlayback(String reason){return false;}
+SniffedResource playingSniffedResource;String playingSniffedTitle="test";
+void cancelSniffedOpenTimeout(){}void cancelCustomSourceTimeout(){}void abortChannelSwitchAnimation(){}
+boolean canReturnToSniffedPage(){return true;}void closeChannelList(){}void closeManagementPanel(){}
+boolean restoreSniffedWebPage(){playingSniffedAutomatic=false;return restore;}
+void clearPendingPlayer(){}void releasePlayer(){}void hideLoading(){}void showChannelBar(String a,String b){}
 void runOnUiThread(Runnable task){task.run();}
 SniffedResource findSniffedResource(String url){return sniffedResources.get(url);}
 GUARD
 CALLBACK
 HLS
+RECOVERY
 SniffedResource prepare(){SniffedResource r=new SniffedResource();sniffedResources.put(r.url,r);probeSniffedResource(r);return r;}
 static Result result(String status,String error){Result r=new Result();r.status=status;r.error=error;return r;}
 static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
 public static void main(String[] args){
+ Toast.text="";
+ SniffedGateCheck auto=new SniffedGateCheck();SniffedResource failed=auto.prepare();auto.startSniffedResource(failed,true);
+ auto.sniffedMediaProbe.callback.complete(result("unavailable","资源连接或格式解析失败"));
+ check(Toast.text.equals("")&&auto.opened==0&&auto.webOriginalFallbackRequestId==auto.playRequestId,"automatic failure interrupted web playback");
+ failed.metadata=result("ready","");auto.startSniffedResource(failed,true);check(auto.opened==0,"late automatic retry ignored fallback latch");
+ auto.startSniffedResource(failed);check(auto.opened==1,"explicit manual selection blocked by automatic fallback");
+ auto.playingDiscoveredWebStream=true;auto.playingSniffedResource=failed;auto.playingSniffedAutomatic=true;Toast.text="";
+ check(auto.returnFromFailedSniffedPlayback("failed")&&Toast.text.equals(""),"automatic native fallback showed toast over web playback");
+ auto.playingSniffedAutomatic=false;auto.returnFromFailedSniffedPlayback("manual failure");check(Toast.text.contains("manual failure"),"manual native failure lost reason");
+ auto.playingSniffedAutomatic=true;auto.restore=false;auto.returnFromFailedSniffedPlayback("page gone");check(Toast.text.contains("page gone"),"total failure was silently hidden");
  SniffedGateCheck s=new SniffedGateCheck();SniffedResource r=s.prepare();s.startSniffedResource(r);
  check(s.opened==0&&s.pendingSniffedResource==r,"pending probe opened player");
  s.sniffedMediaProbe.callback.complete(result("unavailable","HTTP 404：资源不存在或链接已失效"));
@@ -69,10 +89,10 @@ public static void main(String[] args){
  next.url="https://cdn.test/next.m3u8";s.sniffedResources.put(next.url,next);s.startSniffedResource(next);
  s.sniffedMediaProbe.callback.complete(result("ready",""));check(s.opened==0&&s.pendingSniffedResource==next,"replaced choice opened player");
  s=new SniffedGateCheck();r=s.prepare();r.metadata=result("unavailable","HTTP 403：服务器拒绝访问");s.startSniffedResource(r);
- check(s.opened==0&&Toast.text.contains("HTTP 403"),"403 lost reason or opened player");
+ check(s.opened==0&&s.webSourceView.fullscreen==1&&s.webOriginalFallbackRequestId==s.playRequestId&&Toast.text.contains("HTTP 403"),"403 lost reason or opened player");
  System.out.println("PASS failed/pending/ready resources, HTTP reasons, stale channel/tab, hidden page, teardown and replaced selection");
 }
-}'''.replace('GUARD', guard).replace('CALLBACK', callback).replace('HLS', hls)
+}'''.replace('GUARD', guard).replace('CALLBACK', callback).replace('HLS', hls).replace('RECOVERY',recovery)
 jdk = Path(os.environ.get('JAVA_HOME','C:/Users/Administrator/.jdks/corretto-1.8.0_492'))/'bin'
 with tempfile.TemporaryDirectory(prefix='ntv-sniffed-gate-') as directory:
     file = Path(directory)/'SniffedGateCheck.java'

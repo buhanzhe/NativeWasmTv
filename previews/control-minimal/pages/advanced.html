@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+<script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>高级设置 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=night-hairline1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body data-parent="/index.html">
+    <main class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">高级设置</div>
+        <div class="online"><span class="dot"></span><span>连接中</span></div>
+      </div>
+      <section>
+        <h2>网页外观</h2>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="pageTheme">显示模式</label></div>
+<select id="pageTheme" onchange="setPageTheme(this.value)">
+            <option value="system" selected>跟随系统</option>
+            <option value="light">日间模式</option>
+            <option value="dark">夜间模式</option>
+          </select>
+</div>
+      </section>
+      <section>
+        <h2>操作与启动</h2>
+        <div class="switch-row">
+          <div class="switch-copy"><b>全屏启动</b><div class="hint">关闭后仍隐藏顶部状态栏</div></div>
+          <input id="fullscreenStartup" aria-label="全屏启动" type="checkbox" disabled onchange="saveFullscreenStartup()" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy">
+            <b>反转上下键</b>
+            <div class="hint">上键下一频道，下键上一频道</div>
+          </div>
+          <input id="reverse" aria-label="反转上下键" type="checkbox" onchange="saveReverse()" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>后台播放</b><div class="hint">默认开启；切到桌面后继续播放，关闭后返回应用再恢复</div></div>
+          <input id="backgroundPlayback" aria-label="后台播放" type="checkbox" checked disabled onchange="saveBackgroundPlayback()" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy">
+            <b>开机自启动</b>
+            <div class="hint">开机后进入电视；管理端口从 9966 起自动顺延</div>
+          </div>
+          <input id="autoStart" aria-label="开机自启动" type="checkbox" onchange="saveAutoStart()" />
+        </div>
+      </section>
+      <section>
+        <h2>网络</h2>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="dnsMode">DNS 服务</label></div>
+<select id="dnsMode" onchange="saveDns()">
+            <option value="ali">阿里 DNS</option>
+            <option value="tencent">腾讯 DNS</option>
+            <option value="114">114 DNS</option>
+            <option value="baidu">百度 DNS</option>
+            <option value="system">系统 DNS</option>
+          </select>
+</div>
+        <p class="hint">切换后会重新建立当前播放连接。</p>
+      </section>
+      <section>
+        <h2>GitHub 连接</h2>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="githubConnectionMode">连接方式</label></div>
+<select id="githubConnectionMode" onchange="changeGithubConnectionMode()">
+            <option value="https://gh-proxy.org/">gh-proxy.org</option>
+            <option value="https://gh-proxy.com/">gh-proxy.com</option>
+            <option value="https://ghfile.geekertao.top/">ghfile.geekertao.top</option>
+            <option value="https://github-proxy.memory-echoes.cn/">github-proxy.memory-echoes.cn</option>
+            <option value="https://github.tbap.top/">github.tbap.top</option>
+            <option value="direct">直连 GitHub</option>
+            <option value="custom">自定义…</option>
+          </select>
+</div>
+        <div id="githubProxyCustom" style="display:none">
+          <div class="field">
+            <label for="githubProxyUrl">自定义网址</label>
+            <input id="githubProxyUrl" type="url" inputmode="url" maxlength="1024"
+              autocapitalize="off" spellcheck="false" placeholder="https://gh-proxy.org/" />
+          </div>
+          <div class="actions"><button id="githubProxySave" onclick="saveGithubProxy()">保存</button></div>
+        </div>
+        <p class="hint">选择后自动保存，加速站连接失败时自动尝试备用站。</p>
+      </section>
+      <section>
+        <h2>解码兼容</h2>
+        <div class="grid compact-select-grid">
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="playerEngine">播放器</label></div>
+<select id="playerEngine" disabled onchange="savePlayerEngine()">
+              <option value="ijk">定制 IJK</option>
+              <option value="system">系统播放器</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="decoder">解码模式</label></div>
+<select id="decoder" onchange="saveDecoder()">
+              <option value="auto">自动</option>
+              <option value="hardware">仅硬解</option>
+              <option value="software">软解</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="hardwareDecoder">硬解解码器</label></div>
+<select id="hardwareDecoder" onchange="saveDecoder()">
+              <option value="auto">自动选择</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="hdrMode">HDR 模式</label></div>
+<select id="hdrMode" onchange="saveHdrMode()">
+              <option value="hardware">自动</option>
+              <option value="mapping">转 SDR</option>
+              <option value="bt709">强制 BT.709</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="rtspTransport">RTSP 传输协议</label></div>
+<select id="rtspTransport" onchange="saveDecoder()">
+              <option value="tcp">TCP（稳定）</option>
+              <option value="udp">UDP（低延迟）</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="spsCompatibility">SPS兼容</label></div>
+<select id="spsCompatibility" onchange="saveDecoder()">
+              <option value="true">开启（修复）</option>
+              <option value="false">关闭（原始码流 A/B）</option>
+            </select>
+</div>
+        </div>
+        <p class="hint">不兼容时可切换播放器或解码模式；更改部分设置后会重新播放。</p>
+        <p id="systemPlayerHint" class="hint" style="display:none">系统播放器下，IJK设置不生效。</p>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <script src="/js/navigation.js?v=20261027-personalization"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/advanced.js?v=fullscreen-startup1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

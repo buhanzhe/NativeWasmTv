@@ -101,7 +101,7 @@ final class PlaylistManager {
                         .put("name", "网页测试")
                         .put("url", BuildConfig.RECOMMENDED_TEST_SOURCE_URL))
                 .put(new JSONObject()
-                        .put("name", "网页电视台")
+                        .put("name", "网页电视大全")
                         .put("url", getRecommendedWebViewUrl()));
     }
 
@@ -149,7 +149,7 @@ final class PlaylistManager {
 
     synchronized ChannelCatalog.Group[] updateGroupOrder(JSONArray order) throws IOException {
         if (order == null || order.length() != managementGroups.length)
-            throw new IOException("频道分组已变化，请刷新后重试");
+            throw new ControlRequestException(409, "频道分组已变化，请刷新后重试");
         Set<String> available = new HashSet<String>();
         for (ChannelCatalog.Group group : managementGroups) available.add(mergedGroupId(group));
         for (int i = 0; i < order.length(); i++)
@@ -185,7 +185,7 @@ final class PlaylistManager {
             JSONObject state = states.optJSONObject(i);
             if (state == null) continue;
             String id = state.optString("id");
-            if (!available.contains(id)) throw new IOException("频道分组已变化，请刷新后重试");
+            if (!available.contains(id)) throw new ControlRequestException(409, "频道分组已变化，请刷新后重试");
             if (state.optBoolean("enabled", true)) disabled.remove(id);
             else disabled.add(id);
         }
@@ -404,6 +404,7 @@ final class PlaylistManager {
                 if (!isLocalLocation(source.location) && read.metadata != null) {
                     saveCacheMetadata(source, read.metadata);
                 }
+                bytes = new TvbusLiveConfig(context).expand(bytes, source.location, true);
             } catch (IOException error) {
                 if (!isLocalLocation(source.location)) {
                     try {
@@ -471,6 +472,11 @@ final class PlaylistManager {
 
     UpdateResult applyMobileMerge(JSONArray input, byte[] playlist, JSONArray sourcePlaylists)
             throws IOException, JSONException {
+        return applyMobileMerge(input,playlist,sourcePlaylists,null);
+    }
+
+    UpdateResult applyMobileMerge(JSONArray input, byte[] playlist, JSONArray sourcePlaylists,
+            JSONArray failedSourceIds) throws IOException, JSONException {
         if (playlist == null || playlist.length == 0) {
             throw new IOException("手机合并后的频道配置为空");
         }
@@ -478,6 +484,10 @@ final class PlaylistManager {
         // Keep source boundaries. A flattened phone merge cannot reconstruct which
         // parent owns a group after restart, or when two sources share its title.
         if (sourcePlaylists != null) {
+            Map<String,JSONArray> structured = new HashMap<>();
+            Set<String> failed = stringSet(failedSourceIds);
+            List<Source> previous = getSources();
+            List<String> warnings = new ArrayList<String>();
             List<LoadedSource> fetched = new ArrayList<LoadedSource>();
             List<ChannelCatalog.Group[]> loaded = new ArrayList<ChannelCatalog.Group[]>();
             appendBuiltInGroups(loaded);
@@ -490,17 +500,49 @@ final class PlaylistManager {
                     JSONObject item = sourcePlaylists.optJSONObject(index);
                     if (item != null && source.id.equals(item.optString("id"))) {
                         bytes = item.optString("playlist", "").getBytes("UTF-8");
+                        if(item.has("channels"))structured.put(source.id,item.getJSONArray("channels"));
                         break;
                     }
                 }
-                if (bytes == null || bytes.length == 0)
-                    throw new IOException(source.name + " 未读取成功，已保留上次频道列表");
-                loaded.add(parseSource(bytes, source));
+                if (bytes == null || bytes.length == 0) {
+                    if (!failed.contains(source.id))
+                        throw new ControlRequestException(400, source.name + " 未读取成功，已保留上次频道列表");
+                    // Keep a known source's channels only when its address is
+                    // unchanged. Never attach an old address's cache to a new one.
+                    for (Source old : previous) if (old.id.equals(source.id)
+                            && old.location.equals(source.location)) {
+                        try { bytes=readCache(source); } catch(IOException unavailable) { }
+                        break;
+                    }
+                    warnings.add(source.name + (bytes==null?" 待读取，已保存地址":" 更新失败，已保留缓存"));
+                    if(bytes==null||bytes.length==0)continue;
+                }
                 fetched.add(new LoadedSource(source, bytes));
             }
+            if (fetched.isEmpty()) throw new ControlRequestException(400,"没有可用频道源，已保留上次频道列表");
+            List<LoadedSource> identities=new ArrayList<>();
+            for(LoadedSource source:fetched){
+                identities.add(source);
+                if(structured.containsKey(source.source.id))identities.add(new LoadedSource(source.source,structured.get(source.source.id).toString().getBytes("UTF-8")));
+            }
+            String fingerprint = catalogFingerprint(structured.isEmpty()?"mobile-sources":"mobile-json-v1", sources, identities, null);
+            ChannelCatalog.Group[] unchanged = unchangedCatalog(fingerprint);
+            if (unchanged != null) {
+                saveSources(sources);
+                context.deleteFile(MOBILE_MERGED_FILE);
+                rememberEmbeddedEpgUrl(discoverFirstEpgUrl(fetched));
+                return new UpdateResult(rememberAndFilterGroups(unchanged),enabledCount,warnings);
+            }
+            for (LoadedSource source : fetched) {
+                JSONArray channels=structured.get(source.source.id);
+                if(channels==null)loaded.add(parseSource(source.bytes,source.source));
+                else {
+                    ChannelCatalog.Group[] groups=JsonChannelPlaylist.parse(channels,source.source.location);
+                    for(int i=0;i<groups.length;i++)groups[i]=new ChannelCatalog.Group(groups[i].title,groups[i].source,groups[i].channels,source.source.id,source.source.name);
+                    loaded.add(groups);
+                }
+            }
             ChannelCatalog.Group[] raw = merge(loaded);
-            List<Source> previous = getSources();
-            String fingerprint = catalogFingerprint("mobile-sources", sources, fetched, null);
             ChannelCatalog.Group[] visible = persistAndFilterGroups(raw, fingerprint);
             saveSources(sources);
             deleteRemovedCaches(previous, sources);
@@ -508,7 +550,7 @@ final class PlaylistManager {
                 if (!isLocalLocation(source.source.location)) writeCache(source.source, source.bytes);
             context.deleteFile(MOBILE_MERGED_FILE);
             rememberEmbeddedEpgUrl(discoverFirstEpgUrl(fetched));
-            return new UpdateResult(visible, enabledCount, new ArrayList<String>());
+            return new UpdateResult(visible, enabledCount, warnings);
         }
         int enabledCount = 0;
         for (Source source : sources) {
@@ -540,9 +582,14 @@ final class PlaylistManager {
     byte[] readForMobile(String location) throws IOException {
         String value = location == null ? "" : location.trim();
         if (value.length() == 0 || !isSupportedLocation(value)) {
-            throw new IOException("频道源地址无效");
+            throw new ControlRequestException(400, "频道源地址无效");
         }
-        if (isLocalLocation(value)) return readLocal(value);
+        // Uploaded playlists live on the television, so the web editor must use
+        // the same local reader as device refresh. Read again on each refresh;
+        // HTTP metadata and caches do not apply to file/content sources.
+        if (isLocalLocation(value)) {
+            return new TvbusLiveConfig(context).expand(readLocal(value), value, true);
+        }
         Source source = null;
         for (Source configured : getSources()) {
             if (value.equals(configured.location)) {
@@ -560,7 +607,7 @@ final class PlaylistManager {
         if (read.cacheChanged) writeCache(source, read.bytes);
         if (read.metadata != null) saveCacheMetadata(source, read.metadata);
         rememberMobileCache(source);
-        return read.bytes;
+        return new TvbusLiveConfig(context).expand(read.bytes, value, true);
     }
 
     private synchronized ChannelCatalog.Group[] rememberAndFilterGroups(
@@ -666,7 +713,7 @@ final class PlaylistManager {
     private Channel[] managementChannels(String groupId) throws IOException {
         for (ChannelCatalog.Group group : managementGroups)
             if (mergedGroupId(group).equals(groupId)) return group.channels;
-        throw new IOException("频道分组已变化，请刷新后重试");
+        throw new ControlRequestException(409, "频道分组已变化，请刷新后重试");
     }
 
     private static Set<String> stringSet(JSONArray values) {
@@ -749,7 +796,8 @@ final class PlaylistManager {
                 : "child:" + group.playlistSourceId + ":" + groupKey(group.title);
     }
 
-    private static ChannelCatalog.Group[] parseSource(byte[] bytes, Source source) throws IOException {
+    private ChannelCatalog.Group[] parseSource(byte[] bytes, Source source) throws IOException {
+        bytes = new TvbusLiveConfig(context).expand(bytes, source.location, false);
         ChannelCatalog.Group[] groups = parse(bytes, source.location);
         for (int i = 0; i < groups.length; i++) {
             ChannelCatalog.Group group = groups[i];
@@ -757,6 +805,10 @@ final class PlaylistManager {
                     source.id, source.name);
         }
         return groups;
+    }
+
+    JSONObject tvbusCore(String sourceId, String url) throws IOException {
+        return new TvbusLiveConfig(context).find(sourceId == null ? "" : sourceId, url, getSources());
     }
 
     private static ChannelCatalog.Group[] mergeVisible(List<ChannelCatalog.Group[]> sources) {
@@ -1609,7 +1661,7 @@ final class PlaylistManager {
                 String value = line.substring(comma + 1).trim();
                 // Accept empty CSV fields produced by PHP/TXT playlist generators.
                 // Preserve every character inside a real URL (including query commas).
-                value = value.replaceFirst("(?i)^(?:,\\s*)+(?=(?:https?|rtmps?|rtmpt|rtsp|rtp|udp|webview)://)", "");
+                value = value.replaceFirst("(?i)^(?:,\\s*)+(?=(?:https?|rtmps?|rtmpt|rtsp|rtp|udp|tvbus|sop|webview)://)", "");
                 if (value.matches("(?i)#genre#(?:\\s*,\\s*)*")) {
                     currentGroup = name.length() == 0 ? "在线频道" : name;
                 } else if (isStreamUrl(value)) {
@@ -1662,7 +1714,7 @@ final class PlaylistManager {
         bucket.add(incoming.withLogo(logoUrl).withSubtitles(subtitles).withRadio(radio).withCatchup(url,catchup));
     }
 
-    private static String channelNumber(String name, String epgId, int fallback) {
+    static String channelNumber(String name, String epgId, int fallback) {
         String id = epgId == null ? "" : epgId.trim().toUpperCase(Locale.US);
         if (id.startsWith("CCTV") && id.length() > 4) {
             String suffix = id.substring(4);
@@ -1805,7 +1857,7 @@ final class PlaylistManager {
                 || value.startsWith("rtmp://") || value.startsWith("rtmpt://")
                 || value.startsWith("rtmps://")
                 || value.startsWith("rtp://") || value.startsWith("udp://")
-                || value.startsWith("rtsp://")
+                || value.startsWith("rtsp://") || value.startsWith("tvbus://") || value.startsWith("sop://")
                 || value.startsWith("webview://http://")
                 || value.startsWith("webview://https://");
     }

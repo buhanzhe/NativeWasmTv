@@ -7,15 +7,19 @@ import java.util.Map;
 final class ChannelStartupTiming {
     private int request = -1;
     private long started, resolveStarted, resolved, finished, mediaReady, firstData, webReady;
-    private long proxyStarted, proxyReady, opened, prepared, releaseStarted, released, pluginMs;
-    private boolean decrypted;
+    private long proxyStarted, proxyReady, opened, prepared, releaseStarted, released, pluginMs, selected;
+    private long demuxOpened, streamsFound, componentsOpened;
+    private boolean decrypted, progressiveDecryption;
+    private long failedAt = -1;
     private final Map<String, Long> costs = new LinkedHashMap<String, Long>();
 
     synchronized void begin(int id, long now) {
         request = id; started = now;
         resolveStarted = resolved = finished = mediaReady = firstData = webReady = -1;
         proxyStarted = proxyReady = opened = prepared = releaseStarted = released = -1;
-        decrypted = false; pluginMs = 0; costs.clear();
+        demuxOpened = streamsFound = componentsOpened = -1;
+        selected = -1;
+        decrypted = progressiveDecryption = false; failedAt = -1; pluginMs = 0; costs.clear();
     }
     synchronized void plugin(int id, long duration) {
         if (id == request) pluginMs = Math.max(0, duration);
@@ -25,8 +29,11 @@ final class ChannelStartupTiming {
         // Background release can finish after the first frame; other startup fields freeze.
         if ("release-begin".equals(stage) && releaseStarted < 0) releaseStarted = now;
         if ("release-end".equals(stage) && released < 0) released = now;
+        if ("load-failed".equals(stage)) failedAt = now;
+        if ("load-ready".equals(stage) || "load-retry".equals(stage)) failedAt = -1;
         if (finished >= 0) return;
         if ("resolve-begin".equals(stage) && resolveStarted < 0) resolveStarted = now;
+        if ("url-selected".equals(stage) && selected < 0) selected = now;
         if ("web-page-ready".equals(stage) && webReady < 0) webReady = now;
         if ("url-resolved".equals(stage) && resolved < 0) resolved = now;
         if ("proxy-reset-begin".equals(stage) && proxyStarted < 0) proxyStarted = now;
@@ -34,6 +41,9 @@ final class ChannelStartupTiming {
         if (("segments-ready".equals(stage) || "media-ready".equals(stage)) && mediaReady < 0) mediaReady = now;
         if ("first-data".equals(stage) && firstData < 0) firstData = now;
         if ("player-open-requested".equals(stage) && opened < 0) opened = now;
+        if ("player-demux-opened".equals(stage) && demuxOpened < 0) demuxOpened = now;
+        if ("player-streams-found".equals(stage) && streamsFound < 0) streamsFound = now;
+        if ("player-components-opened".equals(stage) && componentsOpened < 0) componentsOpened = now;
         if ("player-prepared".equals(stage) && prepared < 0) prepared = now;
         if ("load-ready".equals(stage)) finished = now;
     }
@@ -46,8 +56,13 @@ final class ChannelStartupTiming {
     }
     synchronized void segment(int id, long downloadMs, long decryptMs, boolean encrypted) {
         cost(id, "下载", downloadMs);
-        if (id != request || finished >= 0 || !encrypted || decryptMs < 0) return;
+        if (id != request || finished >= 0 || progressiveDecryption || !encrypted || decryptMs < 0) return;
         decrypted = true; cost(id, "解密", decryptMs);
+    }
+    synchronized void progressiveDecrypt(int id, long durationMs) {
+        if (id != request || finished >= 0 || durationMs < 0) return;
+        progressiveDecryption = decrypted = true;
+        cost(id, "解密", durationMs);
     }
     private String interval(long from, long to) {
         return from < 0 ? "--" : to < 0 ? "进行中" : Math.max(0, to - from) + "ms";
@@ -67,16 +82,19 @@ final class ChannelStartupTiming {
     }
     synchronized String display(int id) {
         if (id != request) return "加载耗时:--";
-        return "解析:" + interval(resolveStarted, resolved >= 0 ? resolved : webReady)
+        if (failedAt >= 0) return "加载失败 · 总计:" + Math.max(0, failedAt - started) + "ms";
+        return "解析:" + interval(resolveStarted, selected >= 0 ? selected : resolved >= 0 ? resolved : webReady)
                 + " 下载:" + sum("下载")
                 + (decrypted ? " 解密:" + sum("解密") : "")
                 + playbackTiming();
     }
     synchronized String format(int id) {
         if (id != request) return "耗时:--";
+        if (failedAt >= 0) return "加载失败 · 总计:" + Math.max(0, failedAt - started) + "ms";
         String first = (pluginMs > 0 ? "插件:" + pluginMs + "ms " : "")
                 + "前置:" + (resolveStarted < 0 ? "--" : Math.max(0, resolveStarted - started - pluginMs) + "ms")
-                + " 解析:" + interval(resolveStarted, resolved >= 0 ? resolved : webReady) + " 清单Σ:" + sum("清单")
+                + " 解析:" + interval(resolveStarted, selected >= 0 ? selected : resolved >= 0 ? resolved : webReady)
+                + (selected >= 0 ? " 待应用:" + interval(selected, resolved) : "") + " 清单Σ:" + sum("清单")
                 + (costs.containsKey("清单处理") ? " 清单处理Σ:" + sum("清单处理") : "")
                 + " 下载:" + (costs.containsKey("下载") ? sum("下载") : firstData >= 0 ? "进行中" : "--") + (decrypted ? " 解密:" + sum("解密") : "");
         String second = "代理:" + interval(proxyStarted, proxyReady)
@@ -86,6 +104,10 @@ final class ChannelStartupTiming {
                 + (costs.containsKey("失败请求") ? " 失败请求Σ:" + sum("失败请求") : "")
                 + (costs.containsKey("重试") ? " 重试Σ:" + sum("重试") : "")
                 + (costs.containsKey("探测") ? " 探测Σ:" + sum("探测") : "")
+                + (demuxOpened >= 0 ? " 输入:" + interval(opened, demuxOpened)
+                        + " 流探测:" + interval(demuxOpened, streamsFound)
+                        + " 组件:" + interval(streamsFound, componentsOpened)
+                        + " 回调:" + interval(componentsOpened, prepared) : "")
                 + playbackTiming();
         return first + "\n" + second;
     }

@@ -273,7 +273,8 @@ final class AutoUpdater {
         int versionCode = object.getInt("versionCode");
         String versionName = object.getString("versionName").trim();
         boolean architectureUpgrade = allowArchitectureUpgrade
-                && isArm32Build() && supports64Bit();
+                && isArm32Build() && supportsArm64(Build.VERSION.SDK_INT >= 21
+                        ? Build.SUPPORTED_64_BIT_ABIS : null);
         String urlField = architectureUpgrade ? "apk64Url" : BuildConfig.UPDATE_APK_URL_FIELD;
         String shaField = architectureUpgrade ? "sha25664" : BuildConfig.UPDATE_SHA256_FIELD;
         String apkAsset = architectureUpgrade ? "nTv64.apk" : BuildConfig.UPDATE_APK_ASSET;
@@ -292,7 +293,7 @@ final class AutoUpdater {
                 ? "网页电视64位.apk" : "x86".equals(BuildConfig.FLAVOR)
                 ? "网页电视x86.apk" : "网页电视32位.apk";
         apkAsset = validatedApkFilename(apkUrl, apkAsset, displayAsset);
-        if (sha256.length() > 0 && !sha256.matches("[0-9a-f]{64}")) {
+        if (!sha256.matches("[0-9a-f]{64}")) {
             throw new JSONException("Invalid APK SHA-256");
         }
         return new UpdateInfo(versionCode, versionName, apkUrl, sha256, releaseNotes,
@@ -312,6 +313,11 @@ final class AutoUpdater {
         } catch (IOException | IllegalArgumentException error) {
             throw new JSONException("Invalid APK filename");
         }
+    }
+
+    static boolean supportsArm64(String[] abis) {
+        if (abis != null) for (String abi : abis) if ("arm64-v8a".equals(abi)) return true;
+        return false;
     }
 
     private static boolean isArm32Build() {
@@ -424,6 +430,7 @@ final class AutoUpdater {
                     File apk = new File(directory, update.apkAsset
                             .replace(".apk", "-" + update.versionCode + ".apk"));
                     if (apk.isFile() && verifySha256(apk, update.sha256) && isApk(apk)) {
+                        validateUpdatePackage(apk);
                         finishDownload(apk);
                         return;
                     }
@@ -438,6 +445,7 @@ final class AutoUpdater {
                     if (!isApk(partial)) {
                         throw new IOException("下载内容不是有效的 APK");
                     }
+                    validateUpdatePackage(partial);
                     if (apk.exists() && !apk.delete()) {
                         throw new IOException("无法替换旧的更新文件");
                     }
@@ -454,6 +462,7 @@ final class AutoUpdater {
                         liteState = "error";
                         liteMessage = "下载失败：" + readableMessage(error);
                     }
+                    notifyLite();
                     Log.e(TAG, "Update download failed", error);
                     if (partial != null && partial.exists() && !partial.delete()) {
                         Log.w(TAG, "Unable to remove failed partial APK " + partial);
@@ -522,6 +531,7 @@ final class AutoUpdater {
                         }
                     }
                 }
+                if (length >= 0 && total != length) throw new IOException("APK 下载不完整，请重试");
                 output.getFD().sync();
             } finally {
                 try {
@@ -535,12 +545,25 @@ final class AutoUpdater {
         }
     }
 
+    private void validateUpdatePackage(File apk) throws IOException {
+        android.content.pm.PackageInfo info = activity.getPackageManager()
+                .getPackageArchiveInfo(apk.getAbsolutePath(), 0);
+        if (info == null || !activity.getPackageName().equals(info.packageName)) {
+            throw new IOException("更新包与当前应用不匹配，请检查发布文件");
+        }
+        // The manifest code controls prompting; the APK code controls installation.
+        if (info.versionCode < BuildConfig.VERSION_CODE) {
+            throw new IOException("更新包版本低于当前版本，请检查发布文件");
+        }
+    }
+
     private void finishDownload(final File apk) {
         downloadActive = false;
         if ("downloading".equals(liteState)) {
             liteState = "ready";
             liteMessage = "下载完成，请在设备上完成安装";
         }
+        notifyLite();
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -560,6 +583,10 @@ final class AutoUpdater {
         try {
             ApkTransferInstaller.launchInstaller(activity, apk);
         } catch (Exception error) {
+            if ("ready".equals(liteState)) {
+                liteMessage = "无法打开安装器：" + readableMessage(error) + "，可重试安装";
+                notifyLite();
+            }
             Log.e(TAG, "Unable to launch package installer", error);
             Toast.makeText(activity, R.string.update_install_failed, Toast.LENGTH_LONG).show();
         }
@@ -642,9 +669,8 @@ final class AutoUpdater {
 
     private static boolean verifySha256(File file, String expected)
             throws IOException, NoSuchAlgorithmException {
-        if (expected.length() == 0) {
-            Log.w(TAG, "Update manifest has no SHA-256; APK authenticity is not pinned");
-            return true;
+        if (expected == null || !expected.matches("[0-9a-f]{64}")) {
+            return false;
         }
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         InputStream input = new BufferedInputStream(new FileInputStream(file));

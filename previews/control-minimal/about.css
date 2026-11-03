@@ -1,0 +1,23 @@
+#systemAbout.about-link{display:block;position:relative;width:100%;padding:16px;border:0;border-radius:14px;background:#fff;color:#262628;font-size:14px;line-height:1.5;text-decoration:none}
+#systemAbout b{float:right;color:#929298;font-size:13px;font-weight:400}
+#systemAbout i,.about-row i{margin-left:9px;font-size:20px;line-height:16px;color:#c7c7cc;font-style:normal;vertical-align:-1px}
+body:not(.media-page-shell) main#aboutPage .about-identity{text-align:center;background:transparent;margin:24px 0 28px;padding:0}
+.about-monogram{width:56px;height:56px;margin:0 auto 10px;background:#007aff;color:#fff;border-radius:15px;font:bold 40px/56px Arial,sans-serif}
+#aboutPage .about-identity h2{margin:0;font-size:21px;color:#1c1c1e;font-weight:600}
+#aboutPage .about-identity p{margin:5px 0 0;color:#99999f;font-size:12px}
+body:not(.media-page-shell) main#aboutPage .about-card{padding:0 16px;background:#fff;border:0;border-radius:14px;margin-top:20px}
+#aboutPage .about-row{display:table;table-layout:fixed;width:100%;padding:16px 0;margin:0;border:0;border-top:1px solid #eeeef1;border-radius:0;background:transparent;color:#262628;font:14px/1.5 inherit;text-decoration:none;text-align:left}
+#aboutPage .about-row:first-child{border-top:0}
+#aboutPage .about-row>span,#aboutPage .about-row>b{display:table-cell;vertical-align:middle;white-space:normal;font-weight:400}
+#aboutPage .about-row>span{width:35%;font-size:14px}
+#aboutPage .about-row>b{width:65%;font-size:13px;color:#929298;text-align:right;word-wrap:break-word}
+#aboutPage .about-row small{display:block;color:#99999f;font-size:11px;line-height:1.6;margin-top:4px}
+#aboutPage #appUpdateButton{display:block;position:relative;min-height:78px}
+#aboutPage #appUpdateButton>span{display:block;width:65%}
+#aboutPage #appUpdateAction{position:absolute;display:block;right:0;top:27px;width:35%;color:#007aff;font-size:13px;text-align:right}
+#licensesPage .notice-document{font-size:13px;line-height:1.8;word-wrap:break-word}
+#licensesPage .notice-document h2{color:#262628;margin:8px 0 12px;font-size:16px;font-weight:500}
+#licensesPage .notice-document h3{font-size:14px;font-weight:500;margin:24px 0 8px}
+#licensesPage .notice-document p{color:#85858b;white-space:normal}
+html[data-theme="dark"] #systemAbout.about-link,html[data-theme="dark"] body main#aboutPage .about-card{background:#1c1c1e;color:#f2f2f7}
+html[data-theme="dark"] #aboutPage .about-row{color:#f2f2f7;border-color:#38383a}

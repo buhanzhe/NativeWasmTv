@@ -103,12 +103,16 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
             if (expected != null && !expected.equals(stats.getString(key)))
                 throw new AssertionError(key + ": " + stats);
         }
+        if ("true".equals(args.getString("requireHardware"))
+                && media.getVideoDecoder()!=IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC)
+            throw new AssertionError("Hardware decoder fell back; GPU performance result is invalid");
         String actualDecoder = media.getMediaInfo().mVideoDecoderImpl.trim();
         String expectedDecoder = args.getString("expectedDecoder");
         if (expectedDecoder != null && !expectedDecoder.equals(actualDecoder))
             throw new AssertionError("Decoder fallback: " + actualDecoder);
         if (!actualDecoder.equals(stats.getString("videoDecoderName")))
             throw new AssertionError("Actual decoder name: " + stats);
+        if ("true".equals(args.getString("skipUiChecks"))) return stats;
         runOnMainSync(() -> {try {
             field("showDebugInfo").setBoolean(activity,true);
             ((android.view.View)field("channelListPanel").get(activity)).setVisibility(android.view.View.GONE);
@@ -196,8 +200,8 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
             String[] hdrModes=args.getString("hdrModes","mapping,hardware,bt709,mapping").split(",");
             final String seedMode="bt709".equals(hdrModes[0]) ? "mapping" : "bt709";
             String advancedPage=api("/pages/advanced.html",null,200);
-            if(!advancedPage.contains("HDR BT.709") || !advancedPage.contains("硬解软显")
-                    || !advancedPage.contains("hardware_sdr"))
+            if(!advancedPage.contains("强制 BT.709") || !advancedPage.contains("转 SDR")
+                    || advancedPage.contains("<option value=\"hardware_sdr\">"))
                 throw new AssertionError("Advanced page missing HDR settings");
             String originalMode=(String)field("hdrMode").get(activity);
             api("/api/settings",new JSONObject().put("hdrMode","invalid"),500);
@@ -257,7 +261,7 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
                 long startupCacheMs=media.getVideoCachedDuration();
                 HlsProxyServer observedProxy=(HlsProxyServer)field("proxy").get(activity);
                 long start=SystemClock.elapsedRealtime();
-                while(media.getCurrentPosition()<6500) {
+                while(media.getCurrentPosition()<Long.parseLong(args.getString("positionCheckMs","6500"))) {
                     if(!activity.hasWindowFocus())throw new AssertionError("Fixture lost foreground");
                     if(field("player").get(activity)!=media)throw new AssertionError("Fixture player replaced");
                     if(SystemClock.elapsedRealtime()-start>20000)throw new AssertionError(mode+" playback stalled");
@@ -277,6 +281,7 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
                         samples.put(new JSONObject().put("second",second+1)
                                 .put("positionMs",media.getCurrentPosition())
                                 .put("outputFps",IjkStreamMetrics.outputFrameRate(media))
+                                .put("gpuTiming",NativeHdrOutput.performance())
                                 .put("decodeFps",media.getVideoDecodeFramesPerSecond())
                                 .put("tcpBytesPerSecond",media.getTcpSpeed())
                                 .put("videoCacheBytes",media.getVideoCachedBytes())
@@ -350,6 +355,7 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
                                 ? "hardware" : "software")
                         .put("width",media.getVideoWidth()).put("height",media.getVideoHeight())
                         .put("outputFps",fps).put("gpuFrames",frames)
+                        .put("gpuTiming",NativeHdrOutput.performance())
                         .put("captureVisible",colored>=100)
                         .put("videoInfo",videoInfo)
                         .put("positionMs",media.getCurrentPosition()).put("screenshot",file.getAbsolutePath());

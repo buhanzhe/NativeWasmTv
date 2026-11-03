@@ -59,6 +59,7 @@ public final class FlyMouseCursorView extends View {
     private float cursorX = -1f;
     private float cursorY = -1f;
     private boolean cursorVisible;
+    private boolean movementOnly;
     private CursorVisibilityListener cursorVisibilityListener;
     private float castVisualScale = 1f;
     private static final long CLICK_DURATION_MS = 240L;
@@ -127,12 +128,14 @@ public final class FlyMouseCursorView extends View {
             cursorY = getHeight() / 2f;
         }
         resetFeedback();
-        revealCursor();
+        if (movementOnly) hideCursor();
+        else revealCursor();
         invalidateCursorArea();
         stateChanged();
     }
 
     void moveBy(float dx, float dy) {
+        if (movementOnly && dx == 0f && dy == 0f) return;
         ensurePosition();
         invalidateCursorArea();
         long now = SystemClock.uptimeMillis();
@@ -152,7 +155,7 @@ public final class FlyMouseCursorView extends View {
             fastMotionMs = 0L;
         }
         lastMoveAt = now;
-        revealCursor();
+        showCursor();
         // MainActivity batches movement on VSYNC. Draw exactly the coordinates
         // dispatched to the browser, not a second independently animated cursor.
         // The tip must also reach controls at the very edge of the screen.
@@ -343,7 +346,22 @@ public final class FlyMouseCursorView extends View {
         setCursorVisible(false);
     }
 
+    void setMovementOnly(boolean enabled) {
+        if (movementOnly == enabled) return;
+        movementOnly = enabled;
+        if (enabled) hideCursor();
+    }
+
+    boolean isMovementOnly() { return movementOnly; }
+
     void revealCursor() {
+        // Clicks and lifecycle resets must not wake a hidden pointer over a
+        // minimal web channel. Actual fly-mouse movement calls showCursor().
+        if (movementOnly && !cursorVisible) return;
+        showCursor();
+    }
+
+    private void showCursor() {
         setCursorVisible(true);
         lastInteractionAt = SystemClock.uptimeMillis();
         if (!idleCheckPosted) {

@@ -19,16 +19,11 @@ final class HlsProbeFailure {
             String line = raw.trim();
             String tag = line.toLowerCase(Locale.US);
             if (line.startsWith("#EXT-X-KEY:") || line.startsWith("#EXT-X-SESSION-KEY:")) {
-                if (tag.contains("edef8ba9") || tag.contains("widevine")) return "Widevine DRM 加密资源，需要授权播放器";
-                if (tag.contains("9a04f079") || tag.contains("playready")) return "PlayReady DRM 加密资源，需要授权播放器";
-                if (tag.contains("com.apple.streamingkeydelivery") || tag.contains("skd://")) return "FairPlay DRM 加密资源，当前播放器不支持";
-                java.util.regex.Matcher format = java.util.regex.Pattern.compile("KEYFORMAT=\"([^\"]+)\"").matcher(line);
-                if (format.find() && !"identity".equalsIgnoreCase(format.group(1))) return "不支持的 DRM 密钥格式：" + format.group(1);
+                // DRM/key-format labels are hints, not a playback verdict.
+                // Preserve the manifest and let the actual decoder attempt it.
                 java.util.regex.Matcher method = java.util.regex.Pattern.compile("METHOD=([^,]+)").matcher(line);
                 if (method.find()) {
                     String value = method.group(1).trim();
-                    if (!"NONE".equalsIgnoreCase(value) && !"AES-128".equalsIgnoreCase(value))
-                        return "不支持的加密方式：" + value;
                     if ("AES-128".equalsIgnoreCase(value) && !tag.contains("uri=")) return "AES-128 加密清单缺少密钥地址";
                 }
             }

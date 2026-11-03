@@ -4,9 +4,11 @@ from pathlib import Path
 root=Path(__file__).resolve().parent.parent
 source=(root/'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text(encoding='utf-8')
 a=source.index('    private void restartPlayerPreservingPosition(')
-b=source.index('    private void resetPlaybackRecoveryState()',a)
+b=source.index('    /** A signed live URL',a)
 method=source[a:b]
 completion=source[source.index('    private static boolean isNormalPlaybackCompletion('):a]
+mode_start=source.index('    private int systemPlayerMode(')
+mode=source[mode_start:source.index('\n    private ',mode_start+8)]
 java='''import java.io.IOException;
 public class VodReconnectCheck {
  static final String TAG="test";
@@ -29,10 +31,15 @@ public class VodReconnectCheck {
  boolean systemHls,systemMp3,systemDv,systemAtmos;int systemStarts;
  boolean useSystemDolbyVisionPlayer(){return systemDv;}
  boolean useSystemAtmosPlayer(String url){return systemAtmos;}
+ String playerEngine="ijk",decodeMode="auto";
+ static final String PLAYER_ENGINE_SYSTEM="system",DECODE_MODE_SOFTWARE="software";
+ boolean isNtVCastSource(String url){return false;}
+ boolean useAndroidMp4Player(int sdk,String url){return false;}
+ boolean useSystemCodecFallback(Channel c,String url,boolean software){return false;}
  boolean useAndroidHlsPlayer(int sdk,String url){return systemHls;}
  boolean useAndroidMp3Player(int sdk,String url){return systemMp3;}
- void startAndroidMediaPlayer(Channel c,String url,boolean software,boolean hls)throws IOException {
-  systemStarts++;player=new IjkMediaPlayer(600000,0);
+ void startAndroidMediaPlayer(Channel c,String url,boolean software,boolean hls,long resume)throws IOException {
+  systemStarts++;player=new IjkMediaPlayer(600000,0);player.seek=resume;
  }
  void startIjkPlayer(Channel c,String u,boolean s,boolean direct,int[] tracks,long initialPositionMs)throws IOException {
   restartedTracks=tracks;
@@ -97,7 +104,7 @@ public class VodReconnectCheck {
   check(c.systemStarts==4,"Radio reconnect must not switch to system MP3");
   System.out.println("PASS VOD initial seek, live, end clamp, invalid clock, old instance, deferred/failed restart");
  }
-}'''.replace('METHOD',completion+method)
+}'''.replace('METHOD',completion+mode+method)
 out=root/'.codex-tmp/vod-reconnect-test';out.mkdir(parents=True,exist_ok=True)
 (out/'VodReconnectCheck.java').write_text(java,encoding='utf-8')
 java_bin=Path(os.environ['JAVA_HOME'])/'bin'

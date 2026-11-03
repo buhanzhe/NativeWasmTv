@@ -7,10 +7,8 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>频道配置 · nTv</title>
-    <script src="/js/theme.js"></script>
-    <link rel="stylesheet" href="/css/common.css?v=20261016" />
-    <link rel="stylesheet" href="/css/night.css?v=20261016" />
-  </head>
+    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/channels.css?v=epg-inline2">
+</head>
   <body data-parent="/index.html">
     <main id="channelConfigPage" class="secondary-page channel-config-page">
       <div class="top">
@@ -18,29 +16,23 @@
         <div class="page-title">频道配置</div>
         <div class="online"><span class="dot"></span><span id="channelStatus">电视在线</span></div>
       </div>
-      <section class="config-hero">
-        <h2>在手机上整理频道</h2>
-        <p>
-          电视优先校验并复用频道缓存，手机负责解析和去重。以后冷启动可直接加载，不必重新合并多个来源。
-        </p>
-        <div class="config-stats">
+      <div class="config-stats channel-summary">
           <span id="configSourceStat" class="config-stat">0 个来源</span
           ><span id="configGroupStat" class="config-stat">等待刷新</span
           ><span id="configChannelStat" class="config-stat">等待电视</span>
         </div>
-      </section>
       <section class="config-source-section">
         <div class="section-head">
           <h2>频道列表</h2>
-          <a href="/pages/groups.html">管理频道分组 ›</a>
+          <a href="/pages/groups.html">管理分组 ›</a>
         </div>
         <div id="playlistSources" class="source-list"></div>
         <div class="config-actions">
-          <button onclick="addPlaylistSource()">添加源地址</button
-          ><button onclick="openRecommendedSourcePicker()">添加推荐源</button
-          ><button onclick="importBrowserBookmarks()">导入浏览器书签</button>
+          <button onclick="addPlaylistSource()">添加地址</button
+          ><button onclick="openRecommendedSourcePicker()">推荐源</button
+          ><button onclick="importBrowserBookmarks()">导入书签</button>
         </div>
-        <div id="mergePanel" class="merge-panel">
+        <div id="mergePanel" class="merge-panel" hidden>
           <div class="merge-copy">
             <b id="mergeTitle">准备刷新</b><span id="mergeDetail">选择需要的来源</span>
           </div>
@@ -53,9 +45,7 @@
         >
           刷新频道列表
         </button>
-        <div class="config-note">
-          电视先校验来源缓存，无法读取时再由手机直连；解析与去重仍在当前手机完成。
-        </div>
+        <div class="config-note">修改后刷新，应用到电视。</div>
       </section>
       <section class="config-epg-section">
         <div class="section-head">
@@ -65,20 +55,16 @@
         <div id="epgUrls" class="epg-source-list"></div>
         <div class="actions">
           <button onclick="addEpgSource()">添加地址</button
-          ><button onclick="useRecommendedEpg()">添加推荐节目单</button>
+          ><button onclick="useRecommendedEpg()">推荐节目单</button>
         </div>
         <button class="primary wide push-button" onclick="saveEpg()">保存节目单</button>
-        <div class="config-note">
-          关闭后隐藏频道列表节目单列和节目信息，并停止后续节目单刷新。地址按从上到下的顺序优先匹配；后续来源中已出现的频道资料和节目内容会自动忽略。
-        </div>
+        <div class="config-note">按地址顺序匹配节目单。</div>
       </section>
       <section>
         <div class="switch-row">
           <div class="switch-copy">
             <b>自动更新频道列表</b>
-            <div class="hint">
-              默认关闭；开启后每次冷启动会在后台刷新，失败时继续使用上次频道列表
-            </div>
+            <div class="hint">冷启动后台刷新，失败保留原列表。</div>
           </div>
           <input
             id="autoUpdateChannelList"
@@ -89,20 +75,17 @@
         </div>
       </section>
       <section class="browser-section">
-        <div class="section-head"><h2>Ku9 JS</h2></div>
+        <div class="section-head"><h2>Ku9 脚本</h2></div>
         <div class="browser-settings-list">
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>在局域网上传 JS</b
-              ><span id="ku9JsUploadStatus">保存到电视 APP 的小写 js 目录，供 Ku9 源读取</span>
+              <b>上传 JS</b
+              ><span id="ku9JsUploadStatus">需安卓5.0及以上</span>
             </div>
             <button id="ku9JsUploadButton" onclick="chooseKu9JsFile()">选择文件</button>
           </div>
         </div>
-        <div class="config-note">
-          酷9源仅支持 Android 5.0 及以上；仅支持 .js 文件，单个文件最大 2
-          MB；上传同名文件时会覆盖原文件。
-        </div>
+        <div class="config-note">仅JS，限2MB；同名文件覆盖。</div>
       </section>
     </main>
     <div id="message" class="message"></div>
@@ -121,7 +104,7 @@
     <input
       id="playlistFilePicker"
       type="file"
-      accept=".m3u,.m3u8,.txt,.html,.htm,text/plain,text/html,application/vnd.apple.mpegurl"
+      accept=".m3u,.m3u8,.txt,.html,.htm,.json,application/json,text/plain,text/html,application/vnd.apple.mpegurl"
       onchange="playlistFileSelected(this)"
       class="initially-hidden"
     /><input
@@ -131,8 +114,9 @@
       onchange="ku9JsFileSelected(this)"
       class="initially-hidden"
     />
-    <script src="/js/navigation.js?v=20260926"></script>
-    <script src="/js/common.js?v=20260926-nav"></script>
-    <script src="/js/pages/channels.js"></script>
-  </body>
+    <script src="/js/navigation.js?v=20261030-ui"></script>
+    <script src="/js/common.js?v=20261103-network"></script>
+    <script src="/js/pages/channels.js?v=20261103-json-async"></script>
+  <script src="/js/ui.js?v=20261030-ui"></script>
+</body>
 </html>

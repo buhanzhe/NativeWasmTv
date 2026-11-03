@@ -11,7 +11,7 @@ a=main.index('final boolean softwareDecode = DECODE_MODE_SOFTWARE');b=main.index
 choice=main[a:b].split('=',1)[1].strip()
 check=r"""package xiao.bu.tv;
 class MonitorCheck {
- static class Build {static String FINGERPRINT="device-firmware";static class VERSION {static int SDK_INT;}static class VERSION_CODES {static final int KITKAT=19;}}
+ static class Build {static String FINGERPRINT="device-firmware";static class VERSION {static int SDK_INT;}static class VERSION_CODES {static final int JELLY_BEAN=16,KITKAT=19;}}
  static final String DECODE_MODE_SOFTWARE="software",DECODE_MODE_AUTO="auto";
  static class Description {int bitDepth=8;}
  static class PlaybackDebugStats {String videoCodec="H.264",videoDecoderName="OMX.avc";Description videoDescription=new Description();}
@@ -19,6 +19,7 @@ class MonitorCheck {
  String hardwareDecoder="auto";
  CLASSKEY
  String decodeMode="auto";boolean autoSoftwareDecode=true,hintedSoftware;
+ int missingCodecSoftwareRetryRequestId=-1,sourceRequestId=1;
  POLICY
  float rememberedHardwareFps;
  boolean choose(boolean forceSoftwareDecode){return CHOICE;}

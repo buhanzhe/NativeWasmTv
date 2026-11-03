@@ -19,8 +19,8 @@ final class HdrDisplayPolicyTest {
         require(!HdrDisplayPolicy.decoderToneMapping(3,35), "Hardware/soft display must use GPU even on API35");
         require(HdrDisplayPolicy.decoderToneMapping(1,31), "Automatic SDR fallback can use decoder tone mapping");
         require(!HdrDisplayPolicy.decoderToneMapping(1,25), "Old SDR fallback needs GPU mapping");
-        require("hardware_sdr".equals(HdrMode.sanitize("hardware_sdr")), "New preference survives reload");
-        require(HdrMode.nativeValue("hardware_sdr")==3, "Native option selects new mode");
+        require("mapping".equals(HdrMode.sanitize("hardware_sdr")), "Old GPU preference migrates to merged SDR mode");
+        require(HdrMode.nativeValue("hardware_sdr")==0, "Legacy native option uses merged SDR policy");
         require(HdrMode.HARDWARE.equals(HdrMode.sanitize("invalid")), "Preserve hardware default");
         for(int sdk : new int[]{19,25,26,30,31,35}) {
             int mode=HdrMode.nativeValue(HdrMode.DEFAULT);
@@ -55,6 +55,26 @@ final class HdrDisplayPolicyTest {
             float yy=range==1?y:y*219*shift/max,uu=range==1?u:u*224*shift/max,vv=range==1?v:v*224*shift/max;
             float[] expected={r,g,b};for(int i=0;i<3;i++)require(Math.abs(c[i]*yy+c[3+i]*uu+c[6+i]*vv-expected[i])<.00001,"YUV colour round trip");
         }
-        System.out.println("HDR API14-37 display/codec/GPU policy and 24 YUV matrix/range/depth combinations passed");
+        java.util.Random random=new java.util.Random(709);
+        for(int standard:new int[]{0,1,2,4,6})for(boolean raw:new boolean[]{false,true}){
+            float[] m=HdrDisplayPolicy.bt709Reinterpretation(standard,raw);
+            for(int sample=0;sample<10000;sample++){
+                // Include negative/out-of-range decoder RGB. Clamp only after conversion.
+                double[] rgb={random.nextDouble()*1.4-.2,random.nextDouble()*1.4-.2,random.nextDouble()*1.4-.2};
+                double[] expected=rgb.clone();
+                if(!raw&&standard>1){
+                    double kr=standard==6?.2627:.299,kb=standard==6?.0593:.114;
+                    double y=kr*rgb[0]+(1-kr-kb)*rgb[1]+kb*rgb[2];
+                    double u=(rgb[2]-y)/(2*(1-kb)),v=(rgb[0]-y)/(2*(1-kr));
+                    expected[0]=y+1.5748*v;expected[2]=y+1.8556*u;
+                    expected[1]=(y-.2126*expected[0]-.0722*expected[2])/.7152;
+                }
+                for(int row=0;row<3;row++){
+                    double actual=m[row]*rgb[0]+m[3+row]*rgb[1]+m[6+row]*rgb[2];
+                    require(Math.abs(actual-expected[row])<.000001,"709 precomputed matrix differs from reference");
+                }
+            }
+        }
+        System.out.println("HDR API14-37 policy, 24 YUV combinations and 100000 BT.709 matrix colour checks passed");
     }
 }

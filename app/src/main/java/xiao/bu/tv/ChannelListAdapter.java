@@ -37,7 +37,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             measuredFirst=first;measuredCount=count;
             measuredTitleSize=paint.getTextSize();measuredTitleWidth=0;
             if(showingGroups){for(ChannelCatalog.Group group:groups)
-                measuredTitleWidth=Math.max(measuredTitleWidth,paint.measureText(group.title));}
+                measuredTitleWidth=Math.max(measuredTitleWidth,paint.measureText(group.displayTitle));}
         }
         return measuredTitleWidth;
     }
@@ -244,13 +244,15 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
                 holder.groupFavorite.setVisibility(favoritesGroup
                         ? View.VISIBLE : View.GONE);
             }
-            holder.name.setText(group.title);
+            holder.name.setText(group.displayTitle);
             holder.count.setText(String.valueOf(group.channels.length));
         } else {
             Channel channel = (Channel) item;
             holder.number.setText(ChannelCatalog.displayNumber(
                     channelGroupIndex, position));
-            holder.name.setText(channel.name);
+            if (!android.text.TextUtils.equals(holder.name.getText(), channel.name)) {
+                holder.name.setText(channel.name);
+            }
             String title = holder.currentProgram.titleFor(epgManager, channel, System.currentTimeMillis());
             holder.program.setText(title);
             holder.program.setVisibility(title.length() == 0 ? View.GONE : View.VISIBLE);
@@ -281,6 +283,11 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             holder.favorite.setOnTouchListener(favoriteTouchListener);
         }
         boolean focused=position==selectedIndex&&parent.hasFocus()&&!favoriteFocused;
+        boolean scrollTitle = !groupRow && focused;
+        holder.name.setEllipsize(scrollTitle
+                ? android.text.TextUtils.TruncateAt.MARQUEE
+                : android.text.TextUtils.TruncateAt.END);
+        holder.name.setSelected(scrollTitle);
         // ListView reapplies activated flags during layout. Inactive columns need
         // a transparent drawable as well, otherwise they retain a second fill.
         convertView.setBackgroundResource(focused
@@ -302,7 +309,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
         if(holder==null||holder.revision!=TvUiPlugin.revision()||holder.group!=groupRow||Math.abs(holder.scale-rowScale)>.001f){holder=new UiRow();holder.scale=rowScale;holder.revision=TvUiPlugin.revision();holder.group=groupRow;holder.state.putBoolean("group",groupRow);old=TvUiPlugin.provider().create(inflater.getContext(),groupRow?"group-row":"channel-row",holder.state,null,null);old.setTag(holder);}
         android.os.Bundle b=holder.state;
         b.putBoolean("selected",position==selectedIndex);b.putBoolean("favoriteFocused",position==favoriteFocusIndex);b.putBoolean("playing",!groupRow&&position==playingIndex);
-        if(groupRow){ChannelCatalog.Group group=(ChannelCatalog.Group)item;b.putString("title",group.title);b.putString("number",String.valueOf(position+1));b.putInt("count",group.channels.length);b.putBoolean("favoriteGroup",group.source==ChannelCatalog.SOURCE_FAVORITES);}
+        if(groupRow){ChannelCatalog.Group group=(ChannelCatalog.Group)item;b.putString("title",group.displayTitle);b.putString("number",String.valueOf(position+1));b.putInt("count",group.channels.length);b.putBoolean("favoriteGroup",group.source==ChannelCatalog.SOURCE_FAVORITES);}
         else{Channel channel=(Channel)item;b.putString("title",channel.name);b.putString("number",ChannelCatalog.displayNumber(channelGroupIndex,position));
             String title=holder.currentProgram.titleFor(epgManager,channel,System.currentTimeMillis());
             b.putInt("sources",channel.urls.length);b.putInt("source",playingSourceIndex);b.putString("program",title);b.putBoolean("favorite",favoriteListener!=null&&favoriteListener.isFavorite(position));

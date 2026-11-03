@@ -10,12 +10,13 @@ import java.io.*;import java.net.*;import java.util.*;
 class NetworkClient {
  static HttpURLConnection openBounded(URL url,int timeout)throws IOException {if(timeout<=0||timeout>12000)throw new AssertionError("Unbounded probe");return open(url);}
  static Map<String,Reply> replies=new HashMap<>();static int bytesRead,opens,closed;
- static class Reply {int status=200;String type,location;byte[] body;int chunk=65536,failures;
+ static class Reply {int status=200;String type,location;byte[] body;int chunk=65536,failures,length=-1;
   Reply(String t,byte[] b){type=t;body=b;}}
  static HttpURLConnection open(URL url)throws IOException {
   final Reply r=replies.get(url.toString());if(r==null)throw new IOException("Unexpected URL "+url);opens++;
   return new HttpURLConnection(url){
    public void connect(){}public void disconnect(){closed++;}public boolean usingProxy(){return false;}
+   public int getContentLength(){return r.length;}
    public int getResponseCode()throws IOException{if(r.failures-->0)throw new EOFException("socket closed before headers");return r.status;}public String getContentType(){return r.type;}
    public String getHeaderField(String key){return "Location".equals(key)?r.location:null;}
    public InputStream getInputStream(){return new ByteArrayInputStream(r.body){
@@ -61,6 +62,16 @@ public class HttpContentRoutingCheck {
   byte[] ts=new byte[1024];ts[0]=ts[188]=ts[376]=0x47;
   r=test("stream","application/octet-stream",ts,2);check(r.directMedia&&!r.webPage,"Extensionless TS");
   r=test("stream","text/plain",new byte[]{'F','L','V',1,0,0},1);check(r.directMedia&&!r.webPage,"FLV magic");
+  check(r.continuousMedia,"Unbounded FLV must retain live reconnect policy");
+  NetworkClient.Reply liveRedirect=new NetworkClient.Reply(null,new byte[0]);liveRedirect.status=302;liveRedirect.location="http://fixture.test/stream";
+  NetworkClient.replies.put("http://fixture.test/douyu.php?id=747764",liveRedirect);
+  r=HttpStreamResolver.resolve("http://fixture.test/douyu.php?id=747764");
+  check(r.continuousMedia&&r.url.equals("http://fixture.test/stream")&&r.playbackUrl.equals("http://fixture.test/douyu.php?id=747764"),"Live playback must reopen the original redirect endpoint, not a consumed CDN session");
+  r=test("flv-api.php","application/json",text("{\"url\":\"http://fixture.test/douyu.php?id=747764\"}"),2);
+  check(r.playbackUrl.equals("http://fixture.test/douyu.php?id=747764"),"JSON wrapper must reopen its media entry, not feed JSON to the player");
+  NetworkClient.replies.get("http://fixture.test/stream").length=6;
+  check(!HttpStreamResolver.resolve("http://fixture.test/stream").continuousMedia,"Finite FLV must keep file completion policy");
+  r=test("movie.mp4","video/mp4",mp4,1);check(!r.continuousMedia,"MP4 must keep VOD policy even without Content-Length");
   r=test("page","application/xhtml+xml",text("<?xml version='1.0'?><html xmlns='http://www.w3.org/1999/xhtml'></html>"),1);
   check(r.webPage,"XHTML");
   r=test("utf16.m3u8","application/octet-stream","<!doctype html><html>test</html>".getBytes("UTF-16"),1);

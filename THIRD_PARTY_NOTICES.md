@@ -1,5 +1,20 @@
 # Third-party notices
 
+Original nTv project code: Copyright (C) 2026 buhanzhe and contributors;
+GNU GPL version 3 only (`GPL-3.0-only`). See `LICENSE` and `COPYRIGHT.md`.
+Third-party works below retain their own copyright and license terms.
+
+## Tencent Bugly SDK
+
+The app bundles `com.tencent.bugly:crashreport:4.1.9.3`, including its native crash
+reporting library. Its published Maven metadata identifies **The Bugly Software
+License, Version 1.0**, at http://bugly.qq.com/licenses/LICENSE-1.0.txt.
+Source and SDK information: https://github.com/BuglyDevTeam/Bugly-Android
+
+This is a separately licensed SDK; the project's GPL notice does not relicense it.
+Distributors must verify the applicable SDK terms and compatibility of the actual
+combined distribution before claiming that an APK satisfies GPL requirements.
+
 ## AndroidX WebKit and Core
 
 The app uses AndroidX WebKit `1.9.0`. For its Core dependency, the build keeps

@@ -1,0 +1,41 @@
+@-webkit-keyframes micro-in{from{opacity:0;-webkit-transform:translateY(4px) scale(.96)}
+to{opacity:1;-webkit-transform:translateY(0) scale(1)}
+}
+@keyframes micro-in{from{opacity:0;transform:translateY(4px) scale(.96)}
+to{opacity:1;transform:translateY(0) scale(1)}
+}
+@-webkit-keyframes micro-out{from{opacity:1;-webkit-transform:scale(1)}
+to{opacity:0;-webkit-transform:scale(.97)}
+}
+@keyframes micro-out{from{opacity:1;transform:scale(1)}
+to{opacity:0;transform:scale(.97)}
+}
+.micro-select-menu,.micro-confirm-card{-webkit-animation:micro-in .16s ease-out both;animation:micro-in .16s ease-out both;-webkit-transform-origin:80% 15%;transform-origin:80% 15%}
+.is-closing>.micro-select-menu,.is-closing>.micro-confirm-card{-webkit-animation:micro-out .12s ease-in both;animation:micro-out .12s ease-in both}
+body .source-picker,body .quick-add-backdrop,body .media-sheet-backdrop,body .takeover-progress-dialog{background:transparent;-webkit-backdrop-filter:none;backdrop-filter:none;padding:0}
+body .source-picker.show,body .quick-add-backdrop,body .media-sheet-backdrop,body .takeover-progress-dialog.active{display:block}
+body .source-picker .source-picker-card,body .quick-add-backdrop .quick-add-sheet,body.media-page-shell .media-sheet-backdrop .media-settings-sheet,body .takeover-progress-dialog .takeover-progress-card{position:absolute;left:12px;right:12px;top:14%;bottom:auto;display:block;width:auto;min-width:0;max-width:340px;height:auto;max-height:420px;max-height:72vh;margin:0 auto;padding:16px;overflow:auto;border:1px solid rgba(0,0,0,.025);border-radius:16px;background:#fff;color:#262628;box-shadow:0 6px 28px rgba(25,30,45,.17);-webkit-transform:none;transform:none;-webkit-overflow-scrolling:touch;transition:none}
+body .quick-add-backdrop{display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;-webkit-box-pack:center;justify-content:center;padding:12px;overflow:hidden}
+body .quick-add-backdrop[hidden]{display:none}
+body .quick-add-backdrop .quick-add-sheet{position:relative;left:auto;right:auto;top:auto;width:100%;max-height:90%;max-height:calc(100vh - 24px);margin:0}
+body .source-picker.show .source-picker-card,body .quick-add-backdrop:not([hidden]) .quick-add-sheet,body .media-sheet-backdrop.open .media-settings-sheet,body .takeover-progress-dialog.active .takeover-progress-card{-webkit-animation:micro-in .16s ease-out both;animation:micro-in .16s ease-out both}
+body .media-sheet-backdrop{transition:opacity .12s ease,visibility .12s ease}
+body .media-sheet-backdrop .media-sheet-handle{display:none}
+body .media-sheet-backdrop .media-sheet-header{padding-bottom:10px}
+body .media-sheet-backdrop .media-sheet-header b,body .source-picker-head b,body .quick-add-header h2{font-size:16px;font-weight:500}
+body .media-sheet-backdrop .media-sniffed-sheet .media-sniffed-list{max-height:50vh}
+body .source-picker .source-choice{border-radius:0;border-width:0 0 1px;font-size:14px}
+body .channel-editor-fullscreen{top:12%;bottom:auto;left:12px;right:12px;width:auto;max-width:600px;height:420px;height:76vh;max-height:600px;margin:0 auto;border-radius:16px;box-shadow:0 6px 28px rgba(25,30,45,.17);overflow:hidden;-webkit-animation:micro-in .16s ease-out both;animation:micro-in .16s ease-out both}
+body.channel-editor-open main{pointer-events:none}
+.micro-confirm-layer{position:fixed;top:0;right:0;bottom:0;left:0;z-index:3100;background:transparent}
+.micro-confirm-card{position:absolute;left:16px;right:16px;top:28%;width:auto;max-width:300px;max-height:300px;max-height:66vh;margin:0 auto;padding:20px;border:1px solid rgba(0,0,0,.025);border-radius:16px;background:#fff;color:#262628;box-shadow:0 6px 28px rgba(25,30,45,.17);overflow:auto}
+.micro-confirm-card h2{margin:0 0 10px;color:inherit;font-size:17px;font-weight:500}
+.micro-confirm-card p{margin:0;color:#85858b;font-size:13px;line-height:1.7;white-space:pre-line;word-wrap:break-word}
+.micro-confirm-actions{margin-top:18px;text-align:right;white-space:nowrap}
+body .micro-confirm-actions button{display:inline-block;min-width:70px;min-height:40px;margin:0 0 0 8px;padding:8px 12px;border:0;border-radius:9px;background:#f2f2f7;color:#85858b;box-shadow:none;font-size:14px;font-weight:400;transform:none}
+body .micro-confirm-actions .micro-confirm-accept{color:#007aff;background:#edf5ff}
+html[data-theme="dark"] .micro-confirm-card,html[data-theme="dark"] body .quick-add-backdrop .quick-add-sheet,html[data-theme="dark"] body .source-picker .source-picker-card,html[data-theme="dark"] body .media-sheet-backdrop .media-settings-sheet{background:#2c2c2e;color:#f2f2f7;border-color:#3a3a3c}
+@media(prefers-reduced-motion:reduce){.micro-select-menu,.micro-confirm-card,body .source-picker.show .source-picker-card,body .quick-add-backdrop .quick-add-sheet,body .media-sheet-backdrop.open .media-settings-sheet,body .channel-editor-fullscreen{-webkit-animation:none!important;animation:none!important;transition:none!important}
+}
+@media(max-height:500px){body .source-picker .source-picker-card,body.media-page-shell .media-sheet-backdrop .media-settings-sheet,.micro-confirm-card{top:12px;max-height:260px;max-height:90vh}
+}

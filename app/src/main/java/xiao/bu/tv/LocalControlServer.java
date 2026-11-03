@@ -9,7 +9,10 @@ import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
@@ -50,6 +53,13 @@ final class LocalControlServer implements Closeable {
         String importUserScript(JSONObject request) throws Exception;
         String checkUpdate() throws Exception;
         String installUpdate() throws Exception;
+        default String uploadBackground(byte[] body) throws Exception {throw new IOException("不支持自定义背景");}
+        default File createBackgroundUploadFile() throws Exception {throw new IOException("不支持图片上传");}
+        default String uploadBackgroundFile(File image) throws Exception {throw new IOException("不支持图片上传");}
+        default Resource backgroundImage() throws Exception {throw new IOException("尚无背景图片");}
+        default String bingWallpapers() throws Exception {throw new IOException("不支持 Bing 壁纸图库");}
+        default String quickMedia(String name, byte[] body) throws Exception { throw new IOException("不支持临时媒体"); }
+        default String uploadTvbusPlugin(byte[] body) throws Exception { throw new IOException("不支持 TVBus 插件"); }
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
         String uploadKu9Script(String fileName, byte[] body) throws Exception;
         String radioUi(byte[] body) throws Exception;
@@ -58,6 +68,7 @@ final class LocalControlServer implements Closeable {
         String installApk(String sessionId, String fileName, byte[] body) throws Exception;
         Resource playlistSource(String location) throws Exception;
         String mergePlaylist(JSONObject request) throws Exception;
+        default String playlistImportStatus(String id) throws Exception { throw new ControlRequestException(404,"不支持异步导入"); }
         Resource recording(String token) throws Exception;
         Resource screenshot(boolean localOnly, boolean preview) throws Exception;
         Resource artwork(String key, boolean localOnly) throws Exception;
@@ -65,10 +76,12 @@ final class LocalControlServer implements Closeable {
         Resource page(String path) throws Exception;
     }
 
-    static final class Resource {
+    static final class Resource implements Closeable {
         final String contentType;
         final byte[] body;
         final String downloadName;
+        final InputStream stream;
+        final long length;
 
         Resource(String contentType, byte[] body) {
             this(contentType, body, "");
@@ -78,10 +91,28 @@ final class LocalControlServer implements Closeable {
             this.contentType = contentType;
             this.body = body;
             this.downloadName = downloadName == null ? "" : downloadName;
+            this.stream = null;
+            this.length = body.length;
+        }
+
+        Resource(String contentType, InputStream stream, long length) {
+            this.contentType = contentType;
+            this.body = null;
+            this.downloadName = "";
+            this.stream = stream;
+            this.length = length;
+        }
+
+        @Override public void close() throws IOException {
+            if (stream != null) stream.close();
         }
     }
 
     private static final String TAG = "LocalControlServer";
+    // One reusable buffer per bounded server worker, never one full HLS segment.
+    private static final ThreadLocal<byte[]> transferBuffer = new ThreadLocal<byte[]>() {
+        @Override protected byte[] initialValue() { return new byte[64 * 1024]; }
+    };
     static final int PREFERRED_PORT = 9966;
     static final int MAX_PORT = 9975;
     private static final int SOCKET_TIMEOUT_MS = 30000;
@@ -259,7 +290,7 @@ final class LocalControlServer implements Closeable {
             }
             String method = requestParts[0];
             String path = requestParts[1];
-            int contentLength = 0;
+            long contentLength = 0;
             boolean invalidContentLength = false;
             boolean chunkedBody = false;
             String downloadRange = null, downloadIfRange = null;
@@ -275,10 +306,10 @@ final class LocalControlServer implements Closeable {
                 } else if ("content-length".equalsIgnoreCase(headerName)) {
                     try {
                         long parsedLength = Long.parseLong(headerValue);
-                        if (parsedLength < 0L || parsedLength > Integer.MAX_VALUE) {
+                        if (parsedLength < 0L) {
                             invalidContentLength = true;
                         } else {
-                            contentLength = (int) parsedLength;
+                            contentLength = parsedLength;
                         }
                     } catch (NumberFormatException error) {
                         invalidContentLength = true;
@@ -299,6 +330,10 @@ final class LocalControlServer implements Closeable {
                 sendMediaDownload(socket, download);
                 return;
             }
+            if ("POST".equals(method) && ("/api/background/upload".equals(path) || path.startsWith("/api/background/upload?"))) {
+                receiveBackgroundUpload(socket,input,chunkedBody,contentLength);
+                return;
+            }
             int bodyLimit = path.startsWith("/api/ku9/script/upload") || path.equals("/api/radio-ui") || path.equals("/api/tv-ui")
                     ? MAX_KU9_SCRIPT_BYTES : requestBodyLimit();
             if (contentLength > bodyLimit) {
@@ -313,13 +348,19 @@ final class LocalControlServer implements Closeable {
             }
             byte[] body = chunkedBody
                     ? readChunkedBody(input, bodyLimit)
-                    : readFixedBody(input, contentLength);
+                    : readFixedBody(input, (int) contentLength);
             route(socket, method, path, body);
         } catch (Exception error) {
-            Log.w(TAG, "Management request failed", error);
+            if(error instanceof ControlRequestException)
+                Log.i(TAG,"Management request rejected: "+error.getMessage());
+            else Log.w(TAG, "Management request failed", error);
             try {
-                send(socket, 500, "application/json; charset=utf-8",
-                        jsonError(error.getMessage() == null ? "服务器错误" : error.getMessage()));
+                int status = error instanceof ControlRequestException
+                        ? ((ControlRequestException) error).status
+                        : error instanceof org.json.JSONException || error instanceof IllegalArgumentException ? 400 : 500;
+                String message = error instanceof ControlRequestException ? error.getMessage()
+                        : status == 400 ? "请求参数无效" : "服务器错误，请查看设备日志";
+                send(socket, status, "application/json; charset=utf-8", jsonError(message));
             } catch (IOException ignored) {
             }
         } finally {
@@ -436,6 +477,10 @@ final class LocalControlServer implements Closeable {
         if (query >= 0) {
             path = path.substring(0, query);
         }
+        if ("POST".equals(method) && (body == null || body.length == 0)
+                && java.util.Arrays.asList("/api/quick/media", "/api/playlist/upload",
+                        "/api/ku9/script/upload", "/api/apk/upload", "/api/tvbus/plugin").contains(path))
+            throw new ControlRequestException(400,"文件为空，请重新选择文件");
         if ("GET".equals(method) && ControlSite.contains(path)) {
             Resource resource = listener.page("/".equals(path) ? "index.html" : path.substring(1));
             send(socket, 200, resource.contentType, resource.body,
@@ -457,8 +502,21 @@ final class LocalControlServer implements Closeable {
                     listener.stateJson(queryParameter(requestTarget, "view"))
                             .getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/logs".equals(path)) {
-            send(socket, 200, "application/json; charset=utf-8",
-                    AppLogReader.read(queryParameter(requestTarget, "filter")).getBytes("UTF-8"));
+            String filter = queryParameter(requestTarget, "filter");
+            String snapshot = AppLogReader.read(filter);
+            if ("1".equals(queryParameter(requestTarget, "download"))) {
+                JSONObject logs = new JSONObject(snapshot);
+                String text = logs.optString("text");
+                if (text.isEmpty()) text = logs.optBoolean("available", true)
+                        ? "当前筛选没有日志。\n" : logs.optString("note") + "\n";
+                String label = "error".equals(filter) ? "error" : "crash".equals(filter) ? "crash" : "all";
+                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
+                        java.util.Locale.US).format(new java.util.Date());
+                sendDownload(socket, "text/plain; charset=utf-8", text.getBytes("UTF-8"),
+                        "ntv-logs-" + label + "-" + timestamp + ".txt");
+            } else {
+                send(socket, 200, "application/json; charset=utf-8", snapshot.getBytes("UTF-8"));
+            }
         } else if ("GET".equals(method) && "/api/catalog".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.catalogJson().getBytes("UTF-8"));
@@ -514,6 +572,17 @@ final class LocalControlServer implements Closeable {
         } else if ("POST".equals(method) && "/api/update/check".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.checkUpdate().getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/tvbus/plugin".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8", listener.uploadTvbusPlugin(body).getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/background/upload".equals(path)) {
+            send(socket,200,"application/json; charset=utf-8",listener.uploadBackground(body).getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/background/image".equals(path)) {
+            Resource image=listener.backgroundImage();send(socket,200,image.contentType,image.body);
+        } else if ("GET".equals(method) && "/api/background/bing".equals(path)) {
+            send(socket,200,"application/json; charset=utf-8",listener.bingWallpapers().getBytes("UTF-8"));
+        } else if ("POST".equals(method) && "/api/quick/media".equals(path)) {
+            send(socket, 200, "application/json; charset=utf-8",
+                    listener.quickMedia(queryParameter(requestTarget, "name"), body).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/playlist/upload".equals(path)) {
             String sourceId = queryParameter(requestTarget, "id");
             String fileName = queryParameter(requestTarget, "name");
@@ -539,6 +608,8 @@ final class LocalControlServer implements Closeable {
         } else if ("GET".equals(method) && "/api/playlist/channels".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.playlistChannels(queryParameter(requestTarget, "group")).getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/playlist/merge/status".equals(path)) {
+            send(socket,200,"application/json; charset=utf-8",listener.playlistImportStatus(queryParameter(requestTarget,"id")).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/playlist/merge".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.mergePlaylist(new JSONObject(new String(body, "UTF-8")))
@@ -563,12 +634,12 @@ final class LocalControlServer implements Closeable {
             sendDownload(socket, resource.contentType, resource.body, resource.downloadName);
         } else if ("GET".equals(method) && "/api/recording/playlist".equals(path)) {
             Resource resource = listener.recording(null);
-            send(socket, 200, resource.contentType, resource.body);
+            sendResource(socket, resource);
         } else if ("GET".equals(method)
                 && path.startsWith("/api/recording/resource/")) {
             String token = path.substring("/api/recording/resource/".length());
             Resource resource = listener.recording(token);
-            send(socket, 200, resource.contentType, resource.body);
+            sendResource(socket, resource);
         } else if ("OPTIONS".equals(method)) {
             send(socket, 204, "text/plain", new byte[0]);
         } else {
@@ -596,8 +667,8 @@ final class LocalControlServer implements Closeable {
     private static String decodeQueryValue(String value) {
         try {
             return URLDecoder.decode(value, "UTF-8");
-        } catch (Exception ignored) {
-            return value;
+        } catch (Exception invalid) {
+            throw new IllegalArgumentException("请求参数编码无效");
         }
     }
 
@@ -615,12 +686,48 @@ final class LocalControlServer implements Closeable {
             output.write(value);
             previous = value;
             if (output.size() > 8192) {
-                throw new IOException("请求头过长");
+                throw new ControlRequestException(400, "请求头过长");
             }
         }
         return output.size() == 0 ? null : output.toString("ISO-8859-1");
     }
 
+    private void receiveBackgroundUpload(Socket socket,InputStream input,boolean chunked,long length) throws Exception {
+        File temporary=listener.createBackgroundUploadFile();
+        try {
+            try(OutputStream output=new BufferedOutputStream(new FileOutputStream(temporary))){
+                if(chunked)copyChunkedUpload(input,output);else copyFixedUpload(input,output,length);
+            }
+            send(socket,200,"application/json; charset=utf-8",listener.uploadBackgroundFile(temporary).getBytes("UTF-8"));
+        } finally {temporary.delete();}
+    }
+    // File uploads use bounded buffers; compressed file size does not determine heap allocation.
+    private static void copyFixedUpload(InputStream input,OutputStream output,long remaining) throws IOException {
+        byte[] buffer=transferBuffer.get();
+        while(remaining>0){
+            int count=input.read(buffer,0,(int)Math.min((long)buffer.length,remaining));
+            if(count<0)throw new IOException("图片上传不完整");
+            if(count==0)continue;
+            output.write(buffer,0,count);remaining-=count;
+        }
+    }
+    private static void copyChunkedUpload(InputStream input,OutputStream output) throws IOException {
+        while(true){
+            String line=readLine(input);
+            if(line==null)throw new IOException("分块请求不完整");
+            int extension=line.indexOf(';');long size;
+            try{size=Long.parseLong((extension<0?line:line.substring(0,extension)).trim(),16);}
+            catch(NumberFormatException error){throw new IOException("分块请求格式错误",error);}
+            if(size<0)throw new IOException("分块请求格式错误");
+            if(size==0){
+                while((line=readLine(input))!=null){if(line.length()==0)return;}
+                throw new IOException("分块请求不完整");
+            }
+            copyFixedUpload(input,output,size);
+            line=readLine(input);
+            if(line==null||line.length()!=0)throw new IOException("分块请求结尾格式错误");
+        }
+    }
     private static byte[] readFixedBody(InputStream input, int contentLength)
             throws IOException {
         byte[] body = new byte[contentLength];
@@ -715,6 +822,7 @@ final class LocalControlServer implements Closeable {
                     .append(java.net.URLEncoder.encode(download.name, "UTF-8").replace("+", "%20"))
                     .append("\r\nCache-Control: no-store\r\nConnection: close\r\n");
             if (download.length >= 0) headers.append("Content-Length: ").append(download.length).append("\r\n");
+            else headers.append("Transfer-Encoding: chunked\r\n");
             for (String name : new String[]{"Content-Range", "Accept-Ranges", "ETag", "Last-Modified"}) {
                 String value = download.connection.getHeaderField(name);
                 if (value != null && value.indexOf('\r') < 0 && value.indexOf('\n') < 0)
@@ -722,8 +830,17 @@ final class LocalControlServer implements Closeable {
             }
             output.write(headers.append("\r\n").toString().getBytes("ISO-8859-1"));
             output.flush(); // Commit the download response even if the upstream fails on its first read.
-            byte[] buffer = new byte[64 * 1024]; int count;
-            while ((count = download.body.read(buffer)) != -1) output.write(buffer, 0, count);
+            LiteChunkedOutputStream chunks = download.length < 0 ? new LiteChunkedOutputStream(output) : null;
+            OutputStream mediaOutput = chunks != null ? chunks : output;
+            byte[] buffer = transferBuffer.get(); int count;
+            long received = 0;
+            while ((count = download.body.read(buffer)) != -1) {
+                mediaOutput.write(buffer, 0, count);
+                received += count;
+            }
+            if (download.length >= 0 && received != download.length)
+                throw new IOException("Incomplete media download");
+            if (chunks != null) chunks.finish();
             output.flush();
         } catch (IOException error) {
             Log.w(TAG, "Media download closed before completion", error);
@@ -732,14 +849,56 @@ final class LocalControlServer implements Closeable {
         }
     }
 
+    private static void sendResource(Socket socket, Resource resource) throws IOException {
+        if (resource.stream == null) {
+            send(socket, 200, resource.contentType, resource.body);
+            return;
+        }
+        // Errors after headers must only close the connection, never append JSON
+        // to a partially transferred media file. Closing also cancels upstream.
+        try {
+            BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
+            boolean chunked = resource.length < 0;
+            output.write(responseHeaders(200, resource.contentType, resource.length,
+                    "no-store", chunked ? "Transfer-Encoding: chunked\r\n" : "").getBytes("ISO-8859-1"));
+            output.flush();
+            LiteChunkedOutputStream chunks = chunked ? new LiteChunkedOutputStream(output) : null;
+            OutputStream mediaOutput = chunked ? chunks : output;
+            byte[] buffer = transferBuffer.get();
+            long received = 0; int count;
+            while ((count = resource.stream.read(buffer)) != -1) {
+                mediaOutput.write(buffer, 0, count);
+                received += count;
+            }
+            if (resource.length >= 0 && received != resource.length)
+                throw new IOException("Incomplete recording resource");
+            if (chunks != null) chunks.finish();
+            output.flush();
+        } catch (IOException error) {
+            Log.w(TAG, "Recording transfer closed before completion", error);
+        } finally {
+            try { resource.close(); } catch (IOException ignored) { }
+        }
+    }
+
     private static void send(Socket socket, int status, String contentType, byte[] body,
             String cacheControl, String extraHeaders) throws IOException {
+        BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
+        output.write(responseHeaders(status, contentType, body.length, cacheControl,
+                extraHeaders).getBytes("ISO-8859-1"));
+        output.write(body);
+        output.flush();
+    }
+
+    private static String responseHeaders(int status, String contentType, long length,
+            String cacheControl, String extraHeaders) {
         String reason = status == 200 ? "OK" : status == 204 ? "No Content"
                 : status == 400 ? "Bad Request" : status == 404 ? "Not Found"
+                : status == 403 ? "Forbidden" : status == 409 ? "Conflict"
                 : status == 413 ? "Payload Too Large" : "Internal Server Error";
-        String headers = "HTTP/1.1 " + status + " " + reason + "\r\n"
+        return "HTTP/1.1 " + status + " " + reason + "\r\n"
                 + "Content-Type: " + contentType + "\r\n"
-                + "Content-Length: " + body.length + "\r\n"
+                + (length >= 0 ? "Content-Length: " + length + "\r\n" : "")
                 + "Cache-Control: " + cacheControl + "\r\n"
                 + "Permissions-Policy: accelerometer=(self), gyroscope=(self)\r\n"
                 + "Access-Control-Allow-Origin: *\r\n"
@@ -750,10 +909,6 @@ final class LocalControlServer implements Closeable {
                 + "Private-Network-Access-ID: 4e:54:56:54:56:01\r\n"
                 + extraHeaders
                 + "Connection: close\r\n\r\n";
-        BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream());
-        output.write(headers.getBytes("ISO-8859-1"));
-        output.write(body);
-        output.flush();
     }
 
     private static String findLanAddress() {

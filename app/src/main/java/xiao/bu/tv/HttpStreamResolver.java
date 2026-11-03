@@ -41,6 +41,8 @@ final class HttpStreamResolver {
         final boolean htmlMimeOverride;
         final byte[] playlist;
         final long playlistReceivedNanos;
+        final boolean continuousMedia;
+        final String playbackUrl;
 
         Result(String url, boolean directMedia) {
             this(url, directMedia, false);
@@ -55,12 +57,24 @@ final class HttpStreamResolver {
         }
 
         Result(String url, boolean directMedia, boolean webPage, boolean htmlMimeOverride, byte[] playlist) {
+            this(url, directMedia, webPage, htmlMimeOverride, playlist, false);
+        }
+
+        Result(String url, boolean directMedia, boolean webPage, boolean htmlMimeOverride,
+                byte[] playlist, boolean continuousMedia) {
+            this(url, directMedia, webPage, htmlMimeOverride, playlist, continuousMedia, url);
+        }
+
+        Result(String url, boolean directMedia, boolean webPage, boolean htmlMimeOverride,
+                byte[] playlist, boolean continuousMedia, String playbackUrl) {
             this.url = url;
             this.directMedia = directMedia;
             this.webPage = webPage;
             this.htmlMimeOverride = htmlMimeOverride;
             this.playlist = playlist;
             this.playlistReceivedNanos = System.nanoTime();
+            this.continuousMedia = continuousMedia;
+            this.playbackUrl = playbackUrl;
         }
     }
 
@@ -183,6 +197,7 @@ final class HttpStreamResolver {
 
     private static Result resolveInternal(String value, long deadline) throws IOException {
         String current = value;
+        String mediaEntry = value;
         for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
             URI currentUri = httpUri(current);
             int remaining = remainingMs(deadline);
@@ -222,10 +237,14 @@ final class HttpStreamResolver {
                 InputStream input = connection.getInputStream();
                 byte[] probe = readPrefix(input);
                 if (startsWithFlv(probe)) {
-                    return new Result(current, true);
+                    return new Result(current, true, false, false, null,
+                            connection.getContentLength() < 0,
+                            connection.getContentLength() < 0 ? mediaEntry : current);
                 }
                 if (startsWithTransportStream(probe)) {
-                    return new Result(current, true);
+                    return new Result(current, true, false, false, null,
+                            connection.getContentLength() < 0,
+                            connection.getContentLength() < 0 ? mediaEntry : current);
                 }
                 if (startsWithMp4(probe) || startsWithOtherMedia(probe)) return new Result(current, true);
                 String body = decodeText(probe);
@@ -277,6 +296,7 @@ final class HttpStreamResolver {
                 if (mediaUrl != null) {
                     httpUri(mediaUrl);
                     current = mediaUrl;
+                    mediaEntry = mediaUrl;
                     continue;
                 }
                 if (isTransientFailureBody(body)) {

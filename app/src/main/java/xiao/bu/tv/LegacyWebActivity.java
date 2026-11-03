@@ -49,10 +49,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         if (getIntent().hasExtra("orientation")) setRequestedOrientation(getIntent().getIntExtra("orientation", -1));
         GithubProxy.initialize(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | (android.os.Build.VERSION.SDK_INT >= 19 ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY : 0));
+        getWindow().getDecorView().setSystemUiVisibility(FullscreenPolicy.flags(this, true));
         source = new WebSourceView(this); source.setListener(this);
         android.widget.FrameLayout content = new android.widget.FrameLayout(this);
         content.addView(source, new android.widget.FrameLayout.LayoutParams(-1, -1));
@@ -142,6 +139,8 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         state.putString("group", source.currentChannelGroup());
         state.putBoolean("foreground", foreground);
         state.putBoolean("fullscreen", source.isInBrowserFullscreen());
+        state.putBoolean("covered", source.isPageCovered());
+        state.putBoolean("interactiveFallback", source.isInteractivePageFallback());
         String media = source.currentWebMediaState().toString();
         if (media.length() < 100000) state.putString("media", media);
         data.putBundle("state", state); send(LegacyWebSession.EVENT, data);
@@ -154,14 +153,20 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         if (!running || !token.equals(data.getString("token"))) return;
         String action = data.getString("action", "");
         switch (action) {
-            case "configuration": source.applyConfiguration(data.getString("viewport", "720p"), data.getBoolean("images", true),
+            case "configuration": source.applyInteractiveBrowser(data.getBoolean("interactiveBrowser",false)); source.applyConfiguration(data.getString("viewport", "720p"), data.getBoolean("images", true),
                     data.getString("ua", "windows"), data.getString("version", "native"), data.getFloat("pageScale", 1f),
                     data.getBoolean("ads", false), data.getBoolean("rtc"), data.getBoolean("scripts"), data.getString("userScripts", "[]"));
+                source.applyBackgroundPlayback(data.getBoolean("backgroundPlayback",true));
+                source.applyAutoPlay(data.getBoolean("autoPlay",true));
                 source.applyMinimalMode(data.getBoolean("minimalMode", false));
+                cursor.setMovementOnly(data.getBoolean("minimalMode", false));
+                source.applyPageCoverStyle(data.getString("pageCoverStyle", "status"));
                 source.applyPageCover(data.getBoolean("pageCover", false)); break;
             case "scale": source.setInterfaceScale(data.getFloat("scale", 1f)); cursor.setCastVisualScale(data.getFloat("scale", 1f)); break;
             case "brightness": source.setPlaybackBrightness(data.getInt("brightness", 50)); break;
+            case "playerControls": showPlayer(); break;
             case "open": request = data.getInt("request"); monitoring = true;
+                if (cursor.isMovementOnly()) cursor.hideCursor();
                 rendererBeat = SystemClock.elapsedRealtime(); source.open(request, data.getString("url"),
                         data.getString("script", ""), data.getBoolean("htmlMimeOverride", false),
                         data.getString("channelTitle", ""), data.getString("channelGroup", "")); break;
@@ -169,8 +174,14 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
             case "restore": source.restoreAfterStreamPlayback(); monitoring = true; rendererBeat = SystemClock.elapsedRealtime(); break;
             case "back": onBackPressed(); break;
             case "forward": source.goForwardIfPossible(); break;
-            case "minimalMode": source.applyMinimalMode(data.getBoolean("enabled", false)); break;
+            case "minimalMode": source.applyMinimalMode(data.getBoolean("enabled", false));
+                cursor.setMovementOnly(data.getBoolean("enabled", false)); break;
+            case "interactiveBrowser": source.applyInteractiveBrowser(data.getBoolean("enabled",false)); break;
+            case "autoPlay": source.applyAutoPlay(data.getBoolean("enabled", true)); break;
+            case "backgroundPlayback": source.applyBackgroundPlayback(data.getBoolean("enabled",true)); break;
+            case "pageCoverStyle": source.applyPageCoverStyle(data.getString("style","status")); break;
             case "pageCover": source.applyPageCover(data.getBoolean("enabled", false)); break;
+            case "playbackFullscreen": source.showPlaybackFullscreen(); break;
             case "fullscreenExit": source.exitBrowserFullscreen(); break;
             case "pause": source.setMultimediaPaused(true); break;
             case "play": source.setMultimediaPaused(false); break;
@@ -201,7 +212,14 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
     }
     private void updateCursor(MotionEvent motion) {
         if (cursor == null || motion.getPointerCount() == 0 || motion.getToolType(0) != MotionEvent.TOOL_TYPE_MOUSE) return;
-        cursor.moveBy(motion.getX() - cursor.cursorX(), motion.getY() - cursor.cursorY());
+        int action = motion.getActionMasked();
+        if (action == MotionEvent.ACTION_HOVER_EXIT || action == MotionEvent.ACTION_CANCEL) {
+            cursor.hideCursor();
+            return;
+        }
+        if (action == MotionEvent.ACTION_HOVER_MOVE || action == MotionEvent.ACTION_MOVE
+                || !cursor.isMovementOnly())
+            cursor.moveBy(motion.getX() - cursor.cursorX(), motion.getY() - cursor.cursorY());
         if (motion.getActionMasked() == MotionEvent.ACTION_DOWN) cursor.pulseClick();
     }
     @Override public boolean dispatchGenericMotionEvent(MotionEvent motion) {
@@ -249,14 +267,30 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
     @Override public void onPageStarted(int id, String url) { rendererBeat = SystemClock.elapsedRealtime(); event("started", LegacyWebSession.bundle("url", url)); }
     @Override public void onResourcesReset(int id, String url) { event("reset", LegacyWebSession.bundle("url", url)); }
     @Override public void onPageReady(int id, String url, String title) { event("ready", LegacyWebSession.bundle("url", url)); }
-    @Override public void onPageError(int id, String reason) { onPageUnavailable(id, reason); }
+    @Override public void onPageError(int id, String reason) {
+        if (id != request) return;
+        // A network/HTTP error is recoverable inside the same browser. Sending
+        // a failed heartbeat kills it and can skip an entire offline playlist.
+        event("error", LegacyWebSession.bundle("reason", reason));
+        android.widget.Toast.makeText(this, "网页加载失败: " + reason,
+                android.widget.Toast.LENGTH_LONG).show();
+    }
     @Override public void onPageUnavailable(int id, String reason) {
+        if (id != request) return;
         Bundle beat = LegacyWebSession.bundle("failure", "网页不可用: " + reason); send(LegacyWebSession.HEARTBEAT, beat);
     }
     @Override public void onStreamDiscovered(int id, String stream, String page, String ua, String cookies) {
         Bundle data = LegacyWebSession.bundle("stream", stream); data.putString("url", page); data.putString("ua", ua); data.putString("cookies", cookies); event("stream", data);
     }
     @Override public void onBrowserChannelList() { showPlayer(); event("channel-list", new Bundle()); }
+    @Override public void onBrowserInteractiveFallback(int id) { event("interactive-fallback", new Bundle()); }
+    @Override public void onBrowserPlaybackTouch(MotionEvent motion, int width, int height) {
+        // Do not collect the page/media snapshot for every MOVE. The authenticated
+        // session already supplies ownership; only this small pointer packet crosses IPC.
+        Bundle data = new Bundle(); data.putString("event", "playback-touch");
+        data.putParcelable("motion", motion); data.putInt("width", width); data.putInt("height", height);
+        send(LegacyWebSession.EVENT, data);
+    }
     @Override public void onBrowserHome() { showPlayer(); event("home", new Bundle()); }
     @Override public void onBrowserChannel(int group, int channel) { showPlayer(); Bundle b = new Bundle(); b.putInt("group", group); b.putInt("channel", channel); event("channel", b); }
     @Override public void onBrowserDownloadImage(String url) { event("image", LegacyWebSession.bundle("url", url)); }

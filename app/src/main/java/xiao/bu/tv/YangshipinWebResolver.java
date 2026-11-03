@@ -39,6 +39,9 @@ import java.net.URI;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 final class YangshipinWebResolver {
     interface Callback {
@@ -92,6 +95,9 @@ final class YangshipinWebResolver {
     private volatile Pending pendingRequest;
     private final Map<String, CachedUrl> apiCache = new HashMap<String, CachedUrl>();
     private long serverClockOffsetMs = Long.MIN_VALUE;
+    private final ExecutorService nativeWorkers = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "yangshipin-api"); t.setDaemon(true); return t;
+    });
 
     @SuppressLint("SetJavaScriptEnabled")
     YangshipinWebResolver(Activity activity, FrameLayout root, boolean keepTracePage) {
@@ -233,6 +239,11 @@ final class YangshipinWebResolver {
 
     void resolve(final int requestId, final Channel channel, final String definition,
             final Callback callback) {
+        resolve(requestId, channel, definition, false, callback);
+    }
+
+    void resolve(final int requestId, final Channel channel, final String definition,
+            final boolean fresh, final Callback callback) {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -243,6 +254,12 @@ final class YangshipinWebResolver {
                 }
                 pendingRequest = new Pending(requestId, channel, definition, callback);
                 String cacheKey = pendingRequest.cacheKey();
+                if (fresh) {
+                    apiCache.remove(cacheKey);
+                    String key = "url_" + cacheKey;
+                    resolverPrefs.edit().remove(key).remove(key + "_at").apply();
+                    Log.i(TAG, "Discarding cached Yangshipin URL for " + channel.name);
+                }
                 CachedUrl cached = apiCache.get(cacheKey);
                 if (cached == null) {
                     String key = "url_" + cacheKey;
@@ -260,33 +277,71 @@ final class YangshipinWebResolver {
                     completeApi(pendingRequest, cached.url);
                     return;
                 }
-                try {
-                    ensureWebView();
-                    webView.setVisibility(View.VISIBLE);
-                    boolean clockKnown = serverClockOffsetMs != Long.MIN_VALUE;
-                    long guidTimeMs = clockKnown
-                            ? System.currentTimeMillis() + serverClockOffsetMs
-                            : System.currentTimeMillis();
-                    YangshipinApiPayload payload = YangshipinApiPayload.create(
-                            channel, guidTimeMs, pendingRequest.definition);
-                    String html = buildApiPage(channel, payload);
-                    pendingRequest.apiHtml = html;
-                    pendingRequest.apiPayload = payload;
-                    pendingRequest.clockSynced = clockKnown;
-                    pendingRequest.bootstrapScript = buildOfficialBootstrapScript(payload);
-                    installApiCookies(payload);
-                    Log.i(TAG, "Resolving Yangshipin " + pendingRequest.definition
-                            + " API for " + channel.name);
-                    webView.onResume();
-                    webView.loadUrl("https://www.yangshipin.cn/");
-                    webView.postDelayed(timeout, TIMEOUT_MS);
-                } catch (Exception error) {
-                    Log.e(TAG, "Unable to build Yangshipin API request", error);
-                    fail(pendingRequest, error instanceof WebViewAvailability.UnavailableException
-                            ? WebViewAvailability.MESSAGE : "央视频请求生成失败");
+                if (!keepTracePage) {
+                    startNativeApi(pendingRequest);
+                    return;
                 }
+                startWebApi(pendingRequest);
             }
         });
+    }
+
+    private void startNativeApi(final Pending pending) {
+        final long clockOffset = serverClockOffsetMs;
+        Log.i(TAG, "Resolving Yangshipin " + pending.definition + " API without WebView for " + pending.channel.name);
+        pending.nativeWork = nativeWorkers.submit(() -> {
+            try {
+                YangshipinNativeResolver.Result result = new YangshipinNativeResolver().resolve(
+                        pending.channel, pending.definition, clockOffset, pending.deadlineAt,
+                        () -> pendingRequest != pending);
+                activity.runOnUiThread(() -> {
+                    if (pendingRequest != pending) return;
+                    serverClockOffsetMs = result.clockOffsetMs;
+                    resolverPrefs.edit().putLong("clock_offset_ms", result.clockOffsetMs)
+                            .putLong("clock_saved_at", System.currentTimeMillis()).apply();
+                    cacheApiUrl(pending, result.url);
+                    completeApi(pending, result.url);
+                });
+            } catch (Exception | LinkageError error) {
+                if (pendingRequest != pending || Thread.currentThread().isInterrupted()) return;
+                Log.w(TAG, "Native Yangshipin API failed; trying browser compatibility path: " + error.getMessage());
+                activity.runOnUiThread(() -> {
+                    if (pendingRequest != pending) return;
+                    if (android.os.SystemClock.elapsedRealtime() >= pending.deadlineAt) fail(pending, "央视频解析超时");
+                    else startWebApi(pending);
+                });
+            }
+        });
+    }
+
+    private void startWebApi(Pending pending) {
+        if (pendingRequest != pending) return;
+        Channel channel = pending.channel;
+        try {
+            ensureWebView();
+            webView.setVisibility(View.VISIBLE);
+            boolean clockKnown = serverClockOffsetMs != Long.MIN_VALUE;
+            long guidTimeMs = clockKnown
+                    ? System.currentTimeMillis() + serverClockOffsetMs
+                    : System.currentTimeMillis();
+            YangshipinApiPayload payload = YangshipinApiPayload.create(
+                    channel, guidTimeMs, pendingRequest.definition);
+            String html = buildApiPage(channel, payload);
+            pendingRequest.apiHtml = html;
+            pendingRequest.apiPayload = payload;
+            pendingRequest.clockSynced = clockKnown;
+            pendingRequest.bootstrapScript = buildOfficialBootstrapScript(payload);
+            installApiCookies(payload);
+            Log.i(TAG, "Resolving Yangshipin " + pendingRequest.definition
+                    + " API for " + channel.name);
+            webView.onResume();
+            webView.loadUrl("https://www.yangshipin.cn/");
+            webView.postDelayed(timeout, Math.max(1L, pending.deadlineAt - android.os.SystemClock.elapsedRealtime()));
+        } catch (Exception error) {
+            Log.e(TAG, "Unable to build Yangshipin API request", error);
+            fail(pendingRequest, error instanceof WebViewAvailability.UnavailableException
+                    ? WebViewAvailability.MESSAGE : "央视频请求生成失败");
+        }
     }
 
     private static String pluginScript(String name, Map<String, String> values) {
@@ -536,13 +591,7 @@ final class YangshipinWebResolver {
             if (extended.length() > 0 && url.indexOf(extended) < 0) {
                 url += extended;
             }
-            apiCache.put(pending.cacheKey(),
-                    new CachedUrl(url, System.currentTimeMillis()));
-            String key = "url_" + pending.cacheKey();
-            resolverPrefs.edit()
-                    .putString(key, url)
-                    .putLong(key + "_at", System.currentTimeMillis())
-                    .apply();
+            cacheApiUrl(pending, url);
             completeApi(pending, url);
         } catch (Exception error) {
             Log.e(TAG, "Unable to parse Yangshipin API response", error);
@@ -577,8 +626,16 @@ final class YangshipinWebResolver {
         complete(pending);
     }
 
+    private void cacheApiUrl(Pending pending, String url) {
+        long now = System.currentTimeMillis();
+        apiCache.put(pending.cacheKey(), new CachedUrl(url, now));
+        String key = "url_" + pending.cacheKey();
+        resolverPrefs.edit().putString(key, url).putLong(key + "_at", now).apply();
+    }
+
     void destroy() {
         clearPending(false);
+        nativeWorkers.shutdownNow();
         if (webView == null) {
             return;
         }
@@ -820,6 +877,8 @@ final class YangshipinWebResolver {
 
     private void clearPending(boolean stopPage) {
         lifecycleGeneration++;
+        Pending previous = pendingRequest;
+        if (previous != null && previous.nativeWork != null) previous.nativeWork.cancel(true);
         WebView currentWebView = webView;
         if (currentWebView != null) {
             currentWebView.removeCallbacks(timeout);
@@ -883,6 +942,7 @@ final class YangshipinWebResolver {
         final Callback callback;
         final long deadlineAt = android.os.SystemClock.elapsedRealtime() + TIMEOUT_MS;
         boolean nativeRetryUsed;
+        Future<?> nativeWork;
         String resolvedUrl;
         String cmgTag;
         String cmgInitialUpdateTag;

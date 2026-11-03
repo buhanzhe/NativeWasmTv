@@ -12,113 +12,6 @@ function saveLoadTiming() {
     toast("加载耗时显示已保存");
   });
 }
-var legacySelectTarget = null,
-  legacySelectScrollY = 0;
-function selectedOptionText(select) {
-  var index = select.selectedIndex;
-  return index >= 0 && select.options[index] ? select.options[index].textContent : "";
-}
-
-function syncLegacySelectButtons() {
-  var ids = ["clockLocation", "dateTimeFormat", "autoSwitchSourceSeconds"];
-  for (var i = 0; i < ids.length; i++) {
-    var select = document.getElementById(ids[i]),
-      button = select && select._legacyButton;
-    if (button) button.textContent = selectedOptionText(select);
-  }
-}
-
-function lockLegacySelectScroll() {
-  var body = document.body;
-  body.style.position = "fixed";
-  body.style.top = -legacySelectScrollY + "px";
-  body.style.left = "0";
-  body.style.right = "0";
-  body.style.width = "100%";
-}
-
-function restoreLegacySelectScroll() {
-  var body = document.body,
-    y = legacySelectScrollY;
-  body.style.position = "";
-  body.style.top = "";
-  body.style.left = "";
-  body.style.right = "";
-  body.style.width = "";
-  setTimeout(function () {
-    window.scrollTo(0, y);
-  }, 0);
-  setTimeout(function () {
-    window.scrollTo(0, y);
-  }, 80);
-}
-
-function closeLegacySelectPicker(event) {
-  var picker = document.getElementById("legacySelectPicker");
-  if (event && event.target !== picker) return;
-  picker.className = "source-picker";
-  legacySelectTarget = null;
-  restoreLegacySelectScroll();
-}
-
-function chooseLegacySelectOption(value) {
-  var select = legacySelectTarget;
-  if (!select) return;
-  select.value = value;
-  syncLegacySelectButtons();
-  closeLegacySelectPicker();
-  saveDateTime();
-}
-
-function openLegacySelectPicker(select) {
-  if (!select) return;
-  legacySelectTarget = select;
-  legacySelectScrollY =
-    window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
-  var label = document.querySelector('label[for="' + select.id + '"]'),
-    title = document.getElementById("legacySelectTitle"),
-    choices = document.getElementById("legacySelectChoices");
-  title.textContent = label ? label.textContent : select.getAttribute("aria-label") || "选择设置";
-  choices.innerHTML = "";
-  for (var i = 0; i < select.options.length; i++) {
-    var option = select.options[i],
-      button = document.createElement("button"),
-      check = document.createElement("i");
-    button.type = "button";
-    button.className = "legacy-select-choice" + (option.value === select.value ? " selected" : "");
-    button.appendChild(document.createTextNode(option.textContent));
-    check.textContent = "✓";
-    button.appendChild(check);
-    button._value = option.value;
-    button.onclick = function () {
-      chooseLegacySelectOption(this._value);
-    };
-    choices.appendChild(button);
-  }
-  lockLegacySelectScroll();
-  document.getElementById("legacySelectPicker").className = "source-picker show";
-}
-
-function setupLegacyDateTimeSelects() {
-  var ids = ["clockLocation", "dateTimeFormat", "autoSwitchSourceSeconds"];
-  for (var i = 0; i < ids.length; i++) {
-    var select = document.getElementById(ids[i]);
-    if (!select || select._legacyButton) continue;
-    var button = document.createElement("button");
-    button.type = "button";
-    button.id = select.id + "Button";
-    button.className = "legacy-select-trigger";
-    button.setAttribute("aria-label", select.getAttribute("aria-label") || "选择设置");
-    button._select = select;
-    button.onclick = function () {
-      openLegacySelectPicker(this._select);
-    };
-    select.style.display = "none";
-    select.parentNode.insertBefore(button, select.nextSibling);
-    select._legacyButton = button;
-  }
-  syncLegacySelectButtons();
-}
 function saveAutoSwitchSource() {
   var input = document.getElementById("autoSwitchSourceSeconds"),
     seconds = Number(input.value);
@@ -132,7 +25,6 @@ function saveAutoSwitchSource() {
       state.settings.autoSwitchSourceSeconds = seconds;
       state.settings.autoSwitchSource = seconds > 0;
     }
-    syncLegacySelectButtons();
     toast(seconds ? "未播放 " + seconds + " 秒后自动切换备用线路" : "已关闭超时自动切换线路");
   });
 }
@@ -249,7 +141,15 @@ function renderPageState() {
   var checked = ["showColorDebugInfo", "showLoadTiming", "showDebugInfo", "showNetworkSpeed", "showDateTime", "showPlaybackPosition"];
   for (var i = 0; i < checked.length; i++)
     document.getElementById(checked[i]).checked = s[checked[i]] === true;
-  document.getElementById("videoScale").value = s.videoScaleMode || "fit";
+  var scaleSelect = document.getElementById("videoScale");
+  var blurOption = scaleSelect.querySelector('option[value="blur"]');
+  if (s.videoBlurSupported !== true && blurOption) scaleSelect.removeChild(blurOption);
+  if (s.videoBlurSupported === true && !blurOption) {
+    blurOption = document.createElement("option");
+    blurOption.value = "blur"; blurOption.textContent = "背景模糊";
+    scaleSelect.appendChild(blurOption);
+  }
+  scaleSelect.value = s.videoScaleMode === "blur" && s.videoBlurSupported !== true ? "fit" : (s.videoScaleMode || "fit");
   document.getElementById("autoSwitchSourceSeconds").value = String(
     s.autoSwitchSourceSeconds == null ? (s.autoSwitchSource === true ? 5 : 0) : s.autoSwitchSourceSeconds);
   renderSiteQualities();
@@ -262,18 +162,11 @@ function renderPageState() {
     document.getElementById("uiScalePercentValue").textContent = slider.value + "%";
     document.getElementById("uiScaleCustomControls").style.display = uiScaleInput.value === "custom" ? "block" : "none";
   }
-  var display = state.display || {},
-    size = Number(display.diagonalInches) || 0,
-    parts = ["44dp 基准，随屏幕适配", "当前行高约 " + Math.round(46 * (Number(s.uiScaleFactor) || 1)) + "dp"];
-  if (size > 0) parts.push("识别约 " + size.toFixed(1) + " 英寸");
-  if (display.densityDpi) parts.push("DPI " + display.densityDpi);
-  document.getElementById("uiScaleHint").textContent = parts.join(" · ");
+  document.getElementById("uiScaleHint").textContent = "随屏幕适配，可调整缩放";
   document.getElementById("clockLocation").value = s.clockLocation || "right";
   document.getElementById("dateTimeFormat").value = s.dateTimeFormat || "date_time_week";
   var liveMode = s.liveDelayMode || "stable";
   document.getElementById("liveDelay").value = /^(auto|stable|balanced|low)$/.test(liveMode) ? liveMode : "stable";
-  syncLegacySelectButtons();
 }
-setupLegacyDateTimeSelects();
 function renderSiteQualities(){var select=document.getElementById('resolutionMode'),modes=state.settings.siteQualities||['high','medium','low'],names={high:'最高',medium:'适中',low:'最低'};select.innerHTML='';for(var i=0;i<modes.length&&i<3;i++){var option=document.createElement('option');option.value=modes[i];option.textContent=names[modes[i]]||modes[i];select.appendChild(option)}var preferred=state.settings.resolutionMode||'high';select.value=modes.indexOf(preferred)>=0?preferred:modes[0];select.disabled=modes.length===1}
 startPage();

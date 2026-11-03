@@ -461,7 +461,7 @@ final class TvUiChecks {
             }row.put("tvUiActions",actions);
             main(test,()->neutralBackdrop.setVisibility(View.GONE));
             phoneGestures(test,a,row,out);
-            TvUiPlugin.select(a,"ui2");test.waitForIdleSync();main(test,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(7);menuList(a,true).performItemClick(null,7,7);});screenshot(test,out,"ui2-version-idle");
+            TvUiPlugin.select(a,"ui2");test.waitForIdleSync();main(test,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(8);menuList(a,true).performItemClick(null,8,8);});screenshot(test,out,"ui2-version-idle");
             AutoUpdater updater=(AutoUpdater)field(a,"autoUpdater");click(test,a,7,1);long end=SystemClock.elapsedRealtime()+65000;while(("idle".equals(updater.stateJson().optString("state"))||updater.stateJson().optBoolean("checking"))&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);test.waitForIdleSync();
             check(!updater.stateJson().optBoolean("checking"),"Update check never completed");row.put("tvUiLiteUpdate",updater.stateJson());screenshot(test,out,"ui2-version-result");closeMenu(test,a);
         }finally{closeMenu(test,a);ChannelCatalog.GROUPS=catalog;main(test,()->{if(neutralBackdrop.getParent()!=null)((android.view.ViewGroup)neutralBackdrop.getParent()).removeView(neutralBackdrop);set(a,"currentGroupIndex",savedGroup);set(a,"currentChannelIndex",savedChannel);set(a,"currentSourceIndex",savedSource);});restore(test,a,savedSettings);TvUiPlugin.select(a,saved);test.waitForIdleSync();
@@ -590,11 +590,11 @@ final class TvUiChecks {
             for(String id:new String[]{"ui2","ui3","ui4","ui5","ui6"}){
                 TvUiPlugin.select(a,id);t.waitForIdleSync();
                 main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(6);menuList(a,true).performItemClick(null,6,6);});
-                main(t,()->check(menuList(a,false).getCount()==7&&"唱片界面".equals(menuList(a,false).getAdapter().getItem(3)),"Record picker entry missing "+id));
+                main(t,()->check(menuList(a,false).getCount()==9&&"唱片界面".equals(menuList(a,false).getAdapter().getItem(3)),"Record picker entry missing "+id));
                 screenshot(t,out,id+"-preferences");
                 main(t,()->{ListView list=menuList(a,false);list.performItemClick(null,3,3);});
                 long until=SystemClock.elapsedRealtime()+10000;
-                while(SystemClock.elapsedRealtime()<until){final boolean[] ready={false};main(t,()->ready[0]=menuList(a,true).getCount()==1&&menuList(a,false).getCount()>=2);if(ready[0])break;SystemClock.sleep(30);}
+                while(SystemClock.elapsedRealtime()<until){final boolean[] ready={false};main(t,()->ready[0]=menuList(a,true).getCount()==2&&menuList(a,false).getCount()>=2);if(ready[0])break;SystemClock.sleep(30);}
                 main(t,()->check(menuList(a,false).getCount()>=2,"Record choices did not load "+id));
                 main(t,()->menuList(a,false).performItemClick(null,0,0));waitRadioStyle(t,a,artwork,"classic");
                 // Rapid second clicks while an apply is pending must not queue another selection.
@@ -641,7 +641,7 @@ final class TvUiChecks {
                     check(entry.getContentDescription().toString().equals("开机自启，已选中"),"Selected circle state missing");
                 });
                 screenshot(t,out,id+"-selected");closeMenu(t,a);
-                main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(7);menuList(a,true).performItemClick(null,7,7);});
+                main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(8);menuList(a,true).performItemClick(null,8,8);});
                 main(t,()->check(menuList(a,false).getCount()==2,"Version menu contains a status row: "+id));
                 screenshot(t,out,id+"-version");closeMenu(t,a);
                 themes.put(new JSONObject().put("id",id).put("sharedRenderer",true).put("selectedCircle",true));
@@ -945,10 +945,15 @@ final class TvUiChecks {
                     main(t,()->invoke(a,"openChannelList"));ListView list=(ListView)field(a,"channelList");View current=list.getChildAt(list.getSelectedItemPosition()-list.getFirstVisiblePosition());
                     main(t,()->invoke(a,"closeChannelList"));SystemClock.sleep(150);int beat=(Integer)member(current,"beat");SystemClock.sleep(220);
                     check(!(Boolean)member(current,"pulsePosted")&&(Integer)member(current,"beat")==beat,"Closed panel animation kept running");
-                    click(t,a,6,2);main(t,()->{check(menuList(a,true).getCount()==1&&menuList(a,false).getCount()==TvUiPlugin.IDS.length,"Theme selector not opened from preferences");});closeMenu(t,a);
+                    click(t,a,6,2);main(t,()->{check(menuList(a,true).getCount()==2&&menuList(a,false).getCount()==TvUiPlugin.IDS.length,"Theme selector not opened from preferences");});
+                    remoteKey(t,android.view.KeyEvent.KEYCODE_BACK);
+                    main(t,()->check(menuList(a,true).getCount()==9&&menuList(a,false).getCount()==9,"One Back must return directly to preferences"));
+                    closeMenu(t,a);click(t,a,6,2);
+                    main(t,()->{ListView backRows=menuList(a,true);check("返回上级".equals(backRows.getAdapter().getItem(1)),"Missing visible parent entry");backRows.performItemClick(null,1,1);});
+                    main(t,()->check(menuList(a,true).getCount()==9&&menuList(a,false).getCount()==9,"Parent entry must return to preferences"));closeMenu(t,a);
                     managementEntry(t,a,6,null,id+"-management");
                     main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(6);});screenshot(t,out,id+"-preferences");closeMenu(t,a);
-                    main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(7);menuList(a,true).performItemClick(null,7,7);});main(t,()->check(menuList(a,false).getCount()==2,"Version menu must contain only version and update action"));screenshot(t,out,id+"-version");closeMenu(t,a);
+                    main(t,()->{invoke(a,"openTvUiMenu");menuList(a,true).setSelection(8);menuList(a,true).performItemClick(null,8,8);});main(t,()->check(menuList(a,false).getCount()==2,"Version menu must contain only version and update action"));screenshot(t,out,id+"-version");closeMenu(t,a);
                     sample.put("preferencesNavigationPassed",true).put("animationLifecyclePassed",true);
                 }
                 results.put(sample);

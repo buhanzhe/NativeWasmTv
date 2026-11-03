@@ -4,7 +4,7 @@ package xiao.bu.tv;
 final class ControlSite {
     private static final String[] PAGES = {
             "media", "playback", "channels", "browser", "script", "system", "groups",
-            "flymouse", "advanced"
+            "flymouse", "advanced", "personalization", "about", "licenses"
     };
 
     private ControlSite() { }
@@ -28,6 +28,11 @@ final class ControlSite {
         if ("/".equals(path) || "/index.html".equals(path)
                 || "/css/common.css".equals(path) || "/js/common.js".equals(path)
                 || "/js/navigation.js".equals(path)
+                || "/js/quick-add.js".equals(path)
+                || "/js/ui.js".equals(path)
+                || "/licenses/GPL-3.0.txt".equals(path)
+                || "/css/system.css".equals(path) || "/css/about.css".equals(path)
+                || "/css/channels.css".equals(path) || "/css/personalization.css".equals(path)
                 || "/css/night.css".equals(path) || "/js/theme.js".equals(path)
                 || "/css/media.css".equals(path)
                 || "/js/channel-picker.js".equals(path)
@@ -37,7 +42,7 @@ final class ControlSite {
         }
         for (String page : PAGES) {
             if (("/pages/" + page + ".html").equals(path)
-                    || ("/js/pages/" + page + ".js").equals(path)) {
+                    || (!"licenses".equals(page) && ("/js/pages/" + page + ".js").equals(path))) {
                 return true;
             }
         }
@@ -57,6 +62,7 @@ final class ControlSite {
     }
 
     static String contentType(String path) {
+        if (path.endsWith(".txt")) return "text/plain; charset=utf-8";
         if (path.endsWith(".css")) return "text/css; charset=utf-8";
         if (path.endsWith(".js")) return "application/javascript; charset=utf-8";
         return "text/html; charset=utf-8";

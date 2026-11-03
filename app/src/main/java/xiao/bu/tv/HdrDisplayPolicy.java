@@ -30,6 +30,37 @@ final class HdrDisplayPolicy {
         return sdk>=29 && version!=null && (version.startsWith("OpenGL ES 3.")||version.startsWith("OpenGL ES 4."))
                 && extensions!=null && (" "+extensions+" ").contains(" GL_EXT_YUV_target ");
     }
+
+    static final String BT709_SHADER = "uniform mat3 ntvBt709Matrix;\n"
+            + "vec3 ntvFastToSdr(vec3 encoded){return clamp(ntvBt709Matrix*encoded,0.0,1.0);}\n";
+
+    /** Keep the same SDR gamut formula while allowing legacy GLSL compilers to
+     * eliminate the unused PQ/HLG branches and their register allocation. */
+    static String sdrShader(String reference, int transfer) {
+        if (transfer != 1 && transfer != 3) throw new IllegalArgumentException("SDR transfer");
+        return reference.replace("uniform float ntvTransfer;", "const float ntvTransfer = " + transfer + ".0;")
+                .replace("uniform float ntvBt709Source;", "const float ntvBt709Source = 0.0;");
+    }
+
+    /** Undo the decoder RGB matrix and reinterpret YUV as 709, once per format.
+     * Raw YUV has already used the 709 matrix, so it must not be converted twice. */
+    static float[] bt709Reinterpretation(int standard, boolean rawYuv) {
+        float[] matrix = new float[]{1,0,0,0,1,0,0,0,1};
+        if (rawYuv || standard <= 1) return matrix;
+        double kr = standard > 5 ? .2627 : .299;
+        double kb = standard > 5 ? .0593 : .114;
+        double[] luma = {kr,1-kr-kb,kb};
+        for (int column=0;column<3;column++) {
+            double y=luma[column];
+            double u=((column==2?1:0)-y)/(2*(1-kb));
+            double v=((column==0?1:0)-y)/(2*(1-kr));
+            double r=y+1.5748*v, b=y+1.8556*u;
+            matrix[column*3]=(float)r;
+            matrix[column*3+1]=(float)((y-.2126*r-.0722*b)/.7152);
+            matrix[column*3+2]=(float)b;
+        }
+        return matrix;
+    }
     /** Column-major digital YUV -> encoded RGB plus digital offsets (8/10/12 bit). */
     static float[] yuvColor(int standard,int range,int depth){
         depth=depth==10||depth==12?depth:8;float shift=1<<(depth-8),max=(1<<depth)-1;

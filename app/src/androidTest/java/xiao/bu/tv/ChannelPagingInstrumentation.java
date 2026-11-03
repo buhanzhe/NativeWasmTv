@@ -51,11 +51,17 @@ public final class ChannelPagingInstrumentation extends Instrumentation {
             if(before==last){check(list(name).getFirstVisiblePosition()==i,"Next page did not start on first row "+name+"/"+i+" first="+list(name).getFirstVisiblePosition()+" selected="+selected(name)+" height="+list(name).getHeight()+" bottomPad="+list(name).getPaddingBottom()+" firstTop="+list(name).getChildAt(0).getTop());pages++;}
             completeRows(name);nativeBackgrounds();
         }
-        step(1);check(selected(name)==count-1,"List end wrapped "+name);shot(theme+"-"+name+"-last");
+        boolean wrapping=name.equals("channelList");
+        shot(theme+"-"+name+"-last");step(1);
+        if(wrapping){check(selected(name)==0,"Last channel DOWN did not wrap to first");completeRows(name);step(-1);check(selected(name)==count-1,"First channel UP did not wrap to last");completeRows(name);}
+        else check(selected(name)==count-1,"List end wrapped "+name);
         if(name.equals("groupList")){key(KeyEvent.KEYCODE_DPAD_RIGHT);check(list(name).hasFocus()&&list("channelList").getCount()==0,"Empty group accepted child focus");}
         for(int i=count-2;i>=0;i--){int before=selected(name),first=list(name).getFirstVisiblePosition();step(-1);check(selected(name)==i,"UP skipped row "+name+"/"+i);if(before==first)check(lastFull(list(name))==i,"Previous page did not end on last row "+name+"/"+i);completeRows(name);}
-        step(-1);check(selected(name)==0,"List beginning wrapped "+name);check(pages>=1,"Fixture did not cross pages "+name);
-        results.put(new JSONObject().put("theme",theme).put("list",name).put("items",count).put("pageTransitions",pages).put("bothDirections",true).put("noPartialRows",true).put("boundedEnds",true));
+        step(-1);
+        if(wrapping){check(selected(name)==count-1,"First channel UP did not wrap");completeRows(name);step(1);check(selected(name)==0,"Last channel DOWN did not restore first");completeRows(name);}
+        else check(selected(name)==0,"List beginning wrapped "+name);
+        check(pages>=1,"Fixture did not cross pages "+name);
+        results.put(new JSONObject().put("theme",theme).put("list",name).put("items",count).put("pageTransitions",pages).put("bothDirections",true).put("noPartialRows",true).put("wrappingEnds",wrapping));
     }
     private void guide(String path)throws Exception{
         main(()->{set("epgUrls",new String[]{base+path});call("refreshEpgNow",new Class[]{});});
@@ -105,7 +111,7 @@ public final class ChannelPagingInstrumentation extends Instrumentation {
                 // A swipe is a scroll, never a channel activation; next DPAD resumes from the visible viewport.
                 touchDrag(list("channelList"));check((Integer)get("playRequestId")==request,"Touch scrolling switched playback");step(1);completeRows("channelList");
                 main(()->{long now=SystemClock.uptimeMillis();for(int i=1;i<16;i++)activity.dispatchKeyEvent(new KeyEvent(now,now,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN,i));});idle();int stopped=selected("channelList");SystemClock.sleep(300);check(selected("channelList")==stopped,"Held key left queued navigation");
-                for(int repeat=1;repeat<=8;repeat++){int before=selected("channelList");SystemClock.sleep(130);final int r=repeat;main(()->activity.dispatchKeyEvent(new KeyEvent(0,SystemClock.uptimeMillis(),KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN,r)));idle();check(selected("channelList")==Math.min(22,before+1),"Held repeat skipped rows");completeRows("channelList");}
+                for(int repeat=1;repeat<=8;repeat++){int before=selected("channelList");SystemClock.sleep(130);final int r=repeat;main(()->activity.dispatchKeyEvent(new KeyEvent(0,SystemClock.uptimeMillis(),KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN,r)));idle();check(selected("channelList")==((before+1)%23),"Held repeat skipped rows");completeRows("channelList");}
                 check(get("player")==player&&(Integer)get("playRequestId")==request,"Browsing changed playback "+id);
                 shot(id+"-final");results.put(new JSONObject().put("theme",id).put("groupMemory",true).put("channelReorderIdentity",true).put("guideMemory",true).put("refreshIdentity",true).put("emptyGuideEscape",true).put("futureBlocked",true).put("dateHeader",true).put("touchToRemote",true).put("repeatBounded",true).put("samePlayer",true));
                 key(KeyEvent.KEYCODE_DPAD_CENTER);until(()->(Integer)get("playRequestId")>request&&!((View)get("channelListPanel")).isShown(),5000,"OK did not activate/close channel list");
@@ -117,11 +123,11 @@ public final class ChannelPagingInstrumentation extends Instrumentation {
             for(String preset:new String[]{"small","large"})for(String id:TvUiPlugin.IDS){
                 main(()->call("handleWebSettings",new Class[]{JSONObject.class},new JSONObject().put("uiScaleMode",preset)));TvUiPlugin.select(c,id);until(()->(Integer)get("appliedTvUiRevision")==TvUiPlugin.revision(),5000,"Resize theme pending");idle();
                 main(()->call("openChannelList",new Class[]{}));idle();int index=selected("channelList");
-                for(int i=0;i<10;i++){step(-1);index=Math.max(0,index-1);check(selected("channelList")==index,"Resized UP moved incorrectly "+id+"/"+preset);completeRows("channelList");}
-                for(int i=0;i<10;i++){step(1);index=Math.min(22,index+1);check(selected("channelList")==index,"Resized DOWN moved incorrectly "+id+"/"+preset);completeRows("channelList");}
+                for(int i=0;i<10;i++){step(-1);index=(index+22)%23;check(selected("channelList")==index,"Resized UP moved incorrectly "+id+"/"+preset);completeRows("channelList");}
+                for(int i=0;i<10;i++){step(1);index=(index+1)%23;check(selected("channelList")==index,"Resized DOWN moved incorrectly "+id+"/"+preset);completeRows("channelList");}
                 main(()->call("closeChannelList",new Class[]{}));results.put(new JSONObject().put("theme",id).put("preset",preset).put("resizePaging",true));
             }
-            result.putString("stream","PASS: 6 UIs; group/channel/programme full-page forward/back, short final pages, bounded ends, per-group memory, EPG identity refresh/removal/empty, touch-to-remote, held-key throttle, no autoplay, real OK playback; assertions="+assertions+"\n");code=-1;
+            result.putString("stream","PASS: 6 UIs; group/channel/programme full-page forward/back, short final pages, channel wrap, bounded group/EPG ends, per-group memory, EPG identity refresh/removal/empty, touch-to-remote, held-key throttle, no autoplay, real OK playback; assertions="+assertions+"\n");code=-1;
         }catch(Throwable e){result.putString("stream",android.util.Log.getStackTraceString(e));}
         finally{
             try{try(FileOutputStream f=new FileOutputStream(new File(out,"results.json"))){f.write(results.toString(2).getBytes("UTF-8"));}}catch(Exception ignored){}

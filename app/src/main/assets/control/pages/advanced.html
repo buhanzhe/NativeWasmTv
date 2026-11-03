@@ -4,10 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
     <title>高级设置 · nTv</title>
-    <script src="/js/theme.js"></script>
-    <link rel="stylesheet" href="/css/common.css?v=20261019-remove-surface-setting" />
-    <link rel="stylesheet" href="/css/night.css?v=20261019-remove-surface-setting" />
-  </head>
+    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1">
+</head>
   <body data-parent="/index.html">
     <main class="secondary-page channel-config-page">
       <div class="top">
@@ -17,23 +15,31 @@
       </div>
       <section>
         <h2>网页外观</h2>
-        <div class="field">
-          <label for="pageTheme">显示模式</label>
-          <select id="pageTheme" onchange="setPageTheme(this.value)">
-            <option value="system" selected>跟随系统（默认）</option>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="pageTheme">显示模式</label></div>
+<select id="pageTheme" onchange="setPageTheme(this.value)">
+            <option value="system" selected>跟随系统</option>
             <option value="light">日间模式</option>
             <option value="dark">夜间模式</option>
           </select>
-        </div>
+</div>
       </section>
       <section>
         <h2>操作与启动</h2>
+        <div class="switch-row">
+          <div class="switch-copy"><b>全屏启动</b><div class="hint">关闭后仍隐藏顶部状态栏</div></div>
+          <input id="fullscreenStartup" aria-label="全屏启动" type="checkbox" disabled onchange="saveFullscreenStartup()" />
+        </div>
         <div class="switch-row">
           <div class="switch-copy">
             <b>反转上下键</b>
             <div class="hint">上键下一频道，下键上一频道</div>
           </div>
           <input id="reverse" aria-label="反转上下键" type="checkbox" onchange="saveReverse()" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>后台播放</b><div class="hint">默认开启；切到桌面后继续播放，关闭后返回应用再恢复</div></div>
+          <input id="backgroundPlayback" aria-label="后台播放" type="checkbox" checked disabled onchange="saveBackgroundPlayback()" />
         </div>
         <div class="switch-row">
           <div class="switch-copy">
@@ -45,24 +51,24 @@
       </section>
       <section>
         <h2>网络</h2>
-        <div class="field">
-          <label for="dnsMode">DNS 服务</label>
-          <select id="dnsMode" onchange="saveDns()">
-            <option value="ali">阿里 DNS（默认）</option>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="dnsMode">DNS 服务</label></div>
+<select id="dnsMode" onchange="saveDns()">
+            <option value="ali">阿里 DNS</option>
             <option value="tencent">腾讯 DNS</option>
             <option value="114">114 DNS</option>
             <option value="baidu">百度 DNS</option>
             <option value="system">系统 DNS</option>
           </select>
-        </div>
+</div>
         <p class="hint">切换后会重新建立当前播放连接。</p>
       </section>
       <section>
         <h2>GitHub 连接</h2>
-        <div class="field">
-          <label for="githubConnectionMode">连接方式</label>
-          <select id="githubConnectionMode" onchange="changeGithubConnectionMode()">
-            <option value="https://gh-proxy.org/">gh-proxy.org（默认）</option>
+        <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="githubConnectionMode">连接方式</label></div>
+<select id="githubConnectionMode" onchange="changeGithubConnectionMode()">
+            <option value="https://gh-proxy.org/">gh-proxy.org</option>
             <option value="https://gh-proxy.com/">gh-proxy.com</option>
             <option value="https://ghfile.geekertao.top/">ghfile.geekertao.top</option>
             <option value="https://github-proxy.memory-echoes.cn/">github-proxy.memory-echoes.cn</option>
@@ -70,7 +76,7 @@
             <option value="direct">直连 GitHub</option>
             <option value="custom">自定义…</option>
           </select>
-        </div>
+</div>
         <div id="githubProxyCustom" style="display:none">
           <div class="field">
             <label for="githubProxyUrl">自定义网址</label>
@@ -83,81 +89,59 @@
       </section>
       <section>
         <h2>解码兼容</h2>
-        <div class="grid">
-          <div class="field">
-            <label for="decoder">解码模式</label>
-            <select id="decoder" onchange="saveDecoder()">
-              <option value="auto">自动（无画面转软解）</option>
-              <option value="hardware">仅硬解</option>
-              <option value="software">软解（BWDIF 去隔行）</option>
+        <div class="grid compact-select-grid">
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="playerEngine">播放器</label></div>
+<select id="playerEngine" disabled onchange="savePlayerEngine()">
+              <option value="ijk">定制 IJK</option>
+              <option value="system">系统播放器</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="hardwareDecoder">硬解解码器</label>
-            <select id="hardwareDecoder" onchange="saveDecoder()">
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="decoder">解码模式</label></div>
+<select id="decoder" onchange="saveDecoder()">
+              <option value="auto">自动</option>
+              <option value="hardware">仅硬解</option>
+              <option value="software">软解</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="hardwareDecoder">硬解解码器</label></div>
+<select id="hardwareDecoder" onchange="saveDecoder()">
               <option value="auto">自动选择</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="hdrMode">HDR 模式</label>
-            <select id="hdrMode" onchange="saveHdrMode()">
-              <option value="hardware">自动（默认）</option>
-              <option value="mapping">转为 SDR</option>
-              <option value="hardware_sdr">GPU 转为 SDR</option>
-              <option value="bt709">强制 BT.709（色彩修正）</option>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="hdrMode">HDR 模式</label></div>
+<select id="hdrMode" onchange="saveHdrMode()">
+              <option value="hardware">自动</option>
+              <option value="mapping">转 SDR</option>
+              <option value="bt709">强制 BT.709</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="rtspTransport">RTSP 传输协议</label>
-            <select id="rtspTransport" onchange="saveDecoder()">
-              <option value="tcp">TCP（默认稳定）</option>
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="rtspTransport">RTSP 传输协议</label></div>
+<select id="rtspTransport" onchange="saveDecoder()">
+              <option value="tcp">TCP（稳定）</option>
               <option value="udp">UDP（低延迟）</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="spsCompatibility">加密码流 H.264 SPS 兼容清理</label>
-            <select id="spsCompatibility" onchange="saveDecoder()">
+</div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="spsCompatibility">SPS兼容</label></div>
+<select id="spsCompatibility" onchange="saveDecoder()">
               <option value="true">开启（修复）</option>
               <option value="false">关闭（原始码流 A/B）</option>
             </select>
-          </div>
+</div>
         </div>
-        <p class="hint">
-          播放器固定使用定制 IJK，支持 RTSP 与 MP2 音频。RTSP 默认走 TCP；局域网低延迟场景可切换 UDP。
-        </p>
-        <p class="hint">SPS 兼容清理仅用于央视频、央视网专用解密流程；普通未加密码流不做清理，也无需因此重新播放。</p>
-        <p class="hint">隔行视频追求画质可选软解：自动使用 BWDIF 逐场去隔行，1080i50 输出目标为 50fps；逐行视频直接播放。处理速度取决于 CPU 性能。硬解由系统处理去隔行，应用无法统一保证其算法与输出场率。</p>
-        <p class="hint">自动：屏幕支持对应 HDR 格式且系统为 Android 8.0 及以上时直出，否则转为 SDR。转为 SDR：Android 12 及以上优先使用解码器映射，旧系统使用 GPU。GPU 转为 SDR：硬解时固定使用 GPU 映射，适合解码器映射颜色异常的设备。强制 BT.709：仅用于源色彩标记异常，不做 HDR 亮度映射。解码方式仍由解码设置控制；切换后重新播放当前频道。</p>
-      </section>
-      <section class="browser-section">
-        <div class="browser-settings-list">
-        <div class="browser-setting-row">
-          <div class="browser-setting-copy">
-            <b>界面主题</b><span id="tvUiStatus" role="status">离线切换，播放不中断</span>
-          </div>
-          <select id="tvUiStyle" aria-label="界面主题" onchange="saveTvUiStyle()">
-          <option value="builtin">原版界面</option>
-          <option value="ui2">青色圆角</option>
-          <option value="ui3">蓝色卡片</option>
-          <option value="ui4">简洁侧栏</option>
-          <option value="ui5">清透极简</option>
-          <option value="ui6">银雾玻璃</option>
-          </select>
-        </div>
-        <div class="browser-setting-row">
-          <div class="browser-setting-copy">
-            <b>电台界面</b><span id="radioUiStatus" role="status">已下载的界面可离线使用</span>
-          </div>
-          <select id="radioUiStyle" aria-label="电台界面" onchange="saveRadioUiStyle()" disabled>
-            <option value="classic">经典唱片</option><option value="optical">柔光唱片</option>
-          </select>
-        </div>
-        </div>
+        <p class="hint">不兼容时可切换播放器或解码模式；更改部分设置后会重新播放。</p>
+        <p id="systemPlayerHint" class="hint" style="display:none">系统播放器下，IJK设置不生效。</p>
       </section>
     </main>
     <div id="message" class="message"></div>
-    <script src="/js/navigation.js?v=20260926"></script>
-    <script src="/js/common.js?v=20260926-nav"></script>
-    <script src="/js/pages/advanced.js?v=20261019-remove-surface-setting"></script>
-  </body>
+    <script src="/js/navigation.js?v=20261030-ui"></script>
+    <script src="/js/common.js?v=20261030-ui"></script>
+    <script src="/js/pages/advanced.js?v=fullscreen-startup1"></script>
+  <script src="/js/ui.js?v=20261030-ui"></script>
+</body>
 </html>

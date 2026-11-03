@@ -7540,7 +7540,7 @@ static const char *get_prop_string(JSContext *ctx, JSValueConst obj, JSAtom prop
 
 /* if filename != NULL, an additional level is added with the filename
    and line number information (used for parse error). */
-static void build_backtrace(JSContext *ctx, JSValueConst error_obj,
+static void build_backtrace_inner(JSContext *ctx, JSValueConst error_obj,
                             const char *filename, int line_num, int col_num,
                             int backtrace_flags)
 {
@@ -7619,6 +7619,27 @@ static void build_backtrace(JSContext *ctx, JSValueConst error_obj,
     dbuf_free(&dbuf);
     JS_DefinePropertyValue(ctx, error_obj, JS_ATOM_stack, str,
                            JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* Formatting a backtrace can itself run out of memory. The error argument
+   may borrow rt->current_exception; a secondary allocation failure replaces
+   that slot and otherwise frees the object still used by the formatter. */
+static void build_backtrace(JSContext *ctx, JSValueConst error_obj,
+                            const char *filename, int line_num, int col_num,
+                            int backtrace_flags)
+{
+    JSRuntime *rt = ctx->rt;
+    JSValue retained = JS_DupValue(ctx, error_obj);
+    JSValue pending = rt->current_exception;
+    BOOL uncatchable = rt->current_exception_is_uncatchable;
+    rt->current_exception = JS_NULL;
+    rt->current_exception_is_uncatchable = FALSE;
+    build_backtrace_inner(ctx, retained, filename, line_num, col_num,
+                          backtrace_flags);
+    JS_FreeValue(ctx, rt->current_exception);
+    rt->current_exception = pending;
+    rt->current_exception_is_uncatchable = uncatchable;
+    JS_FreeValue(ctx, retained);
 }
 
 /* Note: it is important that no exception is returned by this function */
@@ -54927,7 +54948,7 @@ static double time_clip(double t) {
 
 /* The spec mandates the use of 'double' and it specifies the order
    of the operations */
-static double set_date_fields(double fields[minimum_length(7)], int is_local) {
+static double set_date_fields(JSContext *ctx, double fields[minimum_length(7)], int is_local) {
     double y, m, dt, ym, mn, day, h, s, milli, time, tv;
     int yi, mi, i;
     int64_t days;
@@ -54984,7 +55005,7 @@ static double set_date_fields(double fields[minimum_length(7)], int is_local) {
     return time_clip(tv);
 }
 
-static double set_date_fields_checked(double fields[minimum_length(7)], int is_local)
+static double set_date_fields_checked(JSContext *ctx, double fields[minimum_length(7)], int is_local)
 {
     int i;
     double a;
@@ -54996,7 +55017,7 @@ static double set_date_fields_checked(double fields[minimum_length(7)], int is_l
         if (i == 0 && fields[0] >= 0 && fields[0] < 100)
             fields[0] += 1900;
     }
-    return set_date_fields(fields, is_local);
+    return set_date_fields(ctx, fields, is_local);
 }
 
 static JSValue get_date_field(JSContext *ctx, JSValueConst this_val,
@@ -55052,7 +55073,7 @@ static JSValue set_date_field(JSContext *ctx, JSValueConst this_val,
         return JS_NAN; /* thisTimeValue is NaN */
 
     if (res && argc > 0)
-        d = set_date_fields(fields, is_local);
+        d = set_date_fields(ctx, fields, is_local);
 
     return JS_SetThisTimeValue(ctx, this_val, d);
 }
@@ -55172,10 +55193,11 @@ static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
 }
 
 /* OS dependent: return the UTC time in ms since 1970. */
-static int64_t date_now(void) {
+static int64_t date_now(JSContext *ctx) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+    int64_t value = (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+    return value;
 }
 
 static JSValue js_date_constructor(JSContext *ctx, JSValueConst new_target,
@@ -55192,7 +55214,7 @@ static JSValue js_date_constructor(JSContext *ctx, JSValueConst new_target,
     }
     n = argc;
     if (n == 0) {
-        val = date_now();
+        val = date_now(ctx);
     } else if (n == 1) {
         JSValue v, dv;
         if (JS_VALUE_GET_TAG(argv[0]) == JS_TAG_OBJECT) {
@@ -55225,7 +55247,7 @@ static JSValue js_date_constructor(JSContext *ctx, JSValueConst new_target,
             if (JS_ToFloat64(ctx, &fields[i], argv[i]))
                 return JS_EXCEPTION;
         }
-        val = set_date_fields_checked(fields, 1);
+        val = set_date_fields_checked(ctx, fields, 1);
     }
 has_val:
 #if 0
@@ -55265,7 +55287,7 @@ static JSValue js_Date_UTC(JSContext *ctx, JSValueConst this_val,
         if (JS_ToFloat64(ctx, &fields[i], argv[i]))
             return JS_EXCEPTION;
     }
-    return JS_NewFloat64(ctx, set_date_fields_checked(fields, 0));
+    return JS_NewFloat64(ctx, set_date_fields_checked(ctx, fields, 0));
 }
 
 /* Date string parsing */
@@ -55724,7 +55746,7 @@ static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val,
         if (valid) {
             for(i = 0; i < 7; i++)
                 fields1[i] = fields[i];
-            d = set_date_fields(fields1, is_local) - fields[8] * 60000;
+            d = set_date_fields(ctx, fields1, is_local) - fields[8] * 60000;
             rv = JS_NewFloat64(ctx, d);
         }
     }
@@ -55736,7 +55758,7 @@ static JSValue js_Date_now(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {
     // now()
-    return JS_NewInt64(ctx, date_now());
+    return JS_NewInt64(ctx, date_now(ctx));
 }
 
 static JSValue js_date_Symbol_toPrimitive(JSContext *ctx, JSValueConst this_val,
