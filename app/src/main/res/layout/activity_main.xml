@@ -14,6 +14,12 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <View
+        android:id="@+id/startup_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <xiao.bu.tv.AudioArtworkView
         android:id="@+id/audio_artwork"
         android:layout_width="match_parent"
@@ -166,7 +172,8 @@
     <LinearLayout
         android:id="@+id/channel_bar"
         android:layout_width="match_parent"
-        android:layout_height="108dp"
+        android:layout_height="wrap_content"
+        android:minHeight="108dp"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="18dp"
         android:background="@drawable/player_info_background"

@@ -70,6 +70,10 @@
       playing: playing, canPlay: !!(handlers.play || m), canPause: !!(handlers.pause || m),
       title: text(meta && meta.title), artist: text(meta && meta.artist), album: text(meta && meta.album),
       artwork: cover, audioOnly: !!m && m.tagName.toLowerCase() === 'audio',
+      mediaReadyState: m ? Number(m.readyState) || 0 : 0,
+      mediaTimeMs: m ? Math.round((Number(m.currentTime) || 0) * 1000) : 0,
+      videoWidth: m ? Number(m.videoWidth) || 0 : 0, videoHeight: m ? Number(m.videoHeight) || 0 : 0,
+      mediaPaused: !m || !!m.paused, mediaEnded: !!(m && m.ended),
       durationMs: Math.round(duration * 1000), positionMs: Math.round(Math.max(0, duration ? Math.min(duration, current) : current) * 1000),
       error: error };
   }
@@ -101,7 +105,14 @@
   }
   window.__ntvWebMedia = {
     ownSnapshot: ownSnapshot,
-    snapshot: function () { var state = selected().state; state.documentToken = token; return state; },
+    snapshot: function () {
+      var state = selected().state, tv = window.__ntvTvPlayback && window.__ntvTvPlayback.state();
+      state.documentToken = token;
+      state.tvFullscreen = !!(tv && tv.fullscreen);
+      state.tvFullscreenRevision = tv ? tv.revision : 0;
+      state.tvPlayback = tv || null;
+      return state;
+    },
     act: act,
     command: function (documentToken, mediaToken, action, deadline) {
       var target = selected();

@@ -7,6 +7,7 @@ import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 final class IjkStreamMetrics {
     private static final Method GET_FLOAT = findGetter("_getPropertyFloat", int.class, float.class);
     private static final Method GET_LONG = findGetter("_getPropertyLong", int.class, long.class);
+    private static final Method SET_LONG = findGetter("_setPropertyLong", int.class, long.class);
     private static final Method GET_CODEC = findGetter("_getVideoCodecInfo");
     private static final int SOURCE_FPS = 11001;
     private static final int OUTPUT_FRAMES = 22001;
@@ -15,6 +16,22 @@ final class IjkStreamMetrics {
     private static final int DEINTERLACE = 22012;
     private static final int VIDEO_PAYLOAD_BYTES = 22013;
     private static final int AUDIO_PAYLOAD_BYTES = 22014;
+    private static final int LIVE_BUFFER_ADVANCE = 22015;
+    private static final int LIVE_BUFFER_ADJUSTING = 22016;
+
+    static boolean liveBufferControlAvailable(IjkMediaPlayer player) {
+        return SET_LONG != null && longProperty(player, LIVE_BUFFER_ADVANCE, 0L) == 1L;
+    }
+
+    static boolean liveBufferAdjusting(IjkMediaPlayer player) {
+        return longProperty(player, LIVE_BUFFER_ADJUSTING, 0L) == 1L;
+    }
+
+    static void advanceLiveBuffer(IjkMediaPlayer player, long advanceMs) throws java.io.IOException {
+        if (!liveBufferControlAvailable(player)) throw new java.io.IOException("当前播放器不支持直播缓冲调节");
+        try { SET_LONG.invoke(player, LIVE_BUFFER_ADVANCE, advanceMs); }
+        catch (Exception error) { throw new java.io.IOException("直播缓冲调节失败", error); }
+    }
 
     private static Method findGetter(String name, Class<?>... parameters) {
         try {

@@ -154,6 +154,7 @@ public final class HdrDecoderColorInstrumentation extends Instrumentation {
                     .put("reportedRange",fixture.optInt("reportedRange",-1))
                     .put("frames",frames).put("surfaceTimestamp",texture.getTimestamp())
                     .put("gpuFrames",NativeHdrOutput.renderedFrameCount()).put("colorOutput",NativeHdrOutput.outputRoute(true))
+                    .put("gpuTiming",NativeHdrOutput.performance())
                     .put("rawYuv",bridge!=null&&raw.getBoolean(bridge))
                     .put("pixels",pixels).put("expected",expected).put("maxError",maxError).put("pass",maxError<=5);
         } finally {

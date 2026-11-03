@@ -6,7 +6,7 @@ pushd "%~dp0"
 if errorlevel 1 goto directory_error
 if not exist "scripts\build-release.ps1" goto missing_script
 
-echo Building nTv ARM32, ARM64 and x86 release APKs...
+echo Building nTv ARM32, ARM64, x86 and ARM32 browser release APKs...
 echo.
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build-release.ps1" %*
 set "ntvReleaseExit=%errorlevel%"

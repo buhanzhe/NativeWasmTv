@@ -139,6 +139,18 @@ Audio capability APIs can describe a disconnected or inactive output on older An
 
 ## Rebuilding native libraries
 
+Live HLS buffering also checks a satisfied packet reserve immediately before
+the next demux read (`apply-buffer-resume-patches.cjs`). Cached fragments can
+arrive inside the 500 ms polling interval and then leave the read thread waiting
+for a playlist update, even though both queues already satisfy the target.
+The added check keeps the same watermarks, track/packet requirements and pause
+behavior; its steady-playback path only tests the buffering flag. Finite-HLS
+adaptive reserves keep their existing path. Rebuild `libijkplayer.so` for all
+three ABIs after changing this overlay; SDL and FFmpeg do not need rebuilding.
+`test-buffer-resume.py --device SERIAL --output DIR` exercises the production
+buffering function and packet guard on Android, including the burst-before-read
+case, insufficient audio, abort, VOD, audio/video-only and steady-playback calls.
+
 HEVC source colour/depth is also read directly from bounded SPS headers in Annex B
 and hvcC extradata. Valid Alternative Transfer SEI overrides the compatible VUI;
 reserved/unspecified values cannot erase a valid SPS transfer. Both Annex B and
@@ -432,6 +444,24 @@ No Media3 runtime dependency is included. This implementation follows the
 without importing its player/effect graph. Android documents
 [codec tone mapping](https://developer.android.com/reference/android/media/MediaFormat#KEY_COLOR_TRANSFER_REQUEST)
 from API 31 and [GPU tone mapping capability requirements](https://developer.android.com/media/media3/transformer/supported-formats#hdr).
+
+The GPU output thread uses display scheduling priority. IJK already releases
+video against its A/V clock; the bridge requests the EGL config's minimum swap
+interval, with interval 1 retained when capability queries or the request fail.
+This avoids a second refresh-period wait where the driver permits interval 0;
+it does not lower resolution or change tone mapping/LUT precision. See the
+[EGL swap interval reference](https://www.khronos.org/files/egl-1-4-quick-reference-card.pdf).
+`gpuTiming` includes configured input/output dimensions and swap interval, in
+addition to latch, submission and swap timings, to distinguish scaling from
+decoder/GPU/presentation limits.
+
+Surface recreation reapplies the saved source buffer dimensions before decoder
+attachment. Transient zero/partial dimensions during mode changes are ignored;
+valid size/SAR updates still apply, with repeated metadata avoiding redundant
+resizes. `tests/hdr-output-state.test.py` covers these transitions and rejected
+EGL requests; original-code controls reproduce both geometry failures. These
+checks do not establish sustained frame rate on a particular device/stream.
+
 `python tests/hdr-codec-fallback.test.py` fault-injects accepted/rejected/throwing
 codec transactions and checks API 14–37 policy plus 24 matrix/range/depth cases.
 These host checks do not replace physical API 31+ codec validation.
@@ -458,7 +488,11 @@ See [Display.getHdrSdrRatio](https://developer.android.com/reference/android/vie
 
 Mapping/hardware/hardware_sdr leave normal SDR colour metadata unchanged. New installs and absent/invalid preferences default to `hardware`, which the app explicitly supplies as native mode 1. Saved `passthrough` preferences migrate to `hardware`; other saved selections persist. The separate decoder setting controls hardware/software selection. `test-hdr-display-policy.java` verifies automatic output across API levels and advertised HDR capabilities, SDR mapping paths, unknown display fallback, and legacy preference migration.
 
-Software decoding uses a YUV GLES output from the first frame, including on API 14–16, and preserves per-frame matrix/range/transfer/static light levels unless BT.709 is explicitly selected. Its YUV420 10-bit -> 8-bit upload conversion remains in FFmpeg; tone mapping runs on the GPU. This does not make old CPUs capable of software 4K playback. Replacement IJK preparation waits asynchronously for the preceding player release (bounded to two seconds), and HDR bridge replacement also waits for its old EGL producer to disconnect. These handoffs prevent a new output connecting to a Surface still owned by the old codec. GPU output statistics count distinct texture timestamps after successful swaps, return zero after a stall, and do not count retained repaints.
+Software decoding uses a YUV GLES output from the first frame, including on API 14–16, and preserves per-frame matrix/range/transfer/static light levels unless BT.709 is explicitly selected. YUV420P10LE now retains the decoder's 10-bit planes and uploads both bytes directly to GLES; it avoids the scalar full-frame 10-bit -> 8-bit conversion and extra frame buffer. Chroma pitches and odd dimensions are handled separately, and limited/full-range offsets retain 10-bit values. YUV texture storage is reused until the plane dimensions change. Tone mapping still runs on the GPU. This does not make old CPUs capable of software 4K playback. Replacement IJK preparation waits asynchronously for the preceding player release (bounded to two seconds), and HDR bridge replacement also waits for its old EGL producer to disconnect. These handoffs prevent a new output connecting to a Surface still owned by the old codec. GPU output statistics count distinct texture timestamps after successful swaps, return zero after a stall, and do not count retained repaints.
+
+`apply-software-render-patches.cjs` also makes the decoder's maximum-frame-rate gate prefer a valid average picture rate, falling back to `r_frame_rate` only when the average is missing. A 25-picture/50-field stream therefore no longer triggers two contradictory rate checks and unnecessary non-reference-frame skipping. True high-picture-rate streams retain the existing limit. Reopening a lower-rate track clears the previous high-rate decision.
+
+`python tools/ijk/test-software-render.py --serial SERIAL --abi arm64-v8a --ndk NDK_PATH --libs app/src/main/libs --output .codex-tmp/software-render-test` links the actual SDL overlay/GLES code and runs it on the device. It checks 8/10-bit 420/444 pixels, limited/full range, zero-copy frame ownership, texture updates, odd/padded sizes, resize and the actual picture-rate gate. `--bench-only` permits a comparison against old SDL libraries. On MI 6 / Android 7.1.1, 4K conversion plus texture submission fell from about 24 ms to 9 ms per frame; that isolated benchmark is not playback FPS. A 35.9 Mbps 4K50 HEVC sample still exceeded the phone's software decoder capacity and remained around 1.6 output FPS. Hardware decoding or a less demanding source is still needed for that case.
 
 The source `app/src/main/res/raw/hdr_tonemap.glsl` is shared with the native shaders; keep it with the LGPL native overlays when redistributing. Both `libijkplayer.so` and `libijksdl.so` must be rebuilt together because overlay colour fields extend their shared structure. The current ARM32/ARM64 IJK/SDL builds use NDK r17c against the existing FFmpeg binaries; Gradle alone cannot rebuild them. The format-prefix migration also removes previously duplicated performance/DV blocks and is idempotent.
 
@@ -477,12 +511,34 @@ Original source scan order, bit depth, colour tags and HDR side data remain
 independent of the progressive output frames. Unsupported interlaced pixel formats
 surface a playback error rather than silently uploading combed frames.
 
+Interlaced software frames bypass `get_video_frame`'s early-drop decision so
+BWDIF always receives consecutive temporal references. Early dropping previously
+removed two fields at a time before filtering, potentially introducing vertical
+motion jumps and invalid temporal neighbours. Late progressive output can still
+be dropped by the display scheduler to retain audio sync; this is not a promise
+of full field rate on an overloaded CPU. Progressive early dropping is unchanged.
+`test-interlaced-early-drop.py` executes the production decision with controlled
+late timestamps on Android, checking that interlaced references survive while
+progressive dropping still works.
+
 The scalar kernels in `ntv_bwdif_kernel.h` derive from pinned FFmpeg 3.4
 `vf_bwdif.c` (FFmpeg commit 2902e33f6e59), retaining LGPL and BBC attribution.
 The wrapper uses the corrected row bounds from current FFmpeg for high-depth
 pixels. It supports planar three-component YUV at 8–16 bits, uses up to four
 workers for HD, and adds one source-frame lookahead. It does not add libavfilter,
 extra shared libraries or fixture videos to the APK.
+
+The worker pool now upgrades after a stream switches from SD to HD. Previously,
+rendering one SD field permanently selected a single worker for that player,
+including later 1080i frames. A partially created pool is still reused safely.
+
+Forward timestamp gaps no longer stretch the two fields of the preceding source
+picture across missing pictures. The last observed source period supplies field
+spacing; discontinuities drain spatially and reset temporal references. For a
+25-frame/s input with PTS `0,1,5,6` in time base `1/25`, the second field of the
+picture at 40 ms now appears at 60 ms, rather than 120 ms. The actual gap before
+the picture at 200 ms is retained. Packet durations that describe individual
+fields are confirmed against PTS, avoiding accidental doubling of output cadence.
 
 This path runs on software decoding, including hardware-decoder fallback.
 It does not configure MediaCodec's vendor deinterlacer. Android has no common
@@ -505,12 +561,71 @@ cover field count, PTS/duration, seek/EOF, colour preservation and references.
 Example on Windows, with the configured IJK source and NDK r17c:
 
 ```powershell
-python tools/ijk/test-deinterlace.py --serial DEVICE --abi arm64-v8a --ndk D:/android/sdk/ndk/android-ndk-r17c --output .codex-tmp/deinterlace/pixels-arm64
+python tools/ijk/test-deinterlace.py --serial DEVICE --abi arm64-v8a --ndk D:/android/sdk/ndk/android-ndk-r17c --output .codex-tmp/deinterlace/pixels-arm64 --lifecycle --scroll
 ```
 
-Use `--abi armeabi-v7a` for an ARM32 device. Both top/bottom first, 8/10-bit,
+Use `--abi armeabi-v7a` for an ARM32 device. Both top/bottom first, 8–16-bit,
 multithreaded and progressive controls are compared; differences fail the run.
+Add `--scroll` for 1920x1080 vertically scrolling text in both field orders.
+Add `--lifecycle` for mixed progressive/interlaced flags, fractional/unknown PTS,
+SD-to-HD changes, timestamp gaps, field-coded durations, changing row strides,
+unsupported formats, aborted output and 32 threaded create/drain/destroy cycles.
+On the Android 17/API37 phone (25019PNF3C), all 13 pixel cases matched FFmpeg
+exactly, including 20 progressive outputs from each 10-frame 1080i scroll case.
+The controlled late-frame regression also passed. A same-package player test on
+that phone subsequently maintained 50 measured output fps for both top-first
+upward and bottom-first downward Chinese text. Baseline and patched players both
+passed at ordinary load; this does not reproduce every reported jitter case.
+The patched APK remains installed, with the original shared preferences restored.
+
+`test-deinterlace-motion.py --output DIRECTORY` generates known 1080p50 sources,
+interlaces it in both orders and checks BWDIF/YADIF field output against the
+original. The default speeds are 2/4/8/16 source pixels per output field
+(100/200/400/800 pixels/s); `--steps 1,4,16,32` overrides them. Both upward/downward
+motion must preserve every source field and remain monotonic. Faster fixtures
+have fewer frames to keep every glyph visible without wraps or clipping.
+Deliberately reversed parity must produce backwards steps, so the test
+also checks its ability to detect field-order jitter. PSNR covers only the text
+region, excluding temporal startup/EOF. It is a synthetic quality check, not a
+claim of lossless reconstruction or a general ranking of deinterlacers.
+
+The Android 17 same-package comparison was also extended to all four speeds,
+both directions and field orders (32 baseline/patched combinations). Stable
+recorded intervals contained no reversed motion or steps exceeding 1.5 fields.
+Baseline output measured 49.5–50.5 fps; patched output measured 50 fps. Recording
+motion intervals varied around 17/25 ms on the phone's 120 Hz display in both
+versions, so these results do not establish perfectly uniform presentation or
+reproduce the original user report. Startup and speed-change intervals were
+excluded; deliberate text wraparound was unwrapped by its known 800-pixel period.
+
+### Extended Android 17 software validation (2026-10-26)
+
+The same-package build was tested with AVC 1080i50 MP4/HLS + AC-3 5.1, AVC
+1080i59.94 bottom-first, MPEG-2 1080i50, progressive AVC 25/60 fps and HEVC
+30 fps Main10 SDR / 50 fps. All eight playback cases passed. Five pause/resume
+and forward/backward seeks settled in about 1.6–2.2 seconds; 30 rapid channel
+switches returned to advancing software output.
+
+A complete five-minute high-motion 1080i50 run measured 49.5–50.5 output fps
+after startup (mean 49.99), including 30 seconds of four additional bounded CPU workers.
+There was no player-process restart or sustained clock stall. Sampled PSS ranged
+235.4–239.0 MiB; this short run alone is not proof of absence of memory leaks.
+An earlier run was interrupted when another app entered the foreground and was
+excluded from the pass result. Original shared preferences were restored.
+
+A single MPEG-TS stream also changed from 720x480 interlaced to 1920x1080:
+worker threads increased from zero extra SD workers to three extra HD workers,
+output remained approximately 50 fps and EOF drained normally. Original-wrapper
+negative controls reproduce both the SD-worker assertion and the stretched-field
+timestamp failure; the fixed wrapper passes both. The phone is ARM64-only, so
+ARM32 is cross-compiled but not claimed as executed on that device.
 Reference: https://ffmpeg.org/ffmpeg-filters.html#bwdif
+
+Cadence and timestamp discontinuity detection share one calculation per picture.
+The renderer reuses its output AVFrame object while queued pixels retain their
+own buffer references. `test-deinterlace.py --lifecycle` also checks duplicate
+and backward timestamps, and retained pixels across rendering and teardown.
+All 13 pixel cases, including full-HD scrolling text, remain identical to FFmpeg.
 
 RTSP debug latency uses property 22002: match packet PTS and stream serial to
 the submitted video frame, then measure monotonic time from demux arrival to

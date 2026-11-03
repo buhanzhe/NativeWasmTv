@@ -56,6 +56,27 @@ final class VideoScreenshot {
 
     void clear() { cachedLegacy = null; }
 
+    static boolean needsSegmentCache() {
+        // Older Amlogic video planes can report PixelCopy.SUCCESS while exposing
+        // an empty YUV buffer. Keep one existing TS body for on-demand fallback.
+        return Build.VERSION.SDK_INT < 24 || (Build.VERSION.SDK_INT <= 28
+                && "amlogic".equalsIgnoreCase(Build.HARDWARE));
+    }
+
+    static boolean isGreenPlaceholder(Bitmap bitmap) {
+        int green = 0, low = 255, high = 0;
+        // Sample cell centres: the broken plane can have a thin bright top edge.
+        for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) {
+            int color = bitmap.getPixel((2 * x + 1) * bitmap.getWidth() / 64,
+                    (2 * y + 1) * bitmap.getHeight() / 36);
+            int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
+            if (r <= 2 && b <= 2 && g >= 130 && g <= 138) {
+                green++; low = Math.min(low, g); high = Math.max(high, g);
+            }
+        }
+        return green >= 565 && high - low <= 2;
+    }
+
     interface Source {
         Target current() throws IOException;
     }
@@ -140,11 +161,17 @@ final class VideoScreenshot {
             throw error;
         }
         try {
+            if (needsSegmentCache() && isGreenPlaceholder(bitmap)) {
+                bitmap.recycle(); bitmap = null;
+                // Decode a cached keyframe without changing the playing decoder
+                // or fetching the stream again. Genuine green content stays valid.
+                return captureLegacy(source, preview);
+            }
             return encode(bitmap, preview);
         } catch (OutOfMemoryError error) {
             throw new IOException("内存不足，暂时无法保存截屏");
         } finally {
-            bitmap.recycle();
+            if (bitmap != null) bitmap.recycle();
             busy.set(false);
         }
     }

@@ -6,6 +6,7 @@ src=(root/'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text(encoding='
 def method(start,end): return src[src.index(start):src.index(end,src.index(start))]
 methods=method('    private void handleUnavailableSource(', '    private boolean isDeviceNetworkDisconnected(')
 methods+=method('    private void showPlaybackForbidden(', '    private void dispatchFlyMouseButtonDown(')
+methods+=method('    private void resolveCjsSite(final Channel channel, final String pageUrl,\n            final int requestId, final ChannelPreparationGate gate)', '    private void startResolvedPlayer(Channel channel, String streamUrl,')
 
 java=r'''import java.util.concurrent.Executor;import java.io.IOException;
 class ChannelSourceFailureCheck {
@@ -18,6 +19,29 @@ class ChannelSourceFailureCheck {
  EpgManager.Program catchupProgram;
  int catchupSource(Channel c,EpgManager.Program p,int preferred,int direction){throw new AssertionError("Live regression entered catchup path");}
  void beginCatchupPlayback(int group,int index,int source,EpgManager.Program p,String url){throw new AssertionError("Live regression entered catchup path");}
+ static final String TAG="test";
+ static class Log {static void w(String tag,String message){}}
+ static class ChannelPreparationGate {Runnable pending;boolean opened;boolean defer(Runnable r){if(opened)return false;pending=r;return true;}void open(){opened=true;if(pending!=null)pending.run();}}
+ static class CjsSource {String url;}CjsSource activeCjsSource;
+ static class Proxy {void setWebRequestHeaders(String r,String a,Object c){}void configureCjsTransformer(String t,String[]a,String[]h){}}
+ Proxy proxy=new Proxy();
+ static class CjsSiteResolver {
+  interface Callback {void onResolved(int id,Result r);void onFailed(int id,String reason);}
+  static class Result {String referer="",transformer="",url="";String[]transformerArgs={},mediaHosts={};boolean directDataSource;}
+  Callback callback;void cancel(){}void resolve(int id,String n,String p,String q,String s,boolean fresh,Callback c){callback=c;}
+ }
+ CjsSiteResolver cjsSiteResolver=new CjsSiteResolver();
+ static class ChannelNetworkWarmup {static class CjsLease {CjsSiteResolver resolver;CjsSiteResolver.Result result;}CjsLease takeCjs(String p,String q,String s,int i,CjsSiteResolver.Callback c){return null;}}
+ ChannelNetworkWarmup channelNetworkWarmup;
+ int freshYangshipinRequestId=-1,warmResultRequest;
+ void updateLoadingStatus(String s){}String customSourceStatus(String s){return s;}
+ void logSelectedChannelUrl(int i){}void startResolvedPlayer(Channel c,String u,boolean d){}
+ String playbackResolutionMode(){return "high";}boolean retryWarmedSource(int i){return false;}
+ int playRequestId=1;boolean rememberChannelSource;Channel quickChannel;
+ static class Memory {void rememberSource(String key,String url){throw new AssertionError("Disabled memory must not write");}}
+ Memory playbackMemory=new Memory();Object currentGroup(){return null;}String playbackMemoryKey(Object group,Channel c){return "key";}
+ void recordLoadError(String s){}boolean refreshContinuousHttpPlayback(int id,String s){return false;}boolean refreshYangshipinPlayback(int id,String s){return false;}
+ String sourceLineDescription(Channel c,int index){return "";}
  boolean autoSwitchSource,offline,released;
  Channel channel;int currentGroupIndex,currentChannelIndex=7,currentSourceIndex,triedCustomSources=1,starts;String status="";
  ChannelSourceFailureCheck(int count){channel=new Channel(count);}
@@ -45,7 +69,26 @@ class ChannelSourceFailureCheck {
   s.handleUnavailableSource("failed","network");check(s.currentChannelIndex==7);check(s.starts==0);
   s=new ChannelSourceFailureCheck(1);
   s.showPlaybackForbidden(s.channel);check(s.currentChannelIndex==7);check(s.starts==0&&s.status.equals("forbidden"));
-  System.out.println("PASS: requested channel retained; timeout/403 backup; exhausted/single/offline terminate without rollback");
+  s=new ChannelSourceFailureCheck(2);s.autoSwitchSource=true;
+  s.resolveCjsSite(s.channel,"https://tv.cctv.com/live/cctv1/",1,null);
+  s.cjsSiteResolver.callback.onFailed(1,"Injected CCTV plugin failure");
+  check(s.currentChannelIndex==7&&s.currentSourceIndex==1&&s.starts==1);
+  s=new ChannelSourceFailureCheck(1);s.autoSwitchSource=true;
+  s.resolveCjsSite(s.channel,"https://tv.cctv.com/live/cctv1/",1,null);
+  s.cjsSiteResolver.callback.onFailed(1,"Injected CCTV plugin failure");
+  check(s.currentSourceIndex==0&&s.starts==0&&s.status.contains("站点插件解析失败"));
+  s=new ChannelSourceFailureCheck(2);s.autoSwitchSource=true;s.triedCustomSources=2;
+  s.resolveCjsSite(s.channel,"https://tv.cctv.com/live/cctv1/",1,null);
+  s.cjsSiteResolver.callback.onFailed(1,"Injected CCTV plugin failure");
+  check(s.starts==0&&s.status.contains("全部"));
+  s=new ChannelSourceFailureCheck(2);s.autoSwitchSource=true;
+  s.resolveCjsSite(s.channel,"https://tv.cctv.com/live/cctv1/",1,null);
+  s.cjsSiteResolver.callback.onFailed(0,"Obsolete failure");check(s.starts==0&&s.currentSourceIndex==0);
+  s=new ChannelSourceFailureCheck(2);s.autoSwitchSource=true;ChannelPreparationGate gate=new ChannelPreparationGate();
+  s.resolveCjsSite(s.channel,"https://tv.cctv.com/live/cctv1/",1,gate);
+  s.cjsSiteResolver.callback.onFailed(1,"Injected CCTV plugin failure");check(s.starts==0);gate.open();
+  check(s.currentChannelIndex==7&&s.currentSourceIndex==1&&s.starts==1);
+  System.out.println("PASS: source failure policy and actual CCTV plugin callback select the next configured source; single/exhausted/stale/deferred failures retained");
  }
 }'''.replace('METHODS',methods)
 out=root/'.codex-tmp/channel-source-failure';out.mkdir(parents=True,exist_ok=True)

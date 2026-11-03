@@ -14,6 +14,9 @@ parser.add_argument('--serial', required=True)
 parser.add_argument('--abi', choices=['arm64-v8a', 'armeabi-v7a'], required=True)
 parser.add_argument('--ndk', required=True, type=pathlib.Path)
 parser.add_argument('--output', required=True, type=pathlib.Path)
+parser.add_argument('--scroll', action='store_true',
+                    help='Also compare full-HD vertically scrolling text in both field orders')
+parser.add_argument('--lifecycle', action='store_true', help='Also test mixed flags, fractional/unknown PTS, size changes and gaps')
 args = parser.parse_args()
 repo = pathlib.Path(__file__).resolve().parents[2]
 root = args.output.resolve()
@@ -41,16 +44,27 @@ adb('shell', 'mkdir -p ' + remote)
 adb('push', root / 'libs' / args.abi / 'deinterlace-test', remote + '/')
 adb('push', repo / 'app/src/main/libs' / args.abi / 'libijkffmpeg.so', remote + '/')
 adb('shell', 'chmod 755 ' + remote + '/deinterlace-test')
+if args.lifecycle:
+    result=adb('shell', f'cd {remote} && LD_LIBRARY_PATH=. ./deinterlace-test --lifecycle')
+    (root/'lifecycle.txt').write_text(result)
+    print(result,flush=True)
 results = []
 cases = [('8-tff',64,32,8,'tff'), ('8-bff',64,32,8,'bff'),
          ('10-tff',64,32,10,'tff'), ('10-bff',64,32,10,'bff'),
          ('8-threaded',96,576,8,'tff'), ('10-threaded',96,576,10,'bff'),
+         ('9-tff',66,34,9,'tff'), ('12-bff',66,34,12,'bff'),
+         ('14-tff',64,18,14,'tff'), ('16-threaded',96,576,16,'bff'),
          ('8-progressive',64,32,8,'prog')]
+if args.scroll:
+    cases += [('8-scroll-tff',1920,1080,8,'tff'), ('8-scroll-bff',1920,1080,8,'bff')]
 for name, width, height, depth, order in cases:
-    fmt = 'yuv420p' if depth == 8 else 'yuv420p10le'
+    fmt = 'yuv420p' if depth == 8 else f'yuv420p{depth}le'
     source, reference, actual = [root / (kind + name + '.yuv') for kind in ['input','reference','output']]
     progressive = order == 'prog'
     vf = 'format=' + fmt
+    if 'scroll' in name:
+        # Two pixels per field exposes reversed/skipped fields as vertical jumps.
+        vf += ",drawtext=text='1080i SCROLL 0123456789':fontsize=52:fontcolor=white:x=180:y='800-100*t'"
     if not progressive:
         vf += ',tinterlace=mode=' + ('interleave_top' if order == 'tff' else 'interleave_bottom')
     run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i',

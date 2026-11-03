@@ -51,10 +51,6 @@ function renderCurrentChannel() {
   NtvChannelPicker.update(state);
 }
 function renderPageState() {
-  var repo = document.getElementById("repo");
-  repo.href = state.githubUrl;
-  repo.textContent = "buhanzhe/NativeWasmTv";
-
   renderCurrentChannel();
 }
 setupManagementUrl();

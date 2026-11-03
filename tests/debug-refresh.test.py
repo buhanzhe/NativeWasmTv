@@ -14,8 +14,10 @@ public class DebugRefreshCheck {
  static class View {boolean attached;ArrayList<Runnable> queue=new ArrayList<>();long delay;View(boolean a){attached=a;}
   void removeCallbacks(Runnable r){queue.removeIf(x->x==r);}void post(Runnable r){if(attached)queue.add(r);}
   void postDelayed(Runnable r,long ms){delay=ms;post(r);}void step(){queue.remove(0).run();}}
- View root=new View(true),videoInfo=new View(false);boolean active=true;int refreshes,reads;float cpu=20;
+ View root=new View(true),videoInfo=new View(false);Object liteWebPlayback;boolean active=true;int refreshes,reads;float cpu=20;
  boolean backgroundPlaybackSuspended,prepared,videoRenderingStarted,audioOnlyPlayback,showDebugInfo=true,showColorDebugInfo;
+ long lastPlaybackProgressAt,lastVideoOutputAt,lastPlaybackPosition,playbackHealthySince;boolean playbackProgressObserved;
+ static class SystemClock {static long elapsedRealtime(){return 100;}}
  boolean hasActivePlayer(){return active;}void refreshVideoInfo(){refreshes++;}float sampleSystemCpuUsage(){reads++;return cpu;}
  TICKER
  SCHEDULE
@@ -25,6 +27,7 @@ public class DebugRefreshCheck {
   a.scheduleVideoInfoRefresh();a.scheduleVideoInfoRefresh();check(a.root.queue.size()==1,"Duplicate refresh task");
   for(int n=0;n<4;n++){a.root.step();check(a.refreshes==n+1,"Detached label stopped refresh");check(a.root.queue.size()==1&&a.root.delay==1000,"Refresh period differs");}
   a.active=false;a.root.step();check(a.root.queue.isEmpty(),"Stopped player retained ticker");
+  a.liteWebPlayback=new Object();a.scheduleVideoInfoRefresh();a.root.step();check(a.root.queue.size()==1,"Light browser playback must keep ticker");a.liteWebPlayback=null;a.root.step();check(a.root.queue.isEmpty(),"Closed light browser retained ticker");
   check(!a.sourceMetadataProbeNeeded()&&a.reads==0,"Probe before prepare/first frame");a.prepared=true;
   check(!a.sourceMetadataProbeNeeded()&&a.reads==0,"Probe before first frame");a.videoRenderingStarted=true;
   for(float cpu:new float[]{-1,0,49.9f,50,90}){a.cpu=cpu;check(a.sourceMetadataProbeNeeded()==(cpu>=0&&cpu<50),"CPU probe threshold differs: "+cpu);}

@@ -4,8 +4,8 @@ import android.graphics.Paint;
 
 /** Catalog-wide title width in font-size units, independent of UI scale. */
 public final class ChannelNameWidth {
-    public static final int MAX_CHARS = 7;
-    static final String META = "channel_name_width_v4";
+    public static final int MAX_CHARS = 9;
+    static final String META = "channel_name_width_v5";
     private static volatile float cached = -1;
 
     static float measure(ChannelCatalog.Group[] groups) {

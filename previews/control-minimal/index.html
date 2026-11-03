@@ -1,0 +1,178 @@
+<!doctype html>
+
+<html lang="zh-CN">
+
+  <head>
+
+    <script src="/device-api.js"></script>
+
+    <meta charset="utf-8" />
+
+    <meta
+
+      name="viewport"
+
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+
+    />
+
+    <title>局域网遥控器 · nTv</title>
+
+    <script src="/js/theme.js"></script>
+
+    <link rel="stylesheet" href="/css/common.css?v=popup-position2" />
+
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=popup-position2"></head>
+
+  <body data-parent="/index.html">
+
+    <main id="mainPage">
+
+      <div class="top control-top">
+
+        <div class="brand">
+
+          <span class="brand-title">局域网遥控器</span
+
+          ><button
+
+            id="managementUrl"
+
+            class="management-url"
+
+            type="button"
+
+            onclick="copyManagementUrl()"
+
+            aria-label="复制局域网管理网址"
+
+          >
+
+            <span>（</span><span id="managementUrlText">正在获取管理网址…</span><span>）</span>
+
+          </button>
+
+        </div>
+
+        <div class="online"><span class="dot"></span><span id="status">连接中</span></div>
+
+      </div>
+
+      <section class="channel-quick-card">
+
+        <div class="channel-quick-copy">
+
+          <h2>切换频道</h2>
+
+          <span id="currentChannelSummary">正在读取当前频道…</span>
+
+        </div>
+
+        <button class="primary channel-picker-trigger" onclick="openChannelPicker()">
+
+          选择频道
+
+        </button>
+
+      </section>
+
+      <section class="settings-card">
+
+        <a class="settings-entry" href="/pages/media.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#ff514b"/><g transform="translate(4 4)"><rect x="4" y="6" width="16" height="12" rx="3" fill="#fff"/><path d="m10 9 5 3-5 3Z" fill="#ff514b"/></g></svg><b>媒体控制器</b><span>进度、倍速、音轨、字幕与视频录制</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/playback.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#ffb20a"/><g transform="translate(4 4)"><rect x="3" y="4" width="18" height="13" rx="2" stroke="#fff" stroke-width="2"/><path d="M8 21h8m-4-4v4" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="10.5" r="3" fill="#fff"/></g></svg><b>播放与显示</b><span>画面、清晰度、直播稳定性、日期时间与调试信息</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/flymouse.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#3485fa"/><rect x="8" y="4" width="16" height="24" rx="8" fill="#fff"/><path d="M16 5v8M9 14h14" stroke="#3485fa" stroke-width="1.6"/><rect x="14.5" y="8" width="3" height="5" rx="1.5" fill="#3485fa"/></svg><b>手机飞鼠</b><span>使用触控板、陀螺仪、键盘和游戏手柄</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/browser.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#288cf5"/><g transform="translate(4 4)"><circle cx="12" cy="12" r="9" stroke="#fff" stroke-width="1.8"/><ellipse cx="12" cy="12" rx="4" ry="9" stroke="#fff" stroke-width="1.6"/><path d="M3 12h18M5 6.5h14M5 17.5h14" stroke="#fff" stroke-width="1.6"/></g></svg><b>浏览器配置</b><span>网页分辨率、浏览器标识、图片与缓存</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/channels.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#2bc268"/><g transform="translate(4 4)"><rect x="3" y="4" width="4" height="4" rx="1" fill="#fff"/><rect x="3" y="10" width="4" height="4" rx="1" fill="#fff"/><rect x="3" y="16" width="4" height="4" rx="1" fill="#fff"/><path d="M11 6h9m-9 6h9m-9 6h9" stroke="#fff" stroke-width="2" stroke-linecap="round"/></g></svg><b>频道配置</b><span>在手机上整理并刷新电视频道列表</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/personalization.html"><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#9170ed"/><g transform="translate(4 4)"><path d="M5 4v16M12 4v16M19 4v16" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><rect x="2" y="7" width="6" height="5" rx="2" fill="#fff"/><rect x="9" y="13" width="6" height="5" rx="2" fill="#fff"/><rect x="16" y="6" width="6" height="5" rx="2" fill="#fff"/></g></svg><b>偏好设置</b><span>滑动操作、频道记忆和闪屏设置</span></a>
+
+        <a class="settings-entry" href="/pages/advanced.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#8294a7"/><g transform="translate(4 4)"><path d="m10 2-.6 2.4-2 .9-2.2-.9-2 3.5L5 9.5v2.9L3.2 14l2 3.5 2.2-.8 2 .9L10 20h4l.6-2.4 2-.9 2.2.8 2-3.5-1.8-1.6V9.5l1.8-1.6-2-3.5-2.2.9-2-.9L14 2Z" fill="#fff"/><circle cx="12" cy="11" r="3.2" fill="#8294a7"/></g></svg><b>高级设置</b><span>操作与启动、解码兼容</span></a
+
+        >
+
+        <a class="settings-entry" href="/pages/system.html"
+
+          ><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#4597cf"/><g transform="translate(4 4)"><circle cx="12" cy="12" r="9" fill="#fff"/><circle cx="12" cy="7.5" r="1.2" fill="#4597cf"/><path d="M12 11v6" stroke="#4597cf" stroke-width="2.2" stroke-linecap="round"/></g></svg><b>系统信息</b><span>系统、WebView、CPU、内存与网络地址</span></a
+
+        >
+
+      <a class="settings-entry" href="/pages/about.html"><svg class="entry-icon" width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#8c9baa"/><circle cx="16" cy="16" r="10" fill="#fff"/><path d="M11 16h.01M16 16h.01M21 16h.01" stroke="#8c9baa" stroke-width="3" stroke-linecap="round"/></svg><b>关于</b><span>版本更新、项目地址与开源协议</span></a>
+</section>
+
+
+
+    </main>
+
+    <div id="channelPickerBackdrop" class="channel-picker-backdrop" hidden>
+
+      <div class="channel-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="channelPickerTitle">
+
+        <div class="channel-picker-header">
+
+          <button class="channel-picker-cancel" onclick="closeChannelPicker()">取消</button>
+
+          <b id="channelPickerTitle">选择频道</b>
+
+          <button class="channel-picker-confirm" onclick="confirmChannelPicker()">切换频道</button>
+
+        </div>
+
+        <div class="channel-picker-labels"><span>频道分组</span><span>频道</span></div>
+
+        <div class="channel-picker-wheels">
+
+          <div id="channelGroupWheel" class="channel-wheel" aria-label="频道分组"></div>
+
+          <div id="channelItemWheel" class="channel-wheel" aria-label="频道"></div>
+
+          <div class="channel-wheel-selection" aria-hidden="true"></div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <div id="message" class="message"></div>
+
+    <script src="/js/navigation.js?v=20260926"></script>
+
+    <script src="/js/common.js?v=20260926-nav"></script>
+
+    <script src="/js/channel-picker.js?v=20260926-nav"></script>
+
+    <script src="/js/pages/home.js?v=about-home1"></script>
+
+    <script src="/js/quick-add.js?v=micro-dialogs1"></script>
+
+  <script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+
+</html>

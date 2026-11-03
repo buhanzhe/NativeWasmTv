@@ -33,6 +33,8 @@ public final class DesktopProfileInstrumentation extends Instrumentation {
                     .contains("Chrome/118.0.5993.117"),"Chrome 118 release identity");
             check(DesktopWebProfile.userAgent("macos",oldUa,"128")
                     .contains("Chrome/128.0.6613.137"),"Chrome 128 release identity");
+            check(DesktopWebProfile.userAgent("windows",oldUa,"155")
+                    .contains("Chrome/155.0.8059.40"),"Explicit modern Windows version missing");
             check(DesktopWebProfile.ipadUserAgent(oldUa,"138")
                     .contains("CriOS/138.0.7204.183"),"Chrome 138 iPad release identity");
             MainActivity activity=(MainActivity)startActivitySync(new Intent(getTargetContext(),MainActivity.class)

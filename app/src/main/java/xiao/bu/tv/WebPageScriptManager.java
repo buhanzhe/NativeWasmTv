@@ -26,22 +26,31 @@ final class WebPageScriptManager {
     private static String sharedSources;
     private static List<String> sharedUserScripts = Collections.emptyList();
     private String script = "";
+    private boolean tvPlaybackEnabled=true;
+    void setTvPlaybackEnabled(boolean enabled) {
+        if(tvPlaybackEnabled!=enabled){tvPlaybackEnabled=enabled;configured=false;}
+    }
     private boolean documentStart;
-    private boolean configured, lastAdBlock, lastWebRtc, lastEnabled;
+    private boolean configured, lastAdBlock, lastWebRtc, lastEnabled, lastAutoPlay;
     private String lastSources = "";
 
     WebPageScriptManager(WebView view) { this.view = view; }
 
     void update(boolean adBlock, boolean webRtc, boolean userScriptEnabled, String sourcesJson) {
+        update(adBlock, webRtc, userScriptEnabled, sourcesJson, true);
+    }
+
+    void update(boolean adBlock, boolean webRtc, boolean userScriptEnabled, String sourcesJson, boolean autoPlay) {
         String sources = sourcesJson == null ? "" : sourcesJson;
         if (configured && lastAdBlock == adBlock && lastWebRtc == webRtc
-                && lastEnabled == userScriptEnabled && lastSources.equals(sources)) return;
+                && lastEnabled == userScriptEnabled && lastAutoPlay == autoPlay && lastSources.equals(sources)) return;
         boolean scriptsChanged = !configured || lastEnabled != userScriptEnabled
                 || !lastSources.equals(sources);
         configured = true;
         lastAdBlock = adBlock;
         lastWebRtc = webRtc;
         lastEnabled = userScriptEnabled;
+        lastAutoPlay = autoPlay;
         lastSources = sources;
         if (scriptsChanged) userScripts = userScriptEnabled
                 ? compiledUserScripts(sources) : Collections.<String>emptyList();
@@ -53,7 +62,10 @@ final class WebPageScriptManager {
         String next = body.length() == 0 ? "" : "(function(){var k=" + body.toString().hashCode()
                 + ";if(window.__ntvPagePolicy===k)return;window.__ntvPagePolicy=k;try{"
                 + body + "}catch(e){console.warn('nTv page policy: '+e);}})();";
-        script = next;
+        // Reapplying after pagehide/document replacement must be able to recover
+        // the helper independently of the immutable policy body's realm guard.
+        script = next + (tvPlaybackEnabled ? WebTvPlaybackPolicy.script(view.getContext(), autoPlay)
+                : "if(window.__ntvTvPlayback)window.__ntvTvPlayback.stop();");
         installHandlers();
     }
 

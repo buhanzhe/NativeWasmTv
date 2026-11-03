@@ -77,6 +77,12 @@ public final class ManagementActivity extends Activity {
     private View managementPanel;
     private boolean sidebarDevice;
 
+    static void refreshSystemUi() {
+        for (ManagementActivity page : openPages.keySet().toArray(new ManagementActivity[0])) {
+            if (page != null && !page.isFinishing()) page.applySystemUiVisibility();
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -330,7 +336,7 @@ public final class ManagementActivity extends Activity {
     }
 
     private void applySystemUiVisibility() {
-        if (!sidebarDevice && Build.VERSION.SDK_INT >= 21) {
+        if (!sidebarDevice && !FullscreenPolicy.isTelevision(this) && Build.VERSION.SDK_INT >= 21) {
             // Keep phone status icons visible on the management page, with its
             // background extending behind them. The root reserves system insets.
             readSystemTheme();
@@ -363,11 +369,7 @@ public final class ManagementActivity extends Activity {
         getWindow().clearFlags(
                 android.view.WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        int flags = View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            flags |= View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
-        }
-        getWindow().getDecorView().setSystemUiVisibility(flags);
+        getWindow().getDecorView().setSystemUiVisibility(FullscreenPolicy.flags(this, false));
     }
 
     private void launchFileChooser(String[] accepted) {

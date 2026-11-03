@@ -17,6 +17,7 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     private float aspectRatio;
     private final VideoBlurBackdrop blur = new VideoBlurBackdrop(this);
     private boolean blurBackground;
+    void setBlurFrameRateSource(VideoBlurBackdrop.FrameRateSource source) { blur.setFrameRateSource(source); }
     void setBlurBackground(boolean enabled) {
         if (blurBackground == enabled) return;
         blurBackground = enabled; blur.enable(enabled); requestLayout();
@@ -31,6 +32,7 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     }
     void setAspectRatio(float value){if(aspectRatio!=value){aspectRatio=value;requestLayout();}}
     private int videoWidth, videoHeight, sarNum = 1, sarDen = 1;
+    private int gpuBufferWidth, gpuBufferHeight;
     private boolean stretchVideo, fillVideo, legacySurfaceMode, viewportBufferMode, appliedViewportBufferMode;
 
     public DirectVideoView(Context context) { this(context, null); }
@@ -47,6 +49,13 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     }
 
     SurfaceView getSurfaceView() { return surfaceView; }
+    boolean canCaptureMenuBackdrop() {
+        // PixelCopy can allocate/read the full decoder buffer inside the driver,
+        // even when its destination is a thumbnail. Keep 4K playback off that path.
+        return videoWidth > 0 && videoHeight > 0
+                && (long) videoWidth * videoHeight <= 1920L * 1080
+                && isSurfaceReady() && !isFrameCovered();
+    }
     boolean isFrameCovered() { return frameCover != null && frameCover.getVisibility() == VISIBLE; }
     void setFrameCovered(boolean covered) {
         if (covered) blur.clear(); else invalidate();
@@ -124,7 +133,17 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
 
     void setViewportBufferMode(boolean enabled) { viewportBufferMode = enabled; }
 
+    void setGpuBufferSize(int width,int height) {
+        if(gpuBufferWidth==width&&gpuBufferHeight==height)return;
+        gpuBufferWidth=width;gpuBufferHeight=height;
+        updateBufferSize();
+    }
+
     private void updateBufferSize() {
+        if(gpuBufferWidth>0&&gpuBufferHeight>0&&!viewportBufferMode) {
+            surfaceView.getHolder().setFixedSize(gpuBufferWidth,gpuBufferHeight);
+            return;
+        }
         if (viewportBufferMode && fillVideo && !stretchVideo && videoWidth > 0 && videoHeight > 0
                 && getParent() instanceof android.view.View) {
             android.view.View parent = (android.view.View) getParent();
@@ -192,6 +211,9 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
 
     @Override public void surfaceCreated(SurfaceHolder holder) {
         activeHolder = holder;
+        // A recreated holder starts at layout size even if the source dimensions
+        // have not changed. Restore its buffer before the new decoder attaches.
+        if (videoWidth > 0 && videoHeight > 0) updateBufferSize();
         invalidate();
         if (callback != null) callback.onVideoSurfaceCreated(holder, holder.getSurface());
     }
@@ -201,14 +223,18 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     @Override public void surfaceDestroyed(SurfaceHolder holder) {
         blur.clear();
         if (callback != null) callback.onVideoSurfaceDestroyed(holder, holder.getSurface());
-        if (activeHolder == holder) activeHolder = null;
+        if (activeHolder == holder) {
+            activeHolder = null;
+            gpuBufferWidth = gpuBufferHeight = 0;
+        }
     }
 
     void releaseOutput() {
         blur.clear();
         callback = null;
         activeHolder = null;
-        // SurfaceView owns its Surface; only detach our listener on Activity teardown.
+        // SurfaceView owns its Surface. The caller removes this view on retirement
+        // or Activity teardown; do not release a codec's Surface from the UI thread.
         surfaceView.getHolder().removeCallback(this);
     }
 

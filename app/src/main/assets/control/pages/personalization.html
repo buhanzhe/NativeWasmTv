@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>偏好设置 · nTv</title>
+  <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/personalization.css?v=20261030-ui">
+</head>
+<body data-parent="/index.html">
+  <main class="secondary-page channel-config-page">
+    <div class="top">
+      <button class="back-button" onclick="goBack()">‹ 返回</button>
+      <div class="page-title">偏好设置</div>
+      <div class="online"><span class="dot"></span><span>连接中</span></div>
+    </div>
+      <section class="browser-section">
+        <div class="browser-settings-list">
+        <div class="browser-setting-row">
+          <div class="browser-setting-copy">
+            <b>界面主题</b><span id="tvUiStatus" role="status">离线切换，播放不中断</span>
+          </div>
+          <select id="tvUiStyle" aria-label="界面主题" onchange="saveTvUiStyle()">
+          <option value="builtin">原版界面</option>
+          <option value="ui2">青色圆角</option>
+          <option value="ui3">蓝色卡片</option>
+          <option value="ui4">简洁侧栏</option>
+          <option value="ui5">清透极简</option>
+          <option value="ui6">银雾玻璃</option>
+          </select>
+        </div>
+        <div class="browser-setting-row">
+          <div class="browser-setting-copy">
+            <b>电台主题</b><span id="radioUiStatus" role="status">已下载的界面可离线使用</span>
+          </div>
+          <select id="radioUiStyle" aria-label="电台主题" onchange="saveRadioUiStyle()" disabled>
+            <option value="classic">经典唱片</option><option value="optical">柔光唱片</option>
+          </select>
+        </div>
+        </div>
+      </section>
+    <section>
+      <h2>频道记忆</h2>
+      <div class="switch-row"><div class="switch-copy"><b>线路记忆</b><div class="hint">记住每个频道手动选择的线路；自动换源不覆盖记忆。</div></div><input id="rememberChannelSource" aria-label="线路记忆" type="checkbox" checked disabled onchange="saveMemory()" /></div>
+      <div class="switch-row"><div class="switch-copy"><b>解码记忆</b><div class="hint">记住每个频道在电视菜单中选择的解码方式，换台后返回仍生效。</div></div><input id="rememberChannelDecode" aria-label="解码记忆" type="checkbox" checked disabled onchange="saveMemory()" /></div>
+      <div class="switch-row"><div class="switch-copy"><b>UA 记忆</b><div class="hint">记住每个网页频道选择的浏览器 UA，换台后返回自动恢复。</div></div><input id="rememberChannelUserAgent" aria-label="UA 记忆" type="checkbox" checked disabled onchange="saveMemory()" /></div>
+      <div class="switch-row" id="webEngineMemoryRow" hidden><div class="switch-copy"><b>内核记忆</b><div class="hint">记住每个网页频道选择的系统或轻量内核。</div></div><input id="rememberChannelWebEngine" aria-label="内核记忆" type="checkbox" checked disabled onchange="saveMemory()" /></div>
+    </section>
+    <section>
+      <h2>频道分组</h2>
+      <div class="switch-row">
+        <div class="switch-copy"><b>分组输入密码</b><div class="hint">分组名加“_数字密码”，离开后重锁</div></div>
+        <input id="groupPasswordRequired" aria-label="分组输入密码" type="checkbox" disabled onchange="saveGroupPasswordRequired()" />
+      </div>
+    </section>
+    <section id="backgroundSettings">
+      <h2>闪屏设置</h2>
+      <div class="browser-setting-row compact-select-row"><div class="browser-setting-copy"><label for="personalBackground">背景图片</label></div><select id="personalBackground" disabled onchange="saveBackground()"><option value="off">关闭</option><option value="bing">Bing 壁纸</option><option value="custom">本地图片</option><option value="url">图片链接</option></select></div>
+      <div id="backgroundBingTools" hidden><div class="switch-row"><div class="switch-copy"><b>每日更新</b></div><input id="bingAutoButton" type="checkbox" aria-label="每日更新Bing壁纸" onchange="toggleBingAutoUpdate()"></div><div class="actions"><button id="bingGalleryButton" type="button" onclick="loadBingWallpapers()">选择壁纸</button></div><p id="bingGalleryStatus" class="hint" role="status"></p><div id="bingGallery" class="bing-gallery" aria-label="Bing 每日壁纸图库"></div></div>
+      <div id="backgroundUploadTools" hidden><input id="backgroundFile" type="file" accept="image/jpeg,image/png,image/webp" hidden disabled onchange="uploadBackground()"><div class="actions"><button id="backgroundUploadTrigger" disabled onclick="document.getElementById('backgroundFile').click()">选择图片</button></div><p class="hint">支持 JPG、PNG、WebP</p></div>
+      <div id="backgroundUrlTools" hidden><div class="background-url-editor"><input id="backgroundImageUrl" type="url" aria-label="图片链接" placeholder="粘贴图片链接" disabled><button id="saveBackgroundUrl" disabled onclick="saveBackgroundUrl()">使用</button></div></div>
+      <div class="browser-setting-row compact-select-row"><div class="browser-setting-copy"><label for="backgroundDuration">开屏时间</label></div><select id="backgroundDuration" disabled onchange="changeBackgroundDuration()"><option value="1">1 秒</option><option value="3">3 秒</option><option value="5">5 秒</option><option value="custom">自定义</option></select></div>
+      <div id="customDurationRow" class="field" style="display:none"><label for="backgroundCustomSeconds">自定义秒数（1–120秒）</label><input id="backgroundCustomSeconds" type="number" min="1" max="120" step="1" value="1"><button id="saveBackgroundDuration" onclick="saveBackgroundDuration()">保存</button></div>
+      <p id="backgroundStatus" class="hint" role="status"></p>
+      <img id="backgroundPreview" alt="当前背景预览" style="display:none;max-width:100%;max-height:220px;border-radius:12px">
+      <p id="backgroundCopyright" class="hint"></p>
+    </section>
+    <section id="gestureSettings">
+      <h2>直播画面滑动</h2>
+      <div class="browser-setting-row compact-select-row"><div class="browser-setting-copy"><label for="leftVerticalGesture">左侧上下滑动</label></div><select id="leftVerticalGesture" disabled onchange="saveGestures()">
+          <option value="brightness">亮度</option><option value="volume">音量</option>
+        </select></div>
+      <div class="browser-setting-row compact-select-row"><div class="browser-setting-copy"><label for="rightVerticalGesture">右侧上下滑动</label></div><select id="rightVerticalGesture" disabled onchange="saveGestures()">
+          <option value="channel">切台</option><option value="volume">音量</option><option value="brightness">亮度</option>
+        </select></div>
+      <div class="gesture-footer"><span>仅直播生效</span><button id="resetGestures" disabled onclick="resetGestures()">恢复默认</button></div>
+      <p id="gestureStatus" class="hint" role="status"></p>
+    </section>
+  </main>
+  <div id="message" class="message"></div>
+  <script src="/js/navigation.js?v=20261030-ui"></script>
+  <script src="/js/common.js?v=20261030-ui"></script>
+  <script src="/js/pages/personalization.js?v=web-channel-memory1"></script>
+<script src="/js/ui.js?v=20261030-ui"></script>
+</body>
+</html>

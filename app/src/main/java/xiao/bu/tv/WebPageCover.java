@@ -21,9 +21,25 @@ final class WebPageCover extends FrameLayout {
     private final LinearLayout status;
     private final LoadingSpinnerView spinner;
     private float scale = 1f;
+    private boolean black;
+    private final OnClickListener onReveal;
+
+    // The visual pixels may be opaque, but never let the View hierarchy cull
+    // Chromium's underlying draw/timer work as an occluded opaque sibling.
+    @Override public boolean isOpaque() { return false; }
+
+    void setBlack(boolean value) {
+        black=value;
+        if(value)setBackgroundColor(android.graphics.Color.BLACK);
+        else setBackgroundDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xff101d30,0xff080e18}));
+        getChildAt(0).setVisibility(value?GONE:VISIBLE);
+        setContentDescription(value?"纯黑遮罩，点击显示网页":null);
+    }
 
     WebPageCover(Context context, OnClickListener onReveal) {
         super(context);
+        this.onReveal=onReveal;
         setBackgroundDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0xff101d30, 0xff080e18}));
         setClickable(true);
@@ -77,7 +93,7 @@ final class WebPageCover extends FrameLayout {
         spinner.setVisibility(loading && error == null ? VISIBLE : GONE);
     }
 
-    void focusReveal() { reveal.requestFocus(); }
+    void focusReveal() { if(!black)reveal.requestFocus(); }
 
     void setInterfaceScale(float value) {
         scale = value;
@@ -125,7 +141,8 @@ final class WebPageCover extends FrameLayout {
     }
 
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        super.dispatchTouchEvent(event);
+        if(black && event.getActionMasked()==MotionEvent.ACTION_UP){performClick();onReveal.onClick(this);}
+        else if(!black)super.dispatchTouchEvent(event);
         return true;
     }
 

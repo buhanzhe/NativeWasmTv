@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script src="/device-api.js"></script>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>播放与显示 · nTv</title>
+    <script src="/js/theme.js"></script>
+    <link rel="stylesheet" href="/css/common.css?v=date-format-width1" />
+    <link rel="stylesheet" href="/css/night.css?v=night-hairline1" />
+  <link rel="stylesheet" href="/minimal.css?v=night-hairline1"><link rel="stylesheet" href="/scroll-header.css?v=1"><link rel="stylesheet" href="/micro-select.css?v=1"><link rel="stylesheet" href="/micro-dialogs.css?v=1"></head>
+  <body data-parent="/index.html">
+    <main id="playbackDisplayPage" class="secondary-page channel-config-page">
+      <div class="top">
+        <button class="back-button" onclick="goBack()">‹ 返回</button>
+        <div class="page-title">播放与显示</div>
+        <div class="online"><span class="dot"></span><span id="playbackStatus">电视在线</span></div>
+      </div>
+      <section class="config-hero">
+        <h2>播放与显示</h2>
+        <p>调整画面、直播与屏幕信息</p>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>画面</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>画面比例</b><span>选择原始比例、裁剪或拉伸</span>
+            </div>
+            <select id="videoScale" aria-label="画面比例" onchange="saveDisplay()">
+              <option value="fit">原始比例</option>
+              <option value="stretch">拉伸</option>
+              <option value="18:9">18:9</option>
+              <option value="16:9">16:9</option>
+              <option value="4:3">4:3</option>
+              <option value="fill">裁剪</option>
+              <option value="blur">背景模糊</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>分辨率</b><span>按所选清晰度优先播放</span>
+            </div>
+            <select id="resolutionMode" aria-label="分辨率" onchange="saveDisplay()">
+              <option value="high">最高</option>
+              <option value="medium">适中</option>
+              <option value="low">最低</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>界面大小</b><span id="uiScaleHint">随屏幕适配，可调整缩放</span>
+            </div>
+            <select id="uiScaleMode" aria-label="界面大小" onchange="uiScaleModeChanged()">
+              <option value="small">80%</option>
+              <option value="slightly_small">90%</option>
+              <option value="standard">100%</option>
+              <option value="large">125%</option>
+              <option value="extra_large">150%</option>
+              <option value="extra_extra_large">200%</option>
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+        </div>
+        <div id="uiScaleCustomControls" class="subtitle-offset-controls" style="display:none">
+          <label for="uiScalePercent"><span>界面缩放</span><output id="uiScalePercentValue">100%</output></label>
+          <input id="uiScalePercent" type="range" min="10" max="300" step="1" value="100"
+            aria-label="自定义界面缩放" oninput="uiScalePreview()" onchange="saveDisplay()" />
+          <div class="media-time"><span>10%</span><span>300%</span></div>
+        </div>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>直播体验</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>直播稳定性</b><span>调整缓冲，切换后重播当前频道</span>
+            </div>
+            <select id="liveDelay" aria-label="直播稳定性" onchange="saveLiveDelay()">
+              <option value="stable">稳定</option>
+              <option value="balanced">适中</option>
+              <option value="low">低延迟</option>
+              <option value="auto">智能（自动）</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>超时切换备用线路</b><span>超时未播时换线，解析失败立即换线</span>
+            </div>
+            <select
+              id="autoSwitchSourceSeconds"
+              aria-label="超时切换备用线路"
+              onchange="saveAutoSwitchSource()"
+            >
+              <option value="0">关闭</option>
+              <option value="5">5 秒</option>
+              <option value="10">10 秒</option>
+              <option value="15">15 秒</option><option value="20">20 秒</option>
+              <option value="25">25 秒</option><option value="30">30 秒</option>
+            </select>
+          </div>
+        </div>
+      </section>
+      <section class="browser-section">
+        <div class="section-head"><h2>信息显示</h2></div>
+        <div class="browser-settings-list">
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>显示调试信息</b><span>显示画面参数、CPU与源路径</span>
+            </div>
+            <input
+              id="showDebugInfo"
+              class="source-toggle"
+              aria-label="显示调试信息"
+              type="checkbox"
+              onchange="saveDebugInfo()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>显示色彩和解码器信息</b><span>显示HDR、位深、色域与解码器</span></div>
+            <input id="showColorDebugInfo" class="source-toggle" aria-label="显示色彩和解码器信息" type="checkbox" onchange="saveColorDebugInfo()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>显示加载耗时</b><span>显示解析、下载到首帧的耗时</span></div>
+            <input id="showLoadTiming" class="source-toggle" aria-label="显示加载耗时" type="checkbox" onchange="saveLoadTiming()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>右下角显示网速</b><span>显示源站下载速度，约5秒平滑</span>
+            </div>
+            <input
+              id="showNetworkSpeed"
+              class="source-toggle"
+              aria-label="右下角显示网速"
+              type="checkbox"
+              onchange="saveNetworkSpeed()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy"><b>显示播放进度</b><span>仅点播显示播放位置与总时长</span></div>
+            <input id="showPlaybackPosition" class="source-toggle" aria-label="显示播放进度" type="checkbox" onchange="savePlaybackPosition()" />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>显示日期时间</b><span>可显示日期时间，或仅显示时间</span>
+            </div>
+            <input
+              id="showDateTime"
+              class="source-toggle"
+              aria-label="显示日期时间"
+              type="checkbox"
+              onchange="saveDateTime()"
+            />
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>显示位置</b><span>选择画面左上角或右上角</span>
+            </div>
+            <select id="clockLocation" aria-label="显示位置" onchange="saveDateTime()">
+              <option value="left">画面左上角</option>
+              <option value="right">画面右上角</option>
+            </select>
+          </div>
+          <div class="browser-setting-row">
+            <div class="browser-setting-copy">
+              <b>排列方式</b><span>设置日期、时间与星期的顺序</span>
+            </div>
+            <select id="dateTimeFormat" aria-label="排列方式" onchange="saveDateTime()">
+              <option value="date_time_week">日期 · 时间 · 星期</option>
+              <option value="time_date_week">时间 · 日期 · 星期</option>
+              <option value="week_date_time">星期 · 日期 · 时间</option>
+              <option value="time_week">时间 · 星期</option>
+              <option value="time_only">仅时间</option>
+            </select>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="message" class="message"></div>
+    <div id="legacySelectPicker" class="source-picker" onclick="closeLegacySelectPicker(event)">
+      <div class="source-picker-card" onclick="event.stopPropagation()">
+        <div class="source-picker-head">
+          <b id="legacySelectTitle">选择设置</b
+          ><button onclick="closeLegacySelectPicker()">取消</button>
+        </div>
+        <div id="legacySelectChoices" class="legacy-select-choices"></div>
+      </div>
+    </div>
+    <script src="/js/navigation.js?v=20260926"></script>
+    <script src="/js/common.js?v=20260926-nav"></script>
+    <script src="/js/pages/playback.js?v=micro-dialogs1"></script>
+  <script src="/scroll-header.js?v=1"></script><script src="/micro-select.js?v=2"></script><script src="/micro-dialogs.js?v=1"></script></body>
+</html>

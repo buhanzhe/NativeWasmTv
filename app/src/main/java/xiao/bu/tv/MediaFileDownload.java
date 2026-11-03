@@ -3,6 +3,7 @@ package xiao.bu.tv;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.FilterInputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
@@ -16,6 +17,8 @@ final class MediaFileDownload implements Closeable {
     final String contentType;
     final long length;
     final int status;
+    private long received;
+    private boolean eof, closed;
 
     private MediaFileDownload(HttpURLConnection connection, String title, String url) throws IOException {
         this.connection = connection;
@@ -44,7 +47,18 @@ final class MediaFileDownload implements Closeable {
         if (base.length() == 0) base = "nTv-media";
         if (base.length() > 100) base = base.substring(0, 100);
         name = base.toLowerCase(Locale.US).endsWith(extension) ? base : base + extension;
-        body = connection.getInputStream();
+        body = new FilterInputStream(connection.getInputStream()) {
+            @Override public int read() throws IOException {
+                int value = in.read();
+                if (value < 0) eof = true; else received++;
+                return value;
+            }
+            @Override public int read(byte[] bytes, int offset, int count) throws IOException {
+                int size = in.read(bytes, offset, count);
+                if (size < 0) eof = true; else received += size;
+                return size;
+            }
+        };
     }
 
     static boolean isFile(String url, long durationMs, boolean directMedia) {
@@ -118,6 +132,13 @@ final class MediaFileDownload implements Closeable {
     }
 
     @Override public void close() throws IOException {
-        try { body.close(); } finally { connection.disconnect(); }
+        if (closed) return;
+        closed = true;
+        // Completed downloads can return the connection to the shared pool.
+        // On cancellation disconnect first, so close() cannot drain a large body.
+        if (!(length >= 0 ? received == length : eof)) connection.disconnect();
+        try { body.close(); } catch (IOException error) {
+            connection.disconnect(); throw error;
+        }
     }
 }

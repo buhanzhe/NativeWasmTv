@@ -12,9 +12,36 @@ if (releaseKeystore.exists() != releaseSigningInfo.exists()) {
             + '.signing/keystore-info.properties are required for release signing.')
 }
 def releaseSigningProperties = new Properties()
+def embeddedUjsChecks = project.hasProperty('ujsWebviewChecks')
+def bundledH5eStreaming = project.hasProperty('h5eStreaming') || project.hasProperty('h5eStreamingChecks')
+if (project.hasProperty('surfaceRetirementChecks')) {
+    def checkSources = layout.buildDirectory.dir('generated/surface-retirement-check/java')
+    def prepareSurfaceChecks = tasks.register('prepareSurfaceRetirementCheckSources', Sync) {
+        from('src/androidTest/java') { include 'xiao/bu/tv/SurfaceRetirementInstrumentation.java' }
+        into checkSources
+    }
+    android.sourceSets.release.java.srcDir(checkSources)
+    android.sourceSets.release.manifest.srcFile('src/surfaceRetirementCheck/AndroidManifest.xml')
+    android.sourceSets.androidTest.java.exclude 'xiao/bu/tv/SurfaceRetirementInstrumentation.java'
+    tasks.named('preBuild').configure { dependsOn prepareSurfaceChecks }
+}
+if (embeddedUjsChecks) {
+    def ujsSources = layout.buildDirectory.dir('generated/ujs-check/java')
+    def prepareUjsChecks = tasks.register('prepareUjsCheckSources', Sync) {
+        from('src/androidTest/java') {
+            include 'xiao/bu/tv/Ku9PageResultTest.java',
+                    'xiao/bu/tv/WebSourceUjsHost.java', 'xiao/bu/tv/BrowserSessionChecks.java', 'xiao/bu/tv/WebTvPlaybackChecks.java'
+        }
+        into ujsSources
+    }
+    android.sourceSets.release.java.srcDir(ujsSources)
+    android.sourceSets.release.manifest.srcFile('src/ujsCheck/AndroidManifest.xml')
+    android.sourceSets.androidTest.java.exclude 'xiao/bu/tv/Ku9PageResultTest.java', 'xiao/bu/tv/WebSourceUjsHost.java', 'xiao/bu/tv/BrowserSessionChecks.java', 'xiao/bu/tv/WebTvPlaybackChecks.java'
+    tasks.named('preBuild').configure { dependsOn prepareUjsChecks }
+}
 def configuredTargetSdk = 25
 def configuredVersionCode = project.hasProperty('versionCodeOverride')
-        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 9
+        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 10
 if (releaseSigningAvailable) {
     releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
     ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
@@ -33,6 +60,9 @@ android {
     if (project.hasProperty('cjsV5Assets')) {
         sourceSets.androidTest.assets.srcDir project.property('cjsV5Assets')
     }
+    if (project.hasProperty('liteKernelFixtures')) {
+        sourceSets.androidTest.assets.srcDir project(':litebrowser').file('src/androidTest/assets')
+    }
     compileSdkVersion 34
     buildToolsVersion '35.0.0'
     testBuildType project.findProperty('testBuildType') ?: 'debug'
@@ -49,6 +79,10 @@ android {
     }
 
     defaultConfig {
+        buildConfigField 'boolean', 'BUNDLED_LITE_BROWSER', 'false'
+        buildConfigField 'boolean', 'NETWORK_WARMUP_CHECKS', project.hasProperty('networkWarmupChecks') ? 'true' : 'false'
+        // Historical name retained for the JNI bridge and standalone trial checks.
+        buildConfigField 'boolean', 'H5E_STREAMING_CHECKS', bundledH5eStreaming ? 'true' : 'false'
         applicationId project.hasProperty('applicationIdOverride')
                 ? project.property('applicationIdOverride').toString() : 'xiao.bu.tv'
         minSdkVersion 14
@@ -58,7 +92,9 @@ android {
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion configuredTargetSdk
         versionCode configuredVersionCode
-        versionName '1.8.1'
+        versionName '1.8.2'
+        buildConfigField 'boolean', 'LITE_BROWSER_DEFAULT',
+                project.findProperty('liteBrowserDefault') == 'false' ? 'false' : 'true'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',
                 project.findProperty('castLatencyTrace') == 'true' ? 'true' : 'false'
         buildConfigField 'boolean', 'HDR_LUT_TEST_128',
@@ -69,6 +105,16 @@ android {
 
     flavorDimensions 'architecture'
     productFlavors {
+        ntvBro {
+            dimension 'architecture'
+            minSdkVersion 14
+            ndk { abiFilters 'armeabi-v7a' }
+            buildConfigField 'boolean', 'BUNDLED_LITE_BROWSER', 'true'
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"armeabi-v7a"'
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apkBroUrl"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256Bro"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"ntv_bro.apk"'
+        }
         arm32 {
             dimension 'architecture'
             minSdkVersion 14
@@ -142,6 +188,25 @@ android {
                     '"https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/gh-pages/mp4-finalizer.js"'
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             testProguardFile 'proguard-test-rules.pro'
+            if (project.hasProperty('coldLiteChecks') || project.hasProperty('liteKernelFixtures')) {
+                proguardFile 'proguard-lite-runtime-test.pro'
+            }
+            if (project.hasProperty('networkWarmupChecks')) proguardFile 'proguard-warmup-test.pro'
+            if (project.hasProperty('coldLiteChecks')) proguardFile 'proguard-cold-lite-test.pro'
+            if (project.findProperty('testRunner') == 'xiao.bu.tv.SurfaceRetirementInstrumentation') {
+                proguardFile 'proguard-surface-retirement-test.pro'
+            }
+            if (project.hasProperty('liteKernelFixtures')) proguardFile 'proguard-lite-kernel-test.pro'
+            if (embeddedUjsChecks || project.findProperty('testRunner') in ['xiao.bu.tv.OriginalWebAuditInstrumentation',
+                    'xiao.bu.tv.WebSourceUjsInstrumentation']) {
+                proguardFile 'proguard-original-web-test.pro'
+            }
+            if (embeddedUjsChecks || project.findProperty('testRunner') == 'xiao.bu.tv.WebSourceUjsInstrumentation') {
+                proguardFile 'proguard-ujs-test.pro'
+            }
+            if (project.findProperty('testRunner') == 'xiao.bu.tv.GroupPasswordInstrumentation') {
+                proguardFile 'proguard-group-password-test.pro'
+            }
             if (project.findProperty('testRunner') == 'xiao.bu.tv.CjsV5Instrumentation') {
                 proguardFile 'proguard-cjs-test.pro'
             }
@@ -152,6 +217,8 @@ android {
         main {
             jni.srcDirs = []
             jniLibs.srcDirs = ['src/main/libs']
+            if (project.hasProperty('h5eStreaming')) jniLibs.srcDir 'src/h5eStreaming/jniLibs'
+            else if (project.hasProperty('h5eStreamingChecks')) jniLibs.srcDir rootProject.file('.codex-tmp/h5e-streaming/apk-libs')
         }
         debug {
             // Debug builds serve the Pages files directly from the TV. Release builds
@@ -196,7 +263,29 @@ task packageWebkitCorePair(type: Jar) {
     }
 }
 
+// Standard packages only compile the browser Java bridge. No browser assets or
+// native library enter these APKs; the browser edition retains the full AAR.
+task packageLiteCoreBridge {
+    dependsOn ':litecore:bundleReleaseAar'
+    def aar = project(':litecore').layout.buildDirectory.file('outputs/aar/litecore-release.aar')
+    def bridge = layout.buildDirectory.file('generated/litecore/litecore-bridge.jar')
+    inputs.file aar
+    outputs.file bridge
+    doLast {
+        copy {
+            from zipTree(aar.get().asFile)
+            include 'classes.jar'
+            into bridge.get().asFile.parentFile
+            rename 'classes.jar', 'litecore-bridge.jar'
+        }
+    }
+}
+
 dependencies {
+    ntvBroImplementation project(':litecore')
+    arm32Implementation files(packageLiteCoreBridge)
+    arm64Implementation files(packageLiteCoreBridge)
+    x86Implementation files(packageLiteCoreBridge)
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
     // All ABIs use the patched local libraries, including Dolby audio and metrics.
     implementation('androidx.webkit:webkit:1.9.0') {
@@ -213,7 +302,7 @@ dependencies {
 
 task generateVersionFile {
     group = 'distribution'
-    description = 'Generate the lightweight update manifest; important manifests are opt-in.'
+    description = 'Generate all release update manifests; startup update threshold stays at 6.'
 
     doLast {
         Closure<String> fileSha256 = { String propertyName ->
@@ -245,6 +334,7 @@ task generateVersionFile {
         String apk32Asset = 'nTv.apk'
         String apk64Asset = 'nTv64.apk'
         String apkX86Asset = 'nTvX86.apk'
+        String sha256Bro = fileSha256('updateApkBro')
 
         def manifest = [
                 versionCode : android.defaultConfig.versionCode,
@@ -254,6 +344,8 @@ task generateVersionFile {
                 apk32Url    : releaseBase + apk32Asset,
                 apk64Url    : releaseBase + apk64Asset,
                 apkX86Url   : releaseBase + apkX86Asset,
+                apkBroUrl   : releaseBase + 'ntv_bro.apk',
+                sha256Bro   : sha256Bro,
                 sha256      : sha25632,
                 sha25632    : sha25632,
                 sha25664    : sha25664,
@@ -263,13 +355,15 @@ task generateVersionFile {
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
         File liteOutput = rootProject.file('version-lite.json')
         liteOutput.setText(manifestJson, 'UTF-8')
-        boolean importantUpdate = project.findProperty('importantUpdate') == 'true'
-        if (importantUpdate) {
-            rootProject.file('version.json').setText(manifestJson, 'UTF-8')
-            rootProject.file('version-iptv.json').setText(manifestJson, 'UTF-8')
-        }
+        // Legacy clients (< 1.6) read this file from master. Keep the threshold
+        // at 6 while refreshing the target APK and hashes on every build.
+        def legacyManifest = new LinkedHashMap(manifest)
+        legacyManifest.versionCode = 6
+        String startupManifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(legacyManifest)) + '\n'
+        rootProject.file('version-iptv.json').setText(startupManifestJson, 'UTF-8')
+        rootProject.file('version.json').setText(startupManifestJson, 'UTF-8')
         logger.lifecycle("Generated ${liteOutput} (arm32=${sha25632 ?: 'unset'}, "
                 + "arm64=${sha25664 ?: 'unset'}, x86=${sha256X86 ?: 'unset'}, "
-                + "important=${importantUpdate})")
+                + 'startupVersionCode=6)')
     }
 }

@@ -11,6 +11,7 @@ import org.json.JSONObject;
 final class RadioUiMenu implements xiao.bu.tv.skin.TvUi.Events {
     private final Activity activity;
     private final TvUiMenu menu;
+    private Runnable back;
     private View content;
     private String[] ids=new String[0],names=new String[0];
     private String selected="";
@@ -18,10 +19,10 @@ final class RadioUiMenu implements xiao.bu.tv.skin.TvUi.Events {
     private int pending=-1;
 
     private RadioUiMenu(Activity activity,TvUiMenu menu){this.activity=activity;this.menu=menu;}
-    static void show(Activity activity,View anchor,TvUiMenu menu){
-        RadioUiMenu model=new RadioUiMenu(activity,menu);Bundle state=new Bundle();
+    static void show(Activity activity,View anchor,TvUiMenu menu,Runnable back){
+        RadioUiMenu model=new RadioUiMenu(activity,menu);model.back=back;Bundle state=new Bundle();
         state.putStringArray("categories",new String[]{"唱片界面"});
-        menu.show(anchor,"menu",state,model);model.content=menu.contentView();model.load();
+        menu.showSubmenu(anchor,state,model);model.content=menu.contentView();model.load();
     }
     private void load(){
         loading=true;refresh();
@@ -54,5 +55,5 @@ final class RadioUiMenu implements xiao.bu.tv.skin.TvUi.Events {
             }catch(Exception error){activity.runOnUiThread(()->{applying=false;pending=-1;refresh();toast("唱片界面切换失败："+error.getMessage());});}
         });
     }
-    public void dismiss(){menu.dismiss();}
+    public void dismiss(){menu.dismiss();if(back!=null)back.run();}
 }

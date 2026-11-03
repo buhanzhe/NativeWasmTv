@@ -10,7 +10,33 @@ final class VideoBlurBackdrop {
     private final Rect target = new Rect();
     private Bitmap image;
     private boolean enabled, pending;
-    private int generation;
+    private volatile int generation;
+    private HandlerThread worker;
+    private Handler workerHandler;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private long captureStarted;
+    interface FrameRateSource { float frameRate(); }
+    private FrameRateSource frameRateSource;
+    void setFrameRateSource(FrameRateSource source) { frameRateSource = source; }
+    private boolean hasBars() {
+        android.view.SurfaceView surface = owner.getSurfaceView();
+        return surface.getWidth() > 0 && surface.getHeight() > 0
+                && (surface.getLeft() > 0 || surface.getTop() > 0
+                || surface.getRight() < owner.getWidth() || surface.getBottom() < owner.getHeight());
+    }
+    private long frameDelay() {
+        float fps = frameRateSource == null ? 30f : frameRateSource.frameRate();
+        if (fps < 0f) return 250L; // Paused/buffering: poll state without copying frames.
+        if (!(fps >= 1f)) fps = 30f;
+        android.view.Display display = owner.getDisplay();
+        float refresh = display == null ? 60f : display.getRefreshRate();
+        return Math.max(1L, (long) Math.ceil(1000d / Math.min(fps, refresh > 0 ? refresh : 60f)));
+    }
+    private void schedule() {
+        if (pending || !enabled || !hasBars() || !owner.isShown() || owner.isFrameCovered()) return;
+        pending = true;
+        owner.postDelayed(tick, Math.max(0L, frameDelay() - (SystemClock.uptimeMillis() - captureStarted)));
+    }
     private final Runnable tick = new Runnable() {
         @Override public void run() { capture(); }
     };
@@ -21,44 +47,72 @@ final class VideoBlurBackdrop {
     }
     void clear() {
         generation++; pending = false; owner.removeCallbacks(tick);
-        if (image != null) { image.recycle(); image = null; }
+        image = null; // RenderThread may still hold the previous display list.
+        if (worker != null) { worker.quitSafely(); worker = null; workerHandler = null; }
         owner.invalidate();
     }
     void draw(Canvas canvas) {
         if (!enabled || !owner.isShown() || owner.isFrameCovered()) return;
+        if (!hasBars()) { if (image != null || pending) clear(); return; }
         if (image != null) {
             float scale = Math.max((float) owner.getWidth()/image.getWidth(),
                     (float) owner.getHeight()/image.getHeight());
             int w = Math.round(image.getWidth()*scale), h = Math.round(image.getHeight()*scale);
             int x = (owner.getWidth()-w)/2, y = (owner.getHeight()-h)/2;
-            target.set(x,y,x+w,y+h); canvas.drawBitmap(image,null,target,paint);
+            target.set(x,y,x+w,y+h);
+            android.view.SurfaceView surface = owner.getSurfaceView();
+            int saved = canvas.save();
+            canvas.clipRect(surface.getLeft(), surface.getTop(), surface.getRight(), surface.getBottom(), Region.Op.DIFFERENCE);
+            canvas.drawBitmap(image,null,target,paint);
             canvas.drawColor(0x30000000);
+            canvas.restoreToCount(saved);
         }
-        if (!pending) { pending=true; owner.postDelayed(tick, 1000); }
+        schedule();
     }
     private void capture() {
         if (!enabled || !owner.isShown() || owner.isFrameCovered()
-                || !owner.isSurfaceReady() || Build.VERSION.SDK_INT < 24) {
+                || !hasBars() || !owner.isSurfaceReady() || Build.VERSION.SDK_INT < 24) {
             pending=false; return;
         }
         int w=owner.getSurfaceView().getWidth(), h=owner.getSurfaceView().getHeight();
         if(w<=0 || h<=0) {pending=false;return;}
+        if (frameRateSource != null && frameRateSource.frameRate() < 0f) {
+            pending = false; captureStarted = SystemClock.uptimeMillis(); schedule(); return;
+        }
+        captureStarted = SystemClock.uptimeMillis();
         final int token=generation;
+        if (worker == null) {
+            worker = new HandlerThread("video-blur", android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            worker.start(); workerHandler = new Handler(worker.getLooper());
+        }
         float scale=96f/Math.max(w,h);
         final Bitmap sample=Bitmap.createBitmap(Math.max(1,Math.round(w*scale)),
                 Math.max(1,Math.round(h*scale)),Bitmap.Config.ARGB_8888);
-        Api24.copy(owner,sample,result->{
-            if(result!=0){sample.recycle();if(token==generation){pending=false;owner.invalidate();}return;}
-            new Thread(()->{
-                gaussian(sample);
-                owner.post(()->{
-                    if(token!=generation){sample.recycle();return;}
-                    Bitmap old=image;image=sample;pending=false;
-                    if(old!=null)old.recycle();owner.invalidate();
-                });
-            },"video-blur").start();
+        // PixelCopy must return to a looper that outlives clear(). A worker
+        // stopped during the copy can otherwise lose its callback and bitmap.
+        Api24.copy(owner,sample,ui,result->{
+            if(token!=generation){sample.recycle();return;}
+            if(result!=0){completeCapture(token,sample,result);return;}
+            if(!workerHandler.post(()->{
+                if(token==generation)gaussian(sample);
+                ui.post(()->completeCapture(token,sample,result));
+            }))completeCapture(token,sample,-1);
         });
     }
+    private void completeCapture(int token,Bitmap sample,int result) {
+        if(token!=generation){sample.recycle();return;}
+        if(result==0) {
+            // Published bitmaps may still be used by the hardware display list.
+            // Only recycle samples that were never drawn; let GC release old images.
+            image=sample;
+            owner.invalidate();
+        } else sample.recycle();
+        pending=false;
+        // Back off unavailable surfaces rather than retrying every display frame.
+        if(result!=0)captureStarted=SystemClock.uptimeMillis()+200L;
+        schedule();
+    }
+
     private static void gaussian(Bitmap b) {
         int w=b.getWidth(),h=b.getHeight();int[] a=new int[w*h],out=new int[w*h];
         int[] kernel={1,4,6,4,1};b.getPixels(a,0,w,0,0,w,h);
@@ -80,9 +134,9 @@ final class VideoBlurBackdrop {
     }
     private interface Result {void done(int result);}
     @android.annotation.TargetApi(24) private static final class Api24 {
-        static void copy(DirectVideoView v,Bitmap b,Result result){
+        static void copy(DirectVideoView v,Bitmap b,Handler handler,Result result){
             try {android.view.PixelCopy.request(v.getSurfaceView(),b,result::done,
-                    new Handler(Looper.getMainLooper()));}
+                    handler);}
             catch(IllegalArgumentException e){result.done(-1);}
         }
     }

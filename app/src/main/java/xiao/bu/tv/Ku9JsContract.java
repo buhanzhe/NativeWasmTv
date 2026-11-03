@@ -220,6 +220,29 @@ final class Ku9JsContract {
         return path.endsWith(".flv") || path.endsWith(".mp4") || path.endsWith(".ts");
     }
 
+    static java.util.Map<String, String> mediaHeaders(JSONObject fields) {
+        java.util.Map<String, String> result = new java.util.LinkedHashMap<>();
+        JSONObject headers = fields.optJSONObject("headers");
+        if (headers == null) return java.util.Collections.emptyMap();
+        java.util.Iterator<String> keys = headers.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            String lower = key.toLowerCase(java.util.Locale.US);
+            // Transport framing and byte ranges belong to the player/proxy.
+            // CCTV signatures retain their existing origin-scoped path.
+            if (!key.matches("[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+                    || lower.startsWith("proxy-")
+                    || java.util.Arrays.asList("host", "connection", "content-length",
+                            "transfer-encoding", "accept-encoding", "range", "upgrade",
+                            "trailer", "te", "user-agent", "referer", "cookie",
+                            "uid", "appid", "appsign", "apprandomstr").contains(lower)) continue;
+            String value = headers.optString(key, "").trim();
+            if (value.length() > 0 && value.indexOf('\r') < 0 && value.indexOf('\n') < 0)
+                result.put(key, value);
+        }
+        return java.util.Collections.unmodifiableMap(result);
+    }
+
     static String resultHeader(JSONObject fields, String fieldName, String headerName) {
         String explicit = first(fields, fieldName);
         if (explicit.length() > 0) return explicit;

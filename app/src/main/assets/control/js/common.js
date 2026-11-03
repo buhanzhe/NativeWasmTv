@@ -22,7 +22,7 @@ function api(path, body, done, timeoutMs) {
     request.timeout = timeoutMs || 15000;
     if (body) request.setRequestHeader("Content-Type", "application/json");
     request.onreadystatechange = function () {
-      if (request.readyState !== 4) return;
+      if (request.readyState !== 4 || request.status === 0) return;
       var data;
       try {
         data = JSON.parse(request.responseText);
@@ -64,7 +64,7 @@ function refresh() {
   var sequence = ++stateRequestSequence,
     flight = { request: null },
     name = String(location.pathname || "").split("/").pop() || "index.html",
-    view = name === "index.html" ? "home" : name.replace(/\.html$/i, "");
+    view = document.body.getAttribute("data-state-view") || (name === "index.html" ? "home" : name.replace(/\.html$/i, ""));
   stateRequest = flight;
   flight.request = api("/api/state?view=" + encodeURIComponent(view), null, function (error, data) {
     if (!pageActive || sequence !== stateRequestSequence) return;

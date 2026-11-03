@@ -37,7 +37,9 @@ public final class FlyMouseInstrumentation extends Instrumentation {
                 source=(WebSourceView)field(activity,"webSourceView");
                 source.setListener(null); // Do not change the channel catalog or trigger auto-sniff playback.
             });
-            if(args.containsKey("fullscreen")) {
+            if(args.containsKey("cursorVisibility")) {
+                checkMinimalCursor();
+            } else if(args.containsKey("fullscreen")) {
                 open(args.getString("fullscreen"),"720p",1f);
                 moveTo("full",0.5,0.5); action("click"); SystemClock.sleep(800);
                 check(field(source,"fullscreenView")!=null,"Fullscreen not entered");
@@ -85,6 +87,44 @@ public final class FlyMouseInstrumentation extends Instrumentation {
             }
         } catch(Throwable error) { code=1;note("FAIL "+Log.getStackTraceString(error)); }
         Bundle result=new Bundle(); result.putString("stream",report.toString());finish(code,result);
+    }
+
+    private void checkMinimalCursor() throws Exception {
+        final FlyMouseCursorView cursor=(FlyMouseCursorView)field(activity,"flyMouseCursor");
+        final Field minimal=MainActivity.class.getDeclaredField("webViewMinimalMode");minimal.setAccessible(true);
+        final boolean previous=minimal.getBoolean(activity);
+        try {
+            onMain(() -> {minimal.setBoolean(activity,true);source.applyMinimalMode(true);});
+            open("http://127.0.0.1:9966/","720p",1f);
+            onMain(() -> {
+                invoke("applyFlyMouseVisibility");
+                check(cursor.isMovementOnly()&&!cursor.isCursorVisible(),"Minimal page entry revealed cursor");
+                cursor.revealCursor();cursor.pulseClick();cursor.moveBy(0f,0f);
+                check(!cursor.isCursorVisible(),"Click/reset/zero delta revealed cursor");
+            });
+            screenshot("minimal-cursor-hidden.png");
+            send(new JSONObject().put("action","move").put("dx",24).put("dy",0));
+            SystemClock.sleep(200);
+            onMain(() -> check(cursor.isCursorVisible(),"Real HTTP fly-mouse move did not reveal cursor"));
+            screenshot("minimal-cursor-moved.png");
+            onMain(() -> {
+                invoke("applyFlyMouseVisibility");
+                check(!cursor.isCursorVisible(),"Lifecycle reset revealed cursor");
+                cursor.moveBy(10,0);
+            });
+            SystemClock.sleep(5300);
+            onMain(() -> check(!cursor.isCursorVisible(),"Idle pointer did not hide"));
+            action("click");SystemClock.sleep(200);
+            onMain(() -> {
+                check(!cursor.isCursorVisible(),"Click woke idle cursor");
+                minimal.setBoolean(activity,false);source.applyMinimalMode(false);
+                invoke("applyFlyMouseVisibility");
+                check(!cursor.isMovementOnly()&&cursor.isCursorVisible(),"Normal browser cursor behavior changed");
+            });
+            note("PASS system WebView minimal entry, reset, zero move and click stay hidden; HTTP movement reveals; idle hides; normal browser unchanged");
+        } finally {
+            onMain(() -> {source.closePage();minimal.setBoolean(activity,previous);source.applyMinimalMode(previous);});
+        }
     }
 
     private void open(String url,String resolution,float scale) throws Exception {

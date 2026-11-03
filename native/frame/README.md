@@ -23,3 +23,12 @@ ARM NEON colour conversion writes to an aligned temporary buffer before copying
 rows to Android's bitmap: Dalvik bitmap pixels can have insufficient alignment
 for the existing FFmpeg converter. BT.709/BT.601 coefficients and source range
 are preserved. The bridge has no per-frame work during ordinary playback.
+
+On Amlogic devices through Android 9, PixelCopy may return success with an
+almost uniform empty-YUV green image. The screenshot endpoint detects that
+specific placeholder and uses the cached-segment path for both preview and
+full-resolution images. The proxy retains one already delivered TS body, capped
+at 16 MiB, on these devices as well as on pre-Android-7 devices. No extra stream
+download or change to playback decoding is required. The fallback represents a
+keyframe in that segment, not necessarily the exact currently displayed frame;
+sources without a cached TS segment report an extraction error.

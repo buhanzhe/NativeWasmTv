@@ -9,7 +9,7 @@ text=(root/'app/src/main/java/xiao/bu/tv/NativeHdrOutput.java').read_text(encodi
 methods=text[text.index('    private void refreshToneLut('):text.index('    static void surfaceSizeChanged(')]
 stub=r'''package xiao.bu.tv;
 class GLES20 {
- static final int GL_TEXTURE0=0,GL_TEXTURE1=1,GL_TEXTURE_2D=2;
+ static final int GL_TEXTURE0=0,GL_TEXTURE1=1,GL_TEXTURE_2D=2,GL_NO_ERROR=0; static int glGetError(){return 0;}
  static int active,current,videoUnit=-1,lutUnit=-1;
  static void glActiveTexture(int n){active=n;}static void glBindTexture(int target,int n){}
  static void glDeleteProgram(int n){}
@@ -22,6 +22,15 @@ class GLES20 {
  }
 }
 class Log{static void w(String tag,String text,Throwable error){}}
+class HdrDisplayPolicy{static String sdrShader(String reference,int transfer){return "SDR"+transfer;}}
+class HdrSdrCurve {
+ static boolean failBind,slow;int bound,released;
+ static String shader(int transfer,boolean raw){return "CURVE"+transfer;}
+ boolean isFloating(){return true;} String programSource(int transfer,boolean raw){return shader(transfer,raw);}
+ boolean select(String reference,int transfer){bind();return !slow;}
+ void bind(){bound++;if(failBind)throw new IllegalStateException("Curve upload rejected");}
+ void release(){released++;}
+}
 class Lut {
  boolean fail,volume;int released,generated,disabled;float lastTransfer=-1,lastPeak=-1;
  boolean isVolume(){return volume;}int target(){return volume?3:GLES20.GL_TEXTURE_2D;}
@@ -35,11 +44,13 @@ class Lut {
 }
 class NativeHdrOutput {
  static final String TAG="HDR";
- boolean forceBt709,lutFailed,lutActive,drawStateDirty,viewportDirty,failCompile,lutProgramVolume,failVolumeCompile;
- int program,referenceProgram=11,lutProgram,position,texcoord,transform,yuvMatrix,yuvOffset,compiled;
+ boolean forceBt709,lutFailed,lutActive,drawStateDirty,viewportDirty,failCompile,lutProgramVolume,failVolumeCompile,failCurveCompile,compileOom;
+ int program,referenceProgram=11,lutProgram,sdrProgram,sdrTransfer,position,texcoord,transform,yuvMatrix,yuvOffset,compiled;
+ HdrSdrCurve sdrCurve;boolean sdrCurveFailed,sdrProgramUsesCurve,sdrCurveActive,sdrCurveFloating;
  String toneReference="reference";boolean rawYuv;Lut toneLut=new Lut();
  int buildProgram(String source,boolean yuv,boolean lookup){
-  if(!lookup)throw new AssertionError("Wrong program kind");
+  if(compileOom)throw new OutOfMemoryError("Compiler memory pressure");
+  if(!lookup){compiled++;if(failCompile||failCurveCompile&&source.startsWith("CURVE"))throw new IllegalStateException("SDR compile rejected");return source.endsWith("3")?14:15;}
   compiled++;if(failCompile||failVolumeCompile&&toneLut.isVolume())throw new IllegalStateException("Shader rejected");return toneLut.isVolume()?13:12;
  }
 '''+methods+r'''
@@ -55,8 +66,11 @@ class NativeHdrOutput {
   v.refreshToneLut(7,1000);selected(v,12);ok(v.lutActive&&v.compiled==1,"HLG must select pure lookup");
   for(int i=0;i<100;i++)v.refreshToneLut(7,1000);
   ok(v.compiled==1&&v.toneLut.generated==1,"Unchanged mapping must stay cached across frames/formats");
-  v.refreshToneLut(3,1000);selected(v,11);ok(!v.lutActive,"SDR must select reference/bypass");
-  v.refreshToneLut(6,4000);selected(v,12);ok(v.compiled==1&&v.toneLut.generated==2,"Reuse pure program on PQ/peak change");
+  v.refreshToneLut(3,1000);selected(v,14);ok(!v.lutActive,"SDR gamut must select specialized formula");
+  for(int i=0;i<100;i++)v.refreshToneLut(3,1000);
+  ok(v.compiled==2,"Unchanged SDR format must not recompile");
+  v.refreshToneLut(0,1000);selected(v,11);
+  v.refreshToneLut(6,4000);selected(v,12);ok(v.compiled==2&&v.toneLut.generated==2,"Reuse pure program on PQ/peak change");
   v.toneLut.fail=true;v.refreshToneLut(6,1000);selected(v,11);
   ok(v.lutFailed&&!v.lutActive&&v.toneLut.released==1,"Failed LUT must release and fall back");
   v.refreshToneLut(7,1000);selected(v,11);ok(v.toneLut.released==1,"Failure must not retry every frame");
@@ -71,6 +85,30 @@ class NativeHdrOutput {
   ok(!fallback.lutFailed&&fallback.lutActive&&fallback.toneLut.disabled==1&&fallback.compiled==2,"3D compile failure keeps 2D lookup, not formula");
   NativeHdrOutput forced=new NativeHdrOutput();forced.forceBt709=true;forced.refreshToneLut(7,1000);
   ok(forced.compiled==0&&forced.toneLut.generated==0,"BT709 must not allocate HDR lookup resources");
+  NativeHdrOutput sdr=new NativeHdrOutput();sdr.refreshToneLut(3,1000);selected(sdr,14);
+  sdr.failCompile=true;sdr.refreshToneLut(1,1000);selected(sdr,11);
+  ok(!sdr.lutFailed,"SDR compile failure must retain reference without disabling HDR LUT");
+  sdr.failCompile=false;sdr.refreshToneLut(1,1000);selected(sdr,15);
+  NativeHdrOutput curve=new NativeHdrOutput();curve.refreshToneLut(3,1000);selected(curve,14);
+  ok(curve.sdrCurveActive&&curve.sdrProgramUsesCurve&&curve.sdrCurve.bound>=1,"SDR curve is not active");
+  curve.refreshToneLut(7,1000);selected(curve,12);ok(!curve.sdrCurveActive,"HDR must retain original mapping");
+  curve.refreshToneLut(3,1000);selected(curve,14);ok(curve.sdrCurveActive,"HDR/SDR return lost curve binding");
+  curve.failCompile=true;curve.refreshToneLut(1,1000);selected(curve,11);
+  ok(curve.sdrProgram==0&&curve.sdrCurve==null&&!curve.sdrProgramUsesCurve,"Failure left a cached program using a released texture");
+  curve.failCompile=false;curve.refreshToneLut(3,1000);selected(curve,14);
+  ok(!curve.sdrCurveActive&&curve.sdrCurveFailed,"Failed curve must retain original formula on return");
+  HdrSdrCurve.slow=true;NativeHdrOutput slow=new NativeHdrOutput();slow.refreshToneLut(3,1000);selected(slow,14);
+  ok(!slow.sdrCurveActive&&!slow.sdrCurveFailed,"Slower curves must retain formula without disabling future transfers");
+  slow.refreshToneLut(1,1000);selected(slow,15);ok(!slow.sdrProgramUsesCurve,"Transfer change must retain formula");
+  HdrSdrCurve.slow=false;
+  NativeHdrOutput curveCompile=new NativeHdrOutput();curveCompile.failCurveCompile=true;
+  curveCompile.refreshToneLut(3,1000);selected(curveCompile,14);
+  ok(curveCompile.sdrCurveFailed&&!curveCompile.sdrCurveActive&&!curveCompile.sdrProgramUsesCurve&&curveCompile.sdrCurve==null,"Curve-only compile failure left a formula program requiring a freed texture");
+  NativeHdrOutput memory=new NativeHdrOutput();memory.compileOom=true;
+  memory.refreshToneLut(3,1000);selected(memory,11);
+  ok(memory.sdrCurveFailed&&!memory.sdrCurveActive,"Optional SDR program memory failure must retain prebuilt reference");
+  HdrSdrCurve.failBind=true;NativeHdrOutput upload=new NativeHdrOutput();upload.refreshToneLut(3,1000);selected(upload,14);
+  ok(upload.sdrCurveFailed&&!upload.sdrCurveActive&&upload.sdrCurve==null,"Upload failure must cleanly select formula fallback");
   System.out.println("PASS cached LUT-only program, HDR/SDR transitions, sampler/location refresh, FBO/compile failures and BT709 isolation");
  }
 }
@@ -82,6 +120,7 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run([str(java/'java.exe'),'-cp',str(folder),'xiao.bu.tv.NativeHdrOutput'],check=True)
 
 output=text[text.index('    public void outputFormat('):text.index('    private static boolean knownStandard(')]
-assert output.index('refreshToneLut(outputTransfer,outputPeak)') < output.index('updateYuvColor(outputStandard,'), 'Raw YUV uniforms must follow shader switch'
+assert output.index('refreshToneLut(') < output.index('updateYuvColor(outputStandard,'), 'Raw YUV uniforms must follow shader switch'
+assert '? 0 : outputTransfer' in output, 'BT709 decoder output must bypass the BT2020 SDR program'
 assert 'HdrToneMapLut.LOOKUP_ONLY' in text and 'HdrToneMapLut.LOOKUP;' not in text
 print('PASS production uses lookup-only shader; raw YUV colour uniforms follow program selection')

@@ -24,7 +24,11 @@ final class MouseButtonCompat {
         }
     }
 
-    static boolean supported() { return setter != null; }
+    static boolean supported() {
+        // Events emitted by the remote pointer use deviceId=0. A reflective
+        // action-button setter alone does not make that a real mouse device.
+        return setter != null && android.view.InputDevice.getDevice(0) != null;
+    }
 
     static boolean setPrimary(MotionEvent event) {
         return setButton(event, MotionEvent.BUTTON_PRIMARY);

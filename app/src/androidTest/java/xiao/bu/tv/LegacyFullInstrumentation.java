@@ -91,7 +91,7 @@ public final class LegacyFullInstrumentation extends Instrumentation {
             start(0);main(()->call("switchCustomSource",new Class[]{int.class,boolean.class,String.class},1,false,""));
             until(()->(Integer)get("currentSourceIndex")==1&&(Boolean)get("videoRenderingStarted"),30000,"Second source failed");
             main(()->{call("openChannelList",new Class[]{boolean.class},false);call("switchBrowsingChannel",new Class[]{int.class},1);
-                check(((DirectVideoView)get("videoView")).isFrameCovered(),"List exposed old frame");});
+                check(!((DirectVideoView)get("videoView")).isFrameCovered(),"List switch blacked out retained frame");});
             until(()->(Integer)get("currentChannelIndex")==1&&(Boolean)get("prepared")&&(Boolean)get("videoRenderingStarted")
                     &&(base+"live.m3u8").equals(get("activePlayerStreamUrl")),30000,"List-selected live channel failed");
             until(()->!((DirectVideoView)get("videoView")).isFrameCovered(),2000,"New live frame covered");

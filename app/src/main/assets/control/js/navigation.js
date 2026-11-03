@@ -30,7 +30,7 @@
       var a = document.createElement("a"); a.href = value;
       if (a.protocol !== location.protocol || a.host !== location.host || a.username || a.password) return "";
       var path = a.pathname.charAt(0) === "/" ? a.pathname : "/" + a.pathname;
-      if (!/^(\/|\/index\.html|\/pages\/(media|playback|channels|browser|script|system|groups|flymouse|advanced|operation|decoder)\.html|\/video-recorder\.html)$/.test(path)) return "";
+      if (!/^(\/|\/index\.html|\/pages\/(media|playback|channels|browser|script|system|groups|flymouse|advanced|personalization|about|licenses|operation|decoder)\.html|\/video-recorder\.html)$/.test(path)) return "";
       var query = String(a.search || "").replace(/([?&])__ntvNav=[^&]*(&?)/g, function (_, before, after) {
         return after ? before : "";
       });

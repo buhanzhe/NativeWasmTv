@@ -28,11 +28,18 @@ final class Ku9ScriptResolver {
     }
 
     static final class Result {
+        private Result(Result value) {
+            url=value.url;directDataSource=value.directDataSource;noReferer=value.noReferer;http1=value.http1;
+            playlistRefresh=false;signedHeaders=value.signedHeaders;mediaHeaders=value.mediaHeaders;
+            referer=value.referer;cookies=value.cookies;userAgent=value.userAgent;webViewUrl=value.webViewUrl;pageScript=value.pageScript;
+        }
+        Result asInitial(){return playlistRefresh?new Result(this):this;}
         final String url;
         final boolean directDataSource;
         final boolean noReferer, http1;
         final boolean playlistRefresh;
         final java.util.Map<String, String> signedHeaders;
+        final java.util.Map<String, String> mediaHeaders;
         final String referer, cookies;
         final String userAgent;
         final String webViewUrl, pageScript;
@@ -49,6 +56,7 @@ final class Ku9ScriptResolver {
                 if (value != null && value.length() > 0) headers.put(name, value);
             }
             this.signedHeaders = java.util.Collections.unmodifiableMap(headers);
+            this.mediaHeaders = Ku9JsContract.mediaHeaders(fields);
             this.webViewUrl = fields.optString("webview", "").trim();
             this.pageScript = fields.optString("jscode", "");
             this.url = url;
@@ -71,6 +79,8 @@ final class Ku9ScriptResolver {
     private final Ku9JsContract contract;
     private final Ku9ScriptEngine engine;
     private final Ku9ScriptLoader scriptLoader;
+    private volatile boolean speculative;
+    private final Ku9WarmCache warmCache;
     private volatile Pending pending;
     private Ku9PlaylistServer playlistServer;
     private volatile int generation;
@@ -85,11 +95,13 @@ final class Ku9ScriptResolver {
         }
     };
 
-    Ku9ScriptResolver(Activity activity, FrameLayout root) {
+    Ku9ScriptResolver(Activity activity, FrameLayout root) { this(activity,root,false); }
+    Ku9ScriptResolver(Activity activity,FrameLayout root,boolean speculative) {
         this.activity = activity;
+        this.speculative=speculative;warmCache=speculative?new Ku9WarmCache():null;
         cache = Ku9SiteCache.legacy(activity);
         contract = new Ku9JsContract(activity);
-        engine = new Ku9ScriptEngine(activity);
+        engine = new Ku9ScriptEngine(activity,speculative);
         scriptLoader = new Ku9ScriptLoader(activity);
     }
 
@@ -116,6 +128,7 @@ final class Ku9ScriptResolver {
                                 return;
                             }
                             pending = work;
+                            if(speculative&&work.browser){fail(work,"此脚本的浏览器执行推迟到切台时");return;}
                             execute(work);
                         }
                     });
@@ -277,6 +290,7 @@ final class Ku9ScriptResolver {
     }
 
     void destroy() { cancel(); }
+    void promoteWarmup(){speculative=false;engine.setBackground(false);if(warmCache!=null)warmCache.promote();}
 
     private void closePlaylistServer() {
         if (playlistServer != null) {
@@ -291,9 +305,9 @@ final class Ku9ScriptResolver {
         @Override protected boolean isRequestCancelled() {
             return request.generation != generation || pending != request || Thread.currentThread().isInterrupted();
         }
-        @Override @JavascriptInterface public String getCache(String key) { return cache.get(key); }
+        @Override @JavascriptInterface public String getCache(String key) { return warmCache==null?cache.get(key):warmCache.get(cache,"legacy",key); }
         @Override @JavascriptInterface public void setCache(String key, String value, double ttlMs) {
-            cache.put(key, value, ttlMs);
+            if(warmCache==null)cache.put(key,value,ttlMs);else warmCache.put(cache,"legacy",key,value,ttlMs);
         }
         @Override protected void onComplete(final String json) {
             activity.runOnUiThread(() -> {

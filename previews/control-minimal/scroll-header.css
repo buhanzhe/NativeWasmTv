@@ -1,0 +1,24 @@
+/* Large title scrolls with the document; compact title stays in a light fixed bar. */
+.online,#mainPage .online{display:none!important}
+body:not(.media-page-shell) main.has-scroll-header{padding-top:72px}
+main.has-scroll-header>.top{position:fixed;display:block;top:0;left:16px;right:16px;width:auto;max-width:728px;height:56px;min-height:56px;max-height:56px;margin:0 auto;padding:0;border:0;background:#f2f2f7;z-index:10;transform:none;-webkit-transform:none}
+main.has-scroll-header>.top .page-title{position:absolute;left:54px;right:54px;top:0;margin:0;padding:0;height:56px;line-height:56px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:16px;font-weight:500;letter-spacing:0;color:#1c1c1e;opacity:0;pointer-events:none}
+body:not(.media-page-shell) main.has-scroll-header>.top .back-button{position:absolute;left:0;top:6px;display:block;width:44px;height:44px;min-width:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:50%;background:#fff;color:#272729;box-shadow:0 2px 10px rgba(25,30,45,.08);text-align:center;line-height:44px}
+main.has-scroll-header>.top .back-button svg{position:absolute;left:12px;top:10px;width:20px;height:24px}
+body:not(.media-page-shell) main.has-scroll-header>.top .back-button:active{background:#e9e9ee;box-shadow:0 1px 4px rgba(25,30,45,.08);transform:none}
+main.has-scroll-header>.scroll-page-heading{margin:6px 2px 20px;font-size:30px;line-height:1.25;font-weight:600;letter-spacing:-.7px;color:#1c1c1e}
+main.has-scroll-header .config-hero .replaced-page-heading{display:none}
+body:not(.media-page-shell) main.has-scroll-header>.config-hero{margin-top:-8px;margin-bottom:0;padding:0 2px 2px}
+html[data-theme="dark"] main.has-scroll-header>.top{background:#111113}
+html[data-theme="dark"] main.has-scroll-header>.top .page-title,html[data-theme="dark"] main.has-scroll-header>.scroll-page-heading{color:#f2f2f7}
+html[data-theme="dark"] body:not(.media-page-shell) main.has-scroll-header>.top .back-button{background:#2c2c2e;color:#f2f2f7}
+@media(max-width:360px){main.has-scroll-header>.top{left:14px;right:14px}main.has-scroll-header>.scroll-page-heading{font-size:28px}}
+/* Page titles need no introductory copy; retain field descriptions and device data. */
+main.has-scroll-header>.config-hero>p{display:none}
+body:not(.media-page-shell) main.has-scroll-header>.config-hero{display:none}
+/* The trackpad uses a fixed header and the available viewport, not a scrolling title. */
+body.flymouse-static{overflow:hidden}
+body:not(.media-page-shell) main#flyMousePage.static-page-header{padding:64px 16px 12px;overflow:hidden}
+#flyMousePage.static-page-header>.top .page-title{left:70px;right:70px;opacity:1}
+body:not(.media-page-shell) main#flyMousePage.static-page-header>.top #flyFullscreen{left:auto;right:0;top:6px;width:64px;min-width:64px;padding:0;background:transparent;border-radius:9px;box-shadow:none;color:#007aff;font-size:13px}
+#flyMousePage.static-page-header>.mouse-card{margin-top:0}

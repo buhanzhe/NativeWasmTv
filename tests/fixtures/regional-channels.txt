@@ -1,0 +1,6 @@
+﻿地区频道,#genre#
+定陶综艺频道,webview://https://iapp.aidingtao.cn/share/dHZsLTI3LTg.html
+定陶综合频道,webview://https://iapp.aidingtao.cn/share/dHZsLTI3LTc.html
+菏泽三套,http://live.hznet.tv:1935/live/live3/500K/tzwj_video.m3u8
+菏泽二套,http://live.hznet.tv:1935/live/live2/500K/tzwj_video.m3u8
+菏泽一套,http://live.hznet.tv:1935/live/live1/500K/tzwj_video.m3u8

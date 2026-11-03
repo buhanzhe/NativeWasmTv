@@ -37,6 +37,11 @@
         android:name="android.hardware.wifi.direct"
         android:required="false" />
 
+    <queries>
+        <package android:name="com.xiaomi.mitv.settings" />
+        <package android:name="com.android.tv.settings" />
+    </queries>
+
     <application
         android:name=".NtvApplication"
         android:allowBackup="false"

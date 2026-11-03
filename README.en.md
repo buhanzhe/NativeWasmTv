@@ -1,5 +1,12 @@
 # nTv
 
+Original project code is licensed under [GNU GPL version 3 only](LICENSE)
+(`GPL-3.0-only`). Copyright (C) 2026 buhanzhe and contributors.
+Redistributors must retain applicable notices, identify modifications and provide
+the complete corresponding source under the license. Compliant commercial use is
+allowed. See [copyright and use notes](COPYRIGHT.md), including the source obligations
+for browser editions containing private submodules and the separate third-party licenses.
+
 [简体中文](README.md)
 
 `nTv` is a landscape live-TV player for Android TVs, boxes, tablets, and phones. It focuses on remote-control operation, compatibility with older Android devices, and stable CCTV playback.

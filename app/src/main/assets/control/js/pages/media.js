@@ -138,6 +138,8 @@ var mediaControllerTimer = null,
   mediaClockTimer = null,
   mediaControllerOpen = false,
   mediaSeeking = false,
+  mediaSeekPending = false,
+  mediaSeekRevision = 0,
   mediaLevels = {volume: mediaCreateLevel("volume", 0), brightness: mediaCreateLevel("brightness", 50)},
   subtitleOffsetEditing = false,
   mediaState = null,
@@ -509,8 +511,8 @@ function buildMediaController() {
     mediaLevelMarkup("volume", "播放设备音量", '<path d="M11 4 6 8H3v8h3l5 4V4Z M15 8a6 6 0 0 1 0 8 M18 5a10 10 0 0 1 0 14"/>') +
     mediaLevelMarkup("brightness", "播放设备亮度", '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>') +
     '<div class="media-scene"><img id="mediaArtwork" class="media-artwork" alt="专辑封面" hidden><span id="mediaLiveBadge" class="media-live-badge">正在播放</span><div class="media-scene-actions"><button id="mediaScreenshot" class="media-circle-action" type="button" hidden aria-label="截图" onclick="mediaCaptureScreenshot()"><svg class="media-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h4l2-3h4l2 3h4a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="4"/></svg></button></div></div>' +
-    '<div class="media-now"><span id="mediaGroup">当前频道</span><b id="mediaTitle">当前节目</b><small id="mediaStatus">正在读取播放状态…</small></div>' +
-    '<div id="mediaProgressSection" class="media-progress"><div id="mediaSeekBar" class="media-seekbar"><div class="media-seek-track"><i id="mediaSeekFill"></i><i id="mediaSeekKnob"></i></div><input id="mediaProgress" type="range" min="0" max="1" value="0" step="250" aria-label="播放进度" oninput="mediaProgressPreview(this)" onchange="mediaSeekCommit(this)"></div><div class="media-time"><span id="mediaPosition">--:--</span><span id="mediaDuration">直播</span></div></div>' +
+    '<div class="media-now"><span id="mediaGroup">当前频道</span><small id="mediaStatus">正在读取播放状态…</small></div>' +
+    '<div id="mediaProgressSection" class="media-progress"><div id="mediaSeekBar" class="media-seekbar"><div class="media-seek-track"><i id="mediaSeekFill"></i><i id="mediaSeekKnob"></i></div><input id="mediaProgress" type="range" min="0" max="1" value="0" step="250" aria-label="播放进度" oninput="mediaProgressPreview(this)" onchange="mediaSeekCommit(this)" ontouchcancel="mediaProgressCancel()" onblur="mediaProgressCancel()"></div><div class="media-time"><span id="mediaPosition">--:--</span><span id="mediaDuration">直播</span></div><div id="mediaLiveBufferActions" class="media-live-buffer-actions" hidden><small id="mediaLiveBufferHint">可向前调整未播放的缓冲</small><button id="mediaLiveEdge" type="button" onclick="mediaJumpBufferedEdge()">跳至缓冲末端</button></div></div>' +
     '<div class="media-transport"><button id="mediaPrevious" type="button" aria-label="上一个频道" onclick="mediaCommand(\'previous\')">' + previous + '<span>上一个</span></button>' +
     '<button id="mediaToggle" class="media-play-button" type="button" aria-label="播放" onclick="mediaCommand(\'toggle\')">' + play + pause + '</button>' +
     '<button id="mediaNext" type="button" aria-label="下一个频道" onclick="mediaCommand(\'next\')">' + next + '<span>下一个</span></button></div>' +
@@ -546,7 +548,7 @@ function renderMediaController(data) {
   document.getElementById("mediaGroup").textContent = mediaState.webMedia
     ? [mediaState.artist, mediaState.album].filter(function (v) { return !!v; }).join(" · ") || "网页媒体"
     : mediaState.group || "当前频道";
-  document.getElementById("mediaStatus").textContent = mediaState.webPageVisible
+  document.getElementById("mediaStatus").textContent = mediaState.loadError ? mediaState.loadError : mediaState.webPageVisible
     ? mediaState.webMediaError || (mediaState.webMedia ? (mediaState.playing ? "网页正在播放" : "网页媒体已暂停") : "正在浏览网页")
     : !available
     ? "等待电视开始播放"
@@ -561,7 +563,7 @@ function renderMediaController(data) {
   favoriteButton.setAttribute("aria-label", favorite ? "取消收藏当前频道" : "收藏当前频道");
   favoriteButton.className = "media-favorite" + (favorite ? " selected" : "");
   favoriteButton.disabled = mediaState.favoriteAvailable === false;
-  document.getElementById("mediaLiveBadge").textContent = mediaState.webPageVisible
+  document.getElementById("mediaLiveBadge").textContent = mediaState.loadError ? "加载失败" : mediaState.webPageVisible
     ? (mediaState.webMedia ? (mediaState.playing ? "播放中" : "已暂停") : "网页")
     : !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
   var screenshotAvailable = available && prepared && !mediaState.audioOnly && mediaState.screenshotAvailable === true;
@@ -570,17 +572,30 @@ function renderMediaController(data) {
   screenshotButton.disabled = !screenshotAvailable || mediaShotBusy;
   mediaUpdatePreview(screenshotAvailable);
   mediaUpdateArtwork();
-  document.getElementById("mediaProgressSection").hidden = !!mediaState.audioOnly && !(duration > 0);
+  var live = !(duration > 0), liveBuffer = Math.max(0, Number(mediaState.liveBufferMs) || 0);
+  document.getElementById("mediaProgressSection").hidden = !!mediaState.audioOnly && live && !liveBuffer;
   var progress = document.getElementById("mediaProgress");
-  progress.max = String(Math.max(1, duration));
-  progress.disabled = mediaState.seekable !== true;
-  if (!mediaSeeking) progress.value = String(duration > 0 ? Math.min(duration, position) : 0);
+  if (!mediaSeeking) {
+    progress.max = String(Math.max(1, live ? Number(mediaState.liveBufferSeekMaxMs) || 0 : duration));
+    progress.value = String(live ? 0 : Math.min(duration, position));
+    progress.ntvLive = live;
+    progress.ntvSourceKey = mediaState.sourceKey || "";
+    progress.ntvWebPageKey = mediaState.webPageKey || "";
+    progress.ntvWebMediaToken = mediaState.webMediaToken || "";
+  }
+  progress.disabled = live ? mediaState.liveBufferSeekable !== true || !!mediaState.liveBufferAdjusting || mediaSeekPending : mediaState.seekable !== true;
+  progress.setAttribute("aria-label", live ? "直播缓冲进度" : "播放进度");
   renderMediaProgress(progress);
   if (!mediaSeeking)
     document.getElementById("mediaPosition").textContent =
-      duration > 0 ? formatMediaTime(position) : "实时";
+      live ? mediaState.liveBufferAdjusting ? "正在跳过缓冲" : "当前播放" : formatMediaTime(position);
   document.getElementById("mediaDuration").textContent =
-    duration > 0 ? formatMediaTime(duration) : "直播";
+    live ? "缓冲 " + (liveBuffer / 1000).toFixed(1) + " 秒" : formatMediaTime(duration);
+  document.getElementById("mediaLiveBufferActions").hidden = !live || !!mediaState.webPageVisible;
+  document.getElementById("mediaLiveEdge").disabled = progress.disabled;
+  document.getElementById("mediaLiveBufferHint").textContent = mediaState.liveBufferAdjusting ? "正在向前调整，请稍候"
+    : !mediaState.playing && liveBuffer > 0 ? "播放后可调整缓冲"
+    : mediaState.liveBufferSeekable ? "可向前调整未播放的缓冲" : liveBuffer >= 500 ? "当前播放器不支持缓冲调节" : "缓冲不足时无法调整";
   var toggle = document.getElementById("mediaToggle");
   toggle.className = "media-play-button" + (mediaState.playing ? " is-playing" : "");
   toggle.setAttribute("aria-label", mediaState.playing ? "暂停" : "播放");
@@ -684,6 +699,8 @@ function setMediaControllerActive(active) {
   mediaControllerOpen = active;
   mediaControllerGeneration++;
   mediaSeeking = false;
+  mediaSeekPending = false;
+  mediaSeekRevision++;
   mediaLevels.volume.reset();
   mediaLevels.brightness.reset();
   subtitleOffsetEditing = false;
@@ -717,6 +734,11 @@ function mediaCommand(action, extra) {
   var body = extra || {},
     generation = mediaControllerGeneration,
     sequence = ++mediaRequestSequence;
+  var bufferCommand = action === "liveSeek";
+  if (bufferCommand) {
+    mediaSeekPending = true;
+    renderMediaController(mediaState);
+  }
   body.action = action;
   if (mediaState && mediaState.webPageVisible && action !== "volume" && action !== "brightness") {
     body.webPageKey = mediaState.webPageKey || "";
@@ -725,6 +747,10 @@ function mediaCommand(action, extra) {
   }
   clearTimeout(mediaControllerTimer);
   api("/api/media/control", body, function (error, data) {
+    if (bufferCommand && generation === mediaControllerGeneration) {
+      mediaSeekPending = false;
+      if (mediaControllerOpen && mediaState) renderMediaController(mediaState);
+    }
     if (!mediaControllerOpen || generation !== mediaControllerGeneration || sequence !== mediaRequestSequence) return;
     if (error) {
       toast(error.message, true);
@@ -848,21 +874,56 @@ function mediaToggleFavorite() {
 
 function renderMediaProgress(input) {
   var percent = Math.max(0, Math.min(100, (Number(input.value) || 0) / Math.max(1, Number(input.max) || 1) * 100));
-  document.getElementById("mediaSeekBar").className = "media-seekbar" + (input.disabled ? " unavailable" : "");
+  document.getElementById("mediaSeekBar").className = "media-seekbar" + (input.ntvLive ? " live-buffer" : "") + (input.disabled ? " unavailable" : "");
   document.getElementById("mediaSeekFill").style.width = percent + "%";
   document.getElementById("mediaSeekKnob").style.left = percent + "%";
 }
 
 function mediaProgressPreview(input) {
+  if (input.disabled) return;
+  mediaSeekRevision++;
   mediaSeeking = true;
   renderMediaProgress(input);
-  document.getElementById("mediaPosition").textContent = formatMediaTime(Number(input.value));
+  document.getElementById("mediaPosition").textContent = input.ntvLive
+    ? "前进 " + (Number(input.value) / 1000).toFixed(1) + " 秒" : formatMediaTime(Number(input.value));
 }
 
 function mediaSeekCommit(input) {
+  if (mediaSeekPending) return;
+  if (input.disabled) { mediaProgressCancel(); return; }
   var value = Number(input.value) || 0;
-  mediaCommand("seek", { positionMs: Math.round(value) });
-  setTimeout(function () { mediaSeeking = false; }, 350);
+  // The drag snapshot belongs to one native item or one web video. A refresh
+  // must not retarget a held slider when playback changes underneath it.
+  if (!mediaState || input.ntvSourceKey !== (mediaState.sourceKey || "")
+      || (input.ntvWebPageKey || "") !== (mediaState.webPageKey || "")
+      || (input.ntvWebMediaToken || "") !== (mediaState.webMediaToken || "")
+      || input.ntvLive !== !(Number(mediaState.durationMs) > 0)) {
+    mediaProgressCancel(); toast("节目已变化，请重新调整", true); return;
+  }
+  if (input.ntvLive) {
+    if (value >= 100) mediaCommand("liveSeek", { advanceMs: Math.round(value), sourceKey: input.ntvSourceKey });
+  } else mediaCommand("seek", { positionMs: Math.round(value), sourceKey: input.ntvSourceKey });
+  var revision = mediaSeekRevision;
+  setTimeout(function () { if (revision === mediaSeekRevision) mediaProgressCancel(); }, 350);
+}
+
+function mediaProgressCancel() {
+  var revision = ++mediaSeekRevision, generation = mediaControllerGeneration;
+  mediaSeeking = false;
+  // blur can fire while innerHTML is removing the old controller. Do not
+  // synchronously rebuild that same subtree from inside its removal event.
+  setTimeout(function () {
+    if (revision === mediaSeekRevision && generation === mediaControllerGeneration
+        && mediaControllerOpen && mediaState) renderMediaController(mediaState);
+  }, 0);
+}
+
+function mediaJumpBufferedEdge() {
+  var input = document.getElementById("mediaProgress");
+  if (!input || input.disabled || !input.ntvLive) return;
+  input.value = input.max;
+  mediaProgressPreview(input);
+  mediaSeekCommit(input);
 }
 
 function mediaSpeedChanged(select) {

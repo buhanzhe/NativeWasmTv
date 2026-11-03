@@ -17,6 +17,7 @@ import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import tv.danmaku.ijk.media.player.IMediaPlayer;
+import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 
 /** Actual script -> manifest -> advancing first video output, with settings restored. */
 public final class Ku9StartupInstrumentation extends Instrumentation {
@@ -58,6 +59,11 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
         Method property=tv.danmaku.ijk.media.player.IjkMediaPlayer.class.getDeclaredMethod("_getPropertyLong",int.class,long.class);
         property.setAccessible(true);return ((Number)property.invoke(player,22001,-1L)).longValue();
     }
+    private static double sourceRate(IMediaPlayer player)throws Exception {
+        if(!(player instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer))return 0;
+        Method property=tv.danmaku.ijk.media.player.IjkMediaPlayer.class.getDeclaredMethod("_getPropertyFloat",int.class,float.class);
+        property.setAccessible(true);double value=((Number)property.invoke(player,11001,0f)).doubleValue();return value>=1&&value<=240?value:0;
+    }
     private long loadMs() throws Exception {
         ChannelStartupTiming timing = (ChannelStartupTiming) get("channelStartupTiming");
         synchronized (timing) {
@@ -70,10 +76,11 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
     }
     private void play(int index,String name)throws Exception {
         long begin=SystemClock.elapsedRealtime();start(index);
-        JSONObject row=new JSONObject().put("index",index).put("channel",name).put("requestId",get("playRequestId"));rows.put(row);
+        JSONObject row=new JSONObject().put("index",index).put("channel",name).put("requestId",get("playRequestId")).put("networkDns",NetworkClient.getDnsMode());rows.put(row);
         IMediaPlayer seen=null;long position=0;
         long limit=Long.parseLong(args.getString("caseTimeoutMs","45000"));
         while(SystemClock.elapsedRealtime()-begin<limit) {
+            if(Boolean.parseBoolean(args.getString("coldLite","false"))&&get("liteWebPlayback")!=null){LiteWebPlayback audit=(LiteWebPlayback)get("liteWebPlayback");audit.enableAudit();row.put("usingLiteRuntime",true).put("liteDiagnostics",audit.auditSnapshot());}
             if(activity.isFinishing())throw new InterruptedException("Playback audit cancelled by closing the activity");
             IMediaPlayer current=(IMediaPlayer)get("player");
             boolean radio=args.getString("radioPlaylist")!=null;
@@ -86,11 +93,21 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                 if(current.isPlaying()&&(radio||current.getVideoWidth()>0)&&current.getCurrentPosition()-position>=600) {
                     if(!activity.hasWindowFocus())throw new AssertionError("Playback window lost focus");
                     row.put("firstFrameMs",loadMs()).put("confirmedMs",SystemClock.elapsedRealtime()-begin)
-                            .put("width",current.getVideoWidth()).put("player",current.getClass().getSimpleName()).put("status","passed");
+                            .put("width",current.getVideoWidth()).put("player",current.getClass().getSimpleName()).put("status","rendering");
+                    if(Boolean.parseBoolean(args.getString("coldLite","false"))){LiteWebPlayback lite=(LiteWebPlayback)get("liteWebPlayback");if(lite!=null)row.put("startupTimings",lite.startupTimings()).put("handoffs",lite.finalHandoffs());}
+                    if(args.getString("expectedMediaPath")!=null) {
+                        String stream=(String)get("activePlayerStreamUrl");
+                        row.put("mediaPath",stream==null?"":java.net.URI.create(stream).getPath());
+                        if(stream==null||!stream.contains(args.getString("expectedMediaPath")))
+                            throw new AssertionError("Unexpected channel selected by page script: "+row.optString("mediaPath"));
+                    }
                     if(radio)row.put("audioConfirmedMs",SystemClock.elapsedRealtime()-begin);
                     long watch=Long.parseLong(args.getString("watchMs","0"));
                     if(watch>0) {
                         long framesBefore=renderedFrames(current);
+                        boolean frameWatch=Boolean.parseBoolean(args.getString("nativeFrameWatch","false"));
+                        double rate=frameWatch?sourceRate(current):0,observedVideoMs=0;
+                        long previousFrames=framesBefore,previousWall=SystemClock.elapsedRealtime();
                         long from=current.getCurrentPosition(), lastPosition=from;
                         long watchStarted=SystemClock.elapsedRealtime(), lastAdvance=watchStarted, maxStall=0, maxRollback=0, advances=0;
                         long lastTrace=0;
@@ -99,6 +116,7 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                             if(remaining<=0)break;
                             SystemClock.sleep(Math.min(500,remaining));
                             long tick=SystemClock.elapsedRealtime(),next=current.getCurrentPosition();
+                            if(frameWatch&&rate>0){long frames=renderedFrames(current);if(frames<previousFrames)observedVideoMs=0;else if(get("player")==current&&current.isPlaying()&&frames>previousFrames)observedVideoMs+=Math.min(tick-previousWall,(frames-previousFrames)*1000.0/rate);previousFrames=frames;previousWall=tick;}
                             if(next-lastPosition>=30){
                                 if(tick-lastAdvance>1000)android.util.Log.i("Ku9PlaybackAudit","clock resumed elapsed="+(tick-watchStarted)+" gap="+(tick-lastAdvance)+" position="+next);
                                 maxStall=Math.max(maxStall,tick-lastAdvance);lastAdvance=tick;advances+=next-lastPosition;lastPosition=next;
@@ -124,6 +142,9 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                         }
                         maxStall=Math.max(maxStall,SystemClock.elapsedRealtime()-lastAdvance);
                         row.put("watchMs",watch).put("watchClockAdvanceMs",current.getCurrentPosition()-from).put("maxClockStallMs",maxStall).put("maxClockRollbackMs",maxRollback).put("clockAdvancesMs",advances);
+                        row.put("samePlayer",get("player")==current).put("stillPlaying",current.isPlaying());
+                        if(Boolean.parseBoolean(args.getString("coldLite","false"))){LiteWebPlayback observed=(LiteWebPlayback)get("liteWebPlayback");if(observed!=null)row.put("finalLiteDiagnostics",observed.auditSnapshot());}
+                        if(frameWatch)row.put("observedVideoMs",Math.round(observedVideoMs)).put("nativeSourceFps",rate).put("videoMeasurement","positive native output-frame counter deltas / native source fps, capped by monotonic wall time; excludes pauses, changed players and counter resets; independent of source PTS rebasing");
                         if(current instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer){
                             long framesAfter=renderedFrames(current);
                             row.put("nativeOutputFps",IjkStreamMetrics.outputFrameRate((tv.danmaku.ijk.media.player.IjkMediaPlayer)current));
@@ -132,7 +153,8 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                                 if(framesAfter<=framesBefore){row.put("status","unavailable");throw new AssertionError("Video frames stopped during stability watch: "+name);}
                             }
                         }
-                        if(get("player")!=current||!current.isPlaying()||advances<watch/2) {
+                        boolean enough=frameWatch&&rate>0?observedVideoMs>=Math.max(10000,watch/2):advances>=watch/2;
+                        if(get("player")!=current||!current.isPlaying()||!enough) {
                             row.put("status","unavailable");
                             throw new AssertionError("Playback stopped during stability watch: "+name);
                         }
@@ -142,7 +164,7 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                             throw new AssertionError("Playback clock stalled "+maxStall+"ms: "+name);
                         }
                     }
-                    if (current instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer) {
+                    if (current instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer && !Boolean.parseBoolean(args.getString("coldLite","false"))) {
                         float fps = IjkStreamMetrics.sourceFrameRate(
                                 (tv.danmaku.ijk.media.player.IjkMediaPlayer) current);
                         row.put("sourceFps", fps);
@@ -150,6 +172,15 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
                         if (expected != null && Math.abs(fps - Float.parseFloat(expected)) > 1f)
                             throw new AssertionError("Source FPS mismatch: " + fps + " expected " + expected);
                     }
+                    ITrackInfo[] tracks=current.getTrackInfo();JSONArray trackRows=new JSONArray();int audioTracks=0;
+                    if(tracks!=null)for(ITrackInfo track:tracks){if(track==null)continue;int type=track.getTrackType();if(type==ITrackInfo.MEDIA_TRACK_TYPE_AUDIO)audioTracks++;trackRows.put(new JSONObject().put("type",type).put("info",track.getInfoInline()));}
+                    row.put("tracks",trackRows).put("audioTrackCount",audioTracks);
+                    if(current instanceof tv.danmaku.ijk.media.player.IjkMediaPlayer)row.put("selectedAudioTrack",((tv.danmaku.ijk.media.player.IjkMediaPlayer)current).getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO));
+                    if(Boolean.parseBoolean(args.getString("coldLite","false"))&&android.os.Build.VERSION.SDK_INT>=18){
+                        android.graphics.Bitmap capture=getUiAutomation().takeScreenshot();
+                        if(capture!=null){String filename="cold-main-"+args.getString("label","test")+"-"+index+".png";try(FileOutputStream image=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),filename))){capture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,image);}finally{capture.recycle();}row.put("screenshot",filename);}
+                    }
+                    row.put("status","passed");
                     Bundle update=new Bundle();update.putString("stream",row.toString()+"\n");sendStatus(0,update);return;
                 }
             }
@@ -169,9 +200,38 @@ public final class Ku9StartupInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();int code=-1;
         SharedPreferences prefs=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0);
+        if(Boolean.parseBoolean(args.getString("dnsConfigOnly","false"))){
+            boolean explicit=prefs.contains("network_dns");String stored=prefs.getString("network_dns","unset");
+            try{
+                NetworkClient.initialize(getTargetContext());
+                for(String mode:new String[]{"ali","tencent","114","baidu","system"}){prefs.edit().putString("network_dns",mode).commit();if(!mode.equals(NetworkClient.getDnsMode()))throw new AssertionError("Explicit DNS preference lost: "+mode);}
+                JSONObject output=new JSONObject().put("explicitDns",explicit).put("storedDns",stored).put("buildDefaultDns",NetworkClient.DEFAULT_DNS).put("allExplicitDnsChoicesPreserved",true);
+                if(args.getString("dnsProbeHost")!=null){
+                    java.util.concurrent.ExecutorService diagnostic=java.util.concurrent.Executors.newSingleThreadExecutor();
+                    java.util.concurrent.Future<JSONObject> probe=diagnostic.submit(()->{
+                        JSONObject info=new JSONObject();long began=SystemClock.elapsedRealtime();okhttp3.Dns dns=NetworkClient.sharedClient().dns();JSONArray families=new JSONArray();
+                        for(java.net.InetAddress address:dns.lookup(args.getString("dnsProbeHost")))families.put(address instanceof java.net.Inet6Address?"IPv6":"IPv4");info.put("dnsMs",SystemClock.elapsedRealtime()-began).put("families",families);
+                        if(args.getString("dnsProbeUrl")!=null){LiteEngine page=new LiteEngine(getTargetContext(),new LiteEngine.Listener(){public void frame(JSONObject p){}public void message(String s){}public void navigate(String u){}public void media(String u,java.util.Map<String,String> h){}},dns);
+                          try{began=SystemClock.elapsedRealtime();JSONObject probeRequest=new JSONObject().put("op","requestSync").put("kind","script").put("url",args.getString("dnsProbeUrl"));String probeUa=args.getString("dnsProbeUa");if(probeUa!=null)probeRequest.put("headers",new JSONObject().put("User-Agent",probeUa));JSONObject response=new JSONObject(page.host(probeRequest.toString()));String body=response.optString("text");info.put("httpMs",SystemClock.elapsedRealtime()-began).put("httpStatus",response.optInt("status")).put("httpError",response.has("error")).put("bodyBytes",body.getBytes("UTF-8").length).put("hasScripts",body.toLowerCase(java.util.Locale.US).contains("<script"));if(Boolean.parseBoolean(args.getString("saveProbe","false")))try(FileOutputStream out=new FileOutputStream(new File(getTargetContext().getExternalFilesDir(null),"network-probe-response-private.json"))){out.write(response.toString().getBytes("UTF-8"));}}finally{page.close();}
+                        }return info;
+                    });
+                    try{output.put("probe",probe.get(18,java.util.concurrent.TimeUnit.SECONDS));}catch(Exception error){probe.cancel(true);output.put("probeError",error.getClass().getSimpleName());Throwable cause=error.getCause();if(cause!=null)output.put("probeCause",cause.getClass().getSimpleName()).put("probeMessage",String.valueOf(cause.getMessage()).replaceAll("https?://[^ ]+","[url]"));}finally{diagnostic.shutdownNow();}
+                }
+                result.putString("stream",output.toString()+"\n");
+            }catch(Exception error){throw new RuntimeException(error);}finally{if(explicit)prefs.edit().putString("network_dns",stored).commit();else prefs.edit().remove("network_dns").commit();}
+            finish(-1,result);return;
+        }
         Map<String,?> saved=prefs.getAll();ChannelCatalog.Group[] savedGroups=ChannelCatalog.GROUPS;
         SharedPreferences coldPrefs=null;Map<String,?> savedColdPrefs=null;
         try {
+            if(Boolean.parseBoolean(args.getString("coldLite","false"))){
+                prefs.edit().putString("web_source_engine","lite").commit();
+                LiteEngine.httpCache(getTargetContext()).evictAll();
+            }
+            if(Boolean.parseBoolean(args.getString("checkMediaHeaders","false"))) {
+                Ku9SignedHeadersInstrumentation.checkMediaHeaders();
+                Bundle checked=new Bundle();checked.putString("stream","PASS Ku9 media header propagation, filtering, origin scope and reset\n");sendStatus(0,checked);
+            }
             if (args.getString("networkDns") != null) prefs.edit()
                     .putString("network_dns", args.getString("networkDns")).commit();
             if (Boolean.parseBoolean(args.getString("http1", "false"))) {

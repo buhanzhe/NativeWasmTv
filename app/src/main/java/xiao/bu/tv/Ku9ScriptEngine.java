@@ -22,7 +22,10 @@ final class Ku9ScriptEngine {
     private Runnable timeout;
     private int generation;
 
-    Ku9ScriptEngine(Activity activity) { this.activity = activity; }
+    private volatile boolean background;
+    Ku9ScriptEngine(Activity activity) { this(activity,false); }
+    Ku9ScriptEngine(Activity activity,boolean background) { this.activity = activity;this.background=background; }
+    void setBackground(boolean value){background=value;}
 
     void execute(final String program, final Ku9Host host, boolean browser) {
         clearActive();
@@ -36,6 +39,7 @@ final class Ku9ScriptEngine {
         if (!browser) {
             destroyWebView();
             new Thread(() -> {
+                if(background)android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
                 long started = android.os.SystemClock.elapsedRealtime();
                 try {
                     if (!host.isCancelled()) NativeQuickJs.execute(program, host);

@@ -10,10 +10,11 @@ files={
 ChannelCatalog.GROUPS=new ChannelCatalog.Group[]{new ChannelCatalog.Group("短"),new ChannelCatalog.Group("最长频道名称")};Paint p=new Paint();p.setTextSize(20);eq(ChannelNameWidth.pixels(p),120);
 int calls=Paint.calls;for(int i=0;i<10000;i++)eq(ChannelNameWidth.pixels(p),120);if(Paint.calls!=calls)throw new AssertionError("Warm reads rescan catalog");
 p.setTextSize(30);eq(ChannelNameWidth.pixels(p),180);if(Paint.calls!=calls)throw new AssertionError("Scale change rescans catalog");
-eq(ChannelNameWidth.measure(new ChannelCatalog.Group[]{new ChannelCatalog.Group("一二三四五六七八九十更多文字")}),7);
+eq(ChannelNameWidth.measure(new ChannelCatalog.Group[]{new ChannelCatalog.Group("一二三四五六七八九十更多文字")}),9);
 eq(ChannelNameWidth.measure(new ChannelCatalog.Group[]{new ChannelCatalog.Group("ABCDEFGHIJ")}),5);
-ChannelNameWidth.restore(4);eq(ChannelNameWidth.pixels(p),120);ChannelNameWidth.restore(0);eq(ChannelNameWidth.pixels(p),0);ChannelNameWidth.restore(10);eq(ChannelNameWidth.pixels(p),210);ChannelNameWidth.restore(99);eq(ChannelNameWidth.pixels(p),210);
-System.out.println("PASS catalog-wide maximum, 7-character cap, mixed-width names, persisted restore, scale changes and 10000 cached reads");}}'''}
+ChannelNameWidth.restore(4);eq(ChannelNameWidth.pixels(p),120);ChannelNameWidth.restore(0);eq(ChannelNameWidth.pixels(p),0);ChannelNameWidth.restore(10);eq(ChannelNameWidth.pixels(p),270);ChannelNameWidth.restore(99);eq(ChannelNameWidth.pixels(p),270);
+if(!ChannelNameWidth.META.equals("channel_name_width_v5"))throw new AssertionError("Old capped catalog widths must be remeasured");
+System.out.println("PASS catalog-wide maximum, 9-character cap, mixed-width names, persisted restore, scale changes and 10000 cached reads");}}'''}
 with tempfile.TemporaryDirectory() as temp:
  out=Path(temp)
  for name,text in files.items():

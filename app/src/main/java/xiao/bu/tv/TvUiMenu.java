@@ -1,5 +1,7 @@
 package xiao.bu.tv;
 import android.app.Activity;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
@@ -11,7 +13,12 @@ import xiao.bu.tv.skin.TvUi;
 final class TvUiMenu {
     private PopupWindow popup;
     private TvUi.Events exitEvents;
-    void dismiss(){if(popup!=null){popup.dismiss();popup=null;}exitEvents=null;}
+    void dismiss(){
+        PopupWindow old=popup;popup=null;exitEvents=null;
+        if(old!=null)try{old.dismiss();}catch(IllegalArgumentException detached){
+            android.util.Log.w("TvUiMenu","Popup window already detached",detached);
+        }
+    }
     boolean visible(){return popup!=null&&popup.isShowing();}
     View contentView(){return visible()?popup.getContentView():null;}
     boolean confirmExitFromBack(){if(!visible()||exitEvents==null)return false;TvUi.Events events=exitEvents;events.action(-1,1);return true;}
@@ -23,11 +30,28 @@ final class TvUiMenu {
         popup.getContentView().dispatchKeyEvent(event);return true;
     }
     void refresh(){if(visible()&&TvUiPlugin.provider()!=null){try{TvUiPlugin.provider().update(popup.getContentView(),new Bundle());}catch(RuntimeException|LinkageError failure){android.content.Context c=popup.getContentView().getContext();dismiss();TvUiPlugin.rejectRenderer(c,failure);}}}
+    void showSubmenu(View anchor,Bundle state,TvUi.Events events){
+        Bundle child=new Bundle(state);String[] categories=state.getStringArray("categories");
+        final int backIndex=categories==null?0:categories.length;
+        String[] rows=new String[backIndex+1];if(categories!=null)System.arraycopy(categories,0,rows,0,backIndex);
+        rows[backIndex]="返回上级";child.putStringArray("categories",rows);child.putBoolean("submenu",true);
+        show(anchor,"menu",child,new TvUi.Events(){
+            public Bundle options(int category){
+                if(category!=backIndex)return events.options(category);
+                Bundle back=new Bundle();back.putStringArray("items",new String[0]);back.putBoolean("openOnClick",true);return back;
+            }
+            public void action(int category,int option){if(category==backIndex)events.dismiss();else events.action(category,option);}
+            public void dismiss(){events.dismiss();}
+        });
+    }
     void show(View anchor,String part,Bundle state,TvUi.Events events){
-        dismiss();TvUiStyle style=TvUiPlugin.current();if(style==null)return;
+        dismiss();if(!canShow(anchor))return;
+        Activity activity=findActivity(anchor.getContext());
+        TvUiStyle style=TvUiPlugin.current();if(style==null)return;
         final View content;
         try{content=style.provider.create(anchor.getContext(),part,state,null,events);}
         catch(RuntimeException|LinkageError failure){TvUiPlugin.rejectRenderer(anchor.getContext(),failure);return;}
+        if(!canShow(anchor))return;
         float d=TvUiChrome.scale(anchor);boolean menu="menu".equals(part),exit="exit".equals(part);
         // Fullscreen drawings must follow the actual popup window bounds. A fixed
         // anchor size can be clipped by window insets while its content retains
@@ -48,13 +72,31 @@ final class TvUiMenu {
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));popup.setOutsideTouchable(true);popup.setAnimationStyle(0);
         popup.setInputMethodMode(PopupWindow.INPUT_METHOD_NOT_NEEDED);
         popup.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
-        if(anchor.getContext() instanceof Activity)
-            content.setSystemUiVisibility(((Activity)anchor.getContext()).getWindow().getDecorView().getSystemUiVisibility());
-        popup.showAtLocation(anchor,menu?Gravity.RIGHT|Gravity.TOP:Gravity.LEFT|Gravity.TOP,horizontalInset,verticalInset);
-        if(anchor.getContext() instanceof Activity)inheritWindow((Activity)anchor.getContext(),content);
+        content.setSystemUiVisibility(activity.getWindow().getDecorView().getSystemUiVisibility());
+        try{popup.showAtLocation(anchor,menu?Gravity.RIGHT|Gravity.TOP:Gravity.LEFT|Gravity.TOP,horizontalInset,verticalInset);}
+        catch(WindowManager.BadTokenException unavailable){
+            // The host may lose its window between the token check and addView.
+            dismiss();return;
+        }
+        inheritWindow(activity,content);
         popup.setFocusable(!exit);popup.update();
-        if(anchor.getContext() instanceof Activity)inheritWindow((Activity)anchor.getContext(),content);
+        inheritWindow(activity,content);
         content.requestFocus();
+    }
+    private static Activity findActivity(Context context){
+        while(context instanceof ContextWrapper){
+            if(context instanceof Activity)return (Activity)context;
+            Context base=((ContextWrapper)context).getBaseContext();
+            if(base==context)return null;
+            context=base;
+        }
+        return context instanceof Activity?(Activity)context:null;
+    }
+    private static boolean canShow(View anchor){
+        if(anchor==null||anchor.getWindowToken()==null)return false;
+        Activity activity=findActivity(anchor.getContext());
+        return activity!=null&&!activity.isFinishing()
+                &&(android.os.Build.VERSION.SDK_INT<17||!activity.isDestroyed());
     }
     private static void inheritWindow(Activity activity,View content){
             View decor=content.getRootView();

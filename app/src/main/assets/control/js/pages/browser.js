@@ -12,17 +12,37 @@ function clearWebCache() {
   });
 }
 
+function updateLiteThreadSetting() {
+  var lite = document.getElementById("webSourceEngine").value === "lite";
+  var row = document.getElementById("liteNetworkThreadRow");
+  var selector = document.getElementById("liteNetworkThreadMultiplier");
+  row.hidden = !lite;
+  row.style.display = lite ? "" : "none";
+  selector.disabled = !lite;
+  var counts = state && state.settings && state.settings.liteNetworkThreadCounts;
+  var count = counts && counts[selector.value];
+  document.getElementById("liteNetworkThreadSummary").textContent =
+    (count ? "实际 " + count + " 个网络线程" + (count === 32 ? "（已达上限）" : "") + "；" : "") +
+    "下次打开网页生效，仅影响网络请求";
+}
+
 function saveWebViewSettings(includeScript) {
+  if(!state||!state.settings){toast("正在读取配置，请稍候");return;}
+  updateLiteThreadSetting();
   var resolution = document.getElementById("webViewResolution"),
     pageScale = document.getElementById("webViewPageScale"),
     userAgent = document.getElementById("webViewUserAgent"),
     browserVersion = document.getElementById("webViewBrowserVersion"),
     images = document.getElementById("webViewLoadImages"),
     autoPlaySniffed = document.getElementById("webViewAutoPlaySniffed"),
+    autoPlay = document.getElementById("webViewAutoPlay"),
     adBlock = document.getElementById("webViewAdBlock"),
     webRtc = document.getElementById("webViewWebRtcEnabled");
   var payload = {
+    webSourceEngine: document.getElementById("webSourceEngine").value,
+    liteNetworkThreadMultiplier: Number(document.getElementById("liteNetworkThreadMultiplier").value) || 0,
     webViewMinimalMode: document.getElementById("webViewMinimalMode").checked,
+    webViewPageCoverStyle: document.getElementById("webViewPageCoverStyle").value,
     webViewPageCover: document.getElementById("webViewPageCover").checked,
     webViewResolution: resolution.value,
     webViewPageScale: Number(pageScale.value),
@@ -30,6 +50,7 @@ function saveWebViewSettings(includeScript) {
     webViewBrowserVersion: browserVersion.value,
     webViewLoadImages: images.checked,
     webViewAutoPlaySniffed: autoPlaySniffed.checked,
+    webViewAutoPlay: autoPlay.checked,
     webViewAdBlock: adBlock.checked,
     webViewWebRtcEnabled: webRtc.checked
   };
@@ -48,15 +69,33 @@ function saveWebViewSettings(includeScript) {
 }
 function renderPageState() {
   var s = state.settings;
+  document.getElementById("webSourceEngine").value = s.webSourceEngine || s.defaultWebSourceEngine || "system";
+  document.getElementById("webSourceEngine").disabled = false;
+  var liteSupported = s.liteBrowserSupported === true;
+  var engineRow = document.getElementById("webSourceEngineRow");
+  engineRow.hidden = !liteSupported;
+  engineRow.style.display = liteSupported ? "" : "none";
+  var liteOption = document.getElementById("webSourceEngine").querySelector('[value="lite"]');
+  liteOption.disabled = !liteSupported;
+  liteOption.textContent = liteSupported ? "轻量嗅探" : "轻量嗅探（需浏览器版）";
+  document.getElementById("webSourceEngineSummary").textContent = liteSupported
+    ? "下次打开频道生效，必要时自动使用系统内核"
+    : "此安装包仅含系统内核；轻量内核需 ARM32 浏览器版（ntv_bro.apk）";
+  document.getElementById("liteNetworkThreadMultiplier").value = String(s.liteNetworkThreadMultiplier || 0);
+  updateLiteThreadSetting();
   document.getElementById("webViewMinimalMode").checked = s.webViewMinimalMode === true;
   document.getElementById("webViewPageCover").checked = s.webViewPageCover === true;
+  document.getElementById("webViewPageCoverStyle").value = s.webViewPageCoverStyle || "status";
   document.getElementById("webViewResolution").value = s.webViewResolution || "720p";
   document.getElementById("webViewPageScale").value = String(s.webViewPageScale || 1);
   document.getElementById("webViewUserAgent").value = s.webViewUserAgent || "windows";
+  var automaticUa = document.getElementById("webViewUserAgent").querySelector('option[value="auto"]');
+  if (automaticUa) automaticUa.disabled = s.webViewAutomaticUserAgentSupported !== true;
   document.getElementById("webViewBrowserVersion").value =
     s.webViewBrowserVersion || "native";
   document.getElementById("webViewLoadImages").checked = s.webViewLoadImages !== false;
   document.getElementById("webViewAutoPlaySniffed").checked = s.webViewAutoPlaySniffed === true;
+  document.getElementById("webViewAutoPlay").checked = s.webViewAutoPlay !== false;
   document.getElementById("webViewAdBlock").checked = s.webViewAdBlock === true;
   document.getElementById("webViewWebRtcEnabled").checked = s.webViewWebRtcEnabled === true;
   document.getElementById("webCacheSize").textContent =

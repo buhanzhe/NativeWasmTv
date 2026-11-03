@@ -11,13 +11,24 @@ progress+=method('    private final class UpstreamInputStream', '    private sta
 prefetch=method('    private List<String> prefetchGenericSegments(', '    private boolean genericStartupReady(')
 stream_predicate=method('    private boolean canStreamWithoutRewrite(', '    private void streamUpstream(')
 stream_headers=method('    private static void writeStreamingHeaders(', '    private static void writeError(').replace('writeStreamingHeaders(', 'realStreamingHeaders(')
+player_output=method('    private static boolean isPlayerDisconnect(', '    private ProxyResponse fetch(')
 java=r'''import java.io.*;import java.net.*;import java.util.*;import java.util.regex.*;import java.nio.charset.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;
 public class HlsStreamFailureCheck {
  static class Build {static class VERSION {static final int SDK_INT=19;}}
+ static class VideoScreenshot {static boolean needsSegmentCache(){return true;}}
  static class android {static class os {static class Build {static class VERSION {static final int SDK_INT=19;}}}}
- boolean sourceVideoProbeEnabled,byteRangeMediaPlaylist,playbackSuspended,finiteMedia;byte[] screenshotSegment;long lastMediaSegmentServedAt;
+ boolean sourceVideoProbeEnabled,byteRangeMediaPlaylist,playbackSuspended,finiteMedia,metadataProbeMode;byte[] screenshotSegment;long lastMediaSegmentServedAt;
+ String keyToken(String token){return null;}
+ String decodeProxyToken(String token){return new String(Base64.decode(token,0),UTF_8);}
+ boolean needsCmgDecrypt(String url){return false;}
+ boolean needsH5eDecrypt(String url){return false;}
+ boolean supportsH5eStreaming(){return false;}
+ void streamH5eSegment(String url,OutputStream output){throw new AssertionError("Unexpected H5E route in clear media fixture");}
+ void streamCmgSegment(String url,OutputStream output){throw new AssertionError("Unexpected CMG route in clear media fixture");}
  final PlaybackReplayCache replayCache=new PlaybackReplayCache(null);
- boolean isTransportStream(String u,String t){return false;}void sampleSourceVideo(byte[] b){}
+ boolean isTransportStream(String u,String t){return false;}void sampleSourceVideo(byte[] b){}void inspectStartupVideoCodec(byte[] b){}
+ String sourceVideoMime="";String sourceVideoMime(){return sourceVideoMime;}
+ static class HlsVideoCodecProbe {static class Stream {void accept(byte[] b,int o,int n){}String mime(){return "";}}}
  final Set<Socket> clientSockets=new HashSet<>();
  final Set<String> dolbyInitUrls=new HashSet<>();
  final Map<String,Double> segmentDurations=new HashMap<>();
@@ -48,10 +59,11 @@ public class HlsStreamFailureCheck {
  AesSegmentKey aesSegmentKey(String u){return aesUrls.contains(u)?new AesSegmentKey():null;}
  byte[] downloadRaw(String u){throw new AssertionError("Clear TS must not use whole-response prefetch");}
  byte[] decryptAes128Segment(String u,AesSegmentKey key){return new byte[188];}
+ byte[] transformCjsSegment(String u){return new byte[188];}
  boolean needsCjsTransform(String u){return false;}boolean needsSpecialDecrypt(String u){return false;}
  boolean isPlaylist(String u,String type){return URI.create(u).getPath().endsWith(".m3u8");}
  boolean hasAesSegmentKey(String u){return aesUrls.contains(u);}boolean hasGenericSegmentTask(String u){return genericSegmentTasks.containsKey(u);}
- boolean isPlayerDisconnect(Exception e){return false;}boolean isRetryableUpstreamError(IOException e,String u){return false;}
+ boolean isRetryableUpstreamError(IOException e,String u){return false;}
  String readAsciiLine(InputStream i){return "GET /proxy/token HTTP/1.1";}String readRangeHeader(InputStream i){return null;}
  boolean dolbyInitFixture;
  ProxyResponse fetch(String u){if(!dolbyInitFixture)throw new AssertionError("unexpected buffered fetch");
@@ -61,6 +73,7 @@ public class HlsStreamFailureCheck {
  String sanitizeHeaderValue(String s){return s;}void applyRequestHeaders(HttpURLConnection c,String u){}
  long contentLength(HttpURLConnection c){String length=c.getHeaderField("Content-Length");return length==null?131072:Long.parseLong(length);}
  void writeStreamingHeaders(OutputStream o,int s,String t,long l,String r)throws IOException{realStreamingHeaders(o,s,t,l,r);if(failWritingHeaders)throw new IOException("Injected header write failure");}
+ void writeStreamingHeaders(OutputStream o,int s,String t,long l,String r,boolean chunked)throws IOException{realStreamingHeaders(o,s,t,l,r,chunked);if(failWritingHeaders)throw new IOException("Injected header write failure");}
  HttpURLConnection openUpstreamConnection(String u)throws IOException{final int number=++opens;return new HttpURLConnection(new URL(u)){
   public void connect(){}public void disconnect(){}public boolean usingProxy(){return false;}
   public int getResponseCode(){return forbidden?403:failHeaders?500:resumable&&!(fullBody&&number==1)&&!(ignoredRange&&number>1)?206:200;}
@@ -87,7 +100,7 @@ public class HlsStreamFailureCheck {
    public int read(){return -1;}
    public int read(byte[] b){
     if(headerBytes<0)headerBytes=pacedSink.size();
-    check(pacedSink.size()==headerBytes+packets*100,"Paced packets retained until next upstream read: "+fixtureType);
+    check(pacedSink.size()==headerBytes+packets*(fixtureLength<0?106:100),"Paced packets retained until next upstream read: "+fixtureType);
     if(packets==3)return -1;
     Arrays.fill(b,0,100,(byte)('A'+packets++));return 100;
    }
@@ -173,7 +186,7 @@ public class HlsStreamFailureCheck {
    live.fixtureLength=kind==3||kind>=5?300:-1;live.pacedSink=new ByteArrayOutputStream();
    live.streamUpstream(kind==4?"https://fixture.test/opaque":"http://fixture.test/live.flv?token=test",null,new BufferedOutputStream(live.pacedSink),kind==4);
    String delivered=new String(live.pacedSink.toByteArray(),UTF_8);
-   check(delivered.endsWith("CCCC")&&live.streamedResponseBytes.get()==300,"Paced stream payload changed");
+   check((live.fixtureLength<0?delivered.endsWith("CCCC\r\n0\r\n\r\n"):delivered.endsWith("CCCC"))&&live.streamedResponseBytes.get()==300,"Paced stream payload changed");
   }
   System.out.println("PASS unknown-length TS/octet-stream/FLV/audio flush before next upstream read; finite HLS/media flush every short read before the next read");
   HlsStreamFailureCheck p=new HlsStreamFailureCheck();MemorySocket s=new MemorySocket();p.handle(s);
@@ -217,12 +230,14 @@ public class HlsStreamFailureCheck {
   System.out.println("PASS manifest/key traffic does not defer stalled-media recovery; media reads extend recovery; network byte statistics unchanged");
  }
 }'''.replace('\n HANDLE\n',handle).replace('\n STREAM\n',stream).replace('\n PROGRESS\n',progress).replace('\n PREFETCH\n',prefetch).replace('\n CANSTREAM\n',stream_predicate).replace('\n HEADERS\n',stream_headers)
+java=java.replace('public class HlsStreamFailureCheck {','public class HlsStreamFailureCheck {\n'+player_output)
 java += (root/'app/src/main/java/xiao/bu/tv/PlaybackHttpError.java').read_text(encoding='utf-8').replace('package xiao.bu.tv;', '').replace('import java.util.regex.Pattern;', '')
 out=root/'.codex-tmp/hls-stream-failure-test';out.mkdir(parents=True,exist_ok=True)
 f=out/'HlsStreamFailureCheck.java';f.write_text(java,encoding='utf-8');b=Path(os.environ['JAVA_HOME'])/'bin'
 bounded=out/'BoundedResponseReader.java';bounded.write_text((root/'app/src/main/java/xiao/bu/tv/BoundedResponseReader.java').read_text(encoding='utf-8').replace('package xiao.bu.tv;',''),encoding='utf-8')
 replay=out/'PlaybackReplayCache.java';replay.write_text((root/'app/src/main/java/xiao/bu/tv/PlaybackReplayCache.java').read_text(encoding='utf-8').replace('package xiao.bu.tv;',''),encoding='utf-8')
-subprocess.run([str(b/'javac.exe'),'-encoding','UTF-8',str(f),str(bounded),str(replay)],check=True)
+chunked=out/'LiteChunkedOutputStream.java';chunked.write_text((root/'browser-core/litebrowser/src/main/java/xiao/bu/tv/LiteChunkedOutputStream.java').read_text(encoding='utf-8').replace('package xiao.bu.tv;',''),encoding='utf-8')
+subprocess.run([str(b/'javac.exe'),'-encoding','UTF-8',str(f),str(bounded),str(replay),str(chunked)],check=True)
 large=out/'large-clear.ts'
 with large.open('wb') as stream:
     for _ in range(17):stream.write(bytes(range(256))*4096)

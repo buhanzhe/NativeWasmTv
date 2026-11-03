@@ -1,0 +1,104 @@
+/* Visual refinement only. Keep original markup, navigation order and media UI. */
+html,body{background:#f2f2f7}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","Droid Sans Fallback",sans-serif}
+[hidden]{display:none!important}
+.preview-label{display:none}
+body:not(.media-page-shell) main{padding:24px 16px 32px}
+body:not(.media-page-shell) button,body:not(.media-page-shell) input,body:not(.media-page-shell) select{box-shadow:none;transition:none;font-weight:400}
+body:not(.media-page-shell) button:active,body:not(.media-page-shell) a:active{transform:none}
+body:not(.media-page-shell) section{border:0;border-radius:15px;box-shadow:none;margin-top:18px}
+body:not(.media-page-shell) .primary{background:#007aff;border-color:#007aff;font-weight:500}
+body:not(.media-page-shell) .hint{font-size:12px;line-height:1.65;color:#8e8e93}
+body:not(.media-page-shell) h2{font-size:14px;font-weight:500;letter-spacing:0}
+/* Home: one quiet header, a quick action, and the same eight menu entries. */
+#mainPage .control-top{display:table;width:100%;margin:0 0 20px;table-layout:fixed}
+#mainPage .brand{display:table-cell;vertical-align:middle;overflow:visible}
+#mainPage .brand-title{display:block;font-size:21px;font-weight:600;letter-spacing:-.5px;line-height:1.4}
+#mainPage .management-url{display:block;margin:3px 0 0;padding:0;min-height:18px;color:#929298;font-size:11px;background:transparent}
+#mainPage .management-url>span:first-child,#mainPage .management-url>span:last-child{display:none}
+#mainPage .online{display:table-cell;width:74px;vertical-align:middle;text-align:right;background:transparent;border:0;padding:0;font-size:11px;color:#8e8e93;font-weight:400}
+#mainPage .dot{width:5px;height:5px;margin-right:5px}
+#mainPage .channel-quick-card{padding:17px 16px;margin-top:0;display:table;width:100%;table-layout:fixed}
+#mainPage .channel-quick-copy{display:table-cell;vertical-align:middle;padding-right:12px}
+#mainPage .channel-quick-copy h2{font-size:16px;font-weight:500;margin:0 0 4px}
+#mainPage .channel-quick-copy span{font-size:12px;color:#8e8e93}
+#mainPage .channel-picker-trigger{display:table-cell;vertical-align:middle;min-width:0;width:88px;min-height:38px;padding:9px 8px;border-radius:9px;font-size:13px}
+#mainPage .settings-card{padding:0 16px;overflow:hidden}
+#mainPage a.settings-entry{display:block;color:#1c1c1e;text-decoration:none;margin:0;padding:14px 20px 14px 0;min-height:65px;border:0;border-top:1px solid #eeeef1;border-radius:0;font-weight:400}
+#mainPage a.settings-entry:first-child{border-top:0}
+#mainPage .settings-entry b{font-size:16px;line-height:1.4;font-weight:400;letter-spacing:0}
+#mainPage .settings-entry span{font-size:11px;line-height:1.5;color:#96969c;font-weight:400;margin-top:3px;text-decoration:none}
+#mainPage .settings-entry:after{right:0;top:50%;margin-top:-12px;transform:none;font-size:23px;line-height:24px;color:#c7c7cc;font-weight:300}
+#mainPage .footer{padding-top:21px;font-size:10px;color:#aaaab0}
+#mainPage .footer:after{content:" · 模拟预览"}
+/* Settings: keep the existing sections and row layouts, soften their chrome. */
+body:not(.media-page-shell) main.channel-config-page{padding-top:66px}
+.channel-config-page .top{background:#f2f2f7;border-bottom:1px solid #e8e8ed;height:54px;min-height:54px;padding:8px 0}
+.channel-config-page .page-title{font-size:16px;font-weight:500;letter-spacing:0}
+.channel-config-page .online{font-size:10px;font-weight:400;color:#99999f}
+.channel-config-page .back-button{font-size:15px;font-weight:400;padding-left:0}
+body:not(.media-page-shell) .config-hero{background:transparent;padding:14px 0 2px;margin-top:0}
+.config-hero h2{font-size:27px!important;font-weight:600!important;letter-spacing:-.7px!important;margin-bottom:8px}
+.config-hero p{font-size:12px;line-height:1.65;color:#929298}
+body:not(.media-page-shell) .channel-config-page section:not(.config-hero){padding:16px;border:0;border-radius:15px;box-shadow:none}
+.channel-config-page section>h2,.channel-config-page .section-head h2{font-size:13px;font-weight:400;color:#8e8e93;margin-bottom:12px}
+.channel-config-page .browser-settings-list{border:0;border-radius:0;background:transparent}
+.channel-config-page .browser-setting-row{padding:13px 0;min-height:62px;border-color:#eeeef1}
+.channel-config-page .browser-setting-row:first-child{padding-top:2px}
+.channel-config-page .browser-setting-copy b,.channel-config-page .switch-copy b{font-size:15px;line-height:1.4;font-weight:400}
+.channel-config-page .browser-setting-copy span{font-size:11px;line-height:1.6;color:#96969c;margin-top:4px}
+.channel-config-page .browser-setting-row select{width:115px;flex-basis:115px;font-size:12px;color:#8e8e93;background-color:transparent;border:0;border-radius:0;min-height:40px;padding-left:5px}
+.channel-config-page .switch-row{padding:13px 0;gap:16px;border-color:#eeeef1}
+.channel-config-page .switch-row:first-child{padding-top:0}
+.channel-config-page .switch-copy{min-width:0;flex:1;-webkit-box-flex:1}
+.channel-config-page .switch-copy .hint{font-size:11px;line-height:1.6;color:#96969c;margin-top:4px}
+.channel-config-page .switch-row input{box-shadow:none;transition:none}
+.channel-config-page .switch-row input:before{box-shadow:0 1px 2px rgba(0,0,0,.1);transition:none}
+.channel-config-page .switch-row input:checked:before{left:19px;transform:none}
+.channel-config-page .field label{font-size:12px;font-weight:400;color:#8e8e93;margin:0 0 7px}
+.channel-config-page .field{margin-top:12px}
+.channel-config-page .field input,.channel-config-page .field select{font-size:13px;border-color:#e8e8ed;border-radius:9px;min-height:42px}
+.channel-config-page .actions button{font-size:12px;font-weight:400;border-color:#e8e8ed;border-radius:9px;color:#007aff;min-height:40px}
+.channel-config-page .actions button.primary{color:#fff}
+.channel-config-page .system-info-list{border-color:#eeeef1;border-radius:11px}
+.channel-config-page .system-info-row{border-color:#eeeef1;padding:13px 12px}
+.channel-config-page .system-info-row span,.channel-config-page .system-info-row b{font-size:13px;font-weight:400}
+.channel-config-page .system-info-row b{color:#8e8e93}
+/* Flat fallback comes before modern declarations in the retained CSS. */
+@media(max-width:360px){body:not(.media-page-shell) main{padding-left:14px;padding-right:14px}#mainPage .brand-title{font-size:20px}#mainPage .settings-entry span{font-size:10px}.channel-config-page .browser-setting-row select{width:100px;flex-basis:100px}}
+main{display:block}
+#mainPage .channel-quick-card{display:block;position:relative;min-height:74px}
+#mainPage .channel-quick-copy{display:block;padding-right:106px}
+#mainPage .channel-picker-trigger{display:block;position:absolute;right:16px;top:18px}
+.channel-config-page section>h2+.switch-row{border-top:0;padding-top:0}
+/* Keep the original home-only quick-add entry; explicit placement also works in old WebKit. */
+.quick-add-fab{display:block;right:20px;bottom:24px;padding:0}
+.quick-add-fab svg{position:absolute;left:13px;top:13px}
+.quick-add-result p{word-wrap:break-word;word-break:break-all}
+#mainPage .footer:after{content:" · MI 6 实时数据"}
+
+/* Home-only, inline SVG icons: no fonts, libraries, filters or extra requests. */
+#mainPage a.settings-entry{padding-left:44px}
+#mainPage .settings-entry .entry-icon{display:block;position:absolute;left:0;top:50%;margin-top:-16px;width:32px;height:32px;pointer-events:none}
+/* Quiet value picker: gray selected value and a paired chevron, native select behavior. */
+.channel-config-page .browser-setting-row select,.channel-config-page .browser-setting-row .legacy-select-trigger{-webkit-appearance:none;appearance:none;background-color:transparent;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='20' viewBox='0 0 12 20'%3E%3Cpath d='m2 7 4-4 4 4M2 13l4 4 4-4' fill='none' stroke='%23b1b1b6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 2px center;background-size:12px 20px;border:0;border-radius:0;box-shadow:none;color:#99999f;font-size:13px;font-weight:400;text-align:right;text-align-last:right;padding:8px 24px 8px 4px;min-height:44px}
+.channel-config-page .browser-setting-row select option{text-align:left;direction:ltr;color:#1c1c1e}
+.channel-config-page .browser-setting-row .legacy-select-trigger:after{display:none}
+/* Stack decoder settings as compact, native one-line value pickers. */
+.channel-config-page .compact-select-grid{display:block}
+.channel-config-page .compact-select-row{margin:0;min-height:54px;padding:8px 0}
+.channel-config-page .compact-select-row .browser-setting-copy{padding-right:10px}
+.channel-config-page .compact-select-row .browser-setting-copy label{display:block;margin:0;font-size:15px;line-height:1.5;font-weight:400;color:#262628}
+.channel-config-page .compact-select-row select{min-height:38px}
+html[data-theme="dark"] .channel-config-page .compact-select-row .browser-setting-copy label{color:#f2f2f7}
+/* Match the bottom inset to the existing top inset of grouped settings. */
+.channel-config-page .browser-settings-list>.browser-setting-row:last-child{padding-bottom:2px}
+.browser-setting-row #radioUiStyle{margin:0}
+.channel-config-page section>.switch-row:last-child{padding-bottom:0}
+/* Keep the scale slider directly on its settings card, without a nested outline. */
+#playbackDisplayPage #uiScaleCustomControls{border:0;background:transparent;box-shadow:none}
+
+/* Draw separators independently, keeping half-pixel hairlines on old WebKit. */
+#mainPage a.settings-entry{border-top:0}
+#mainPage a.settings-entry:before{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:#e6e6eb;-webkit-transform:scaleY(.5);transform:scaleY(.5);-webkit-transform-origin:0 0;transform-origin:0 0;pointer-events:none}
+#mainPage a.settings-entry:first-child:before{display:none}

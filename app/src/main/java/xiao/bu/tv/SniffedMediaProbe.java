@@ -101,6 +101,11 @@ final class SniffedMediaProbe {
                             result.variant = null;
                         }
                     }
+                    else if (java.net.URI.create(url).getPath().toLowerCase(java.util.Locale.US).endsWith(".mp4")
+                            && initializationOnly(probeUrl,pageUrl,agent,cookies,deadline)) {
+                        result.type="fragment";
+                        throw new ManifestFailure("这是直播初始化分片，继续在网页中播放");
+                    }
                 } catch (Exception error) {
                     result.error = probeFailure(error);
                     if (error instanceof ManifestFailure) throw error;
@@ -259,9 +264,17 @@ final class SniffedMediaProbe {
         try {
             connection = openConnection(url, page, agent, cookies);
             connection.setRequestMethod("HEAD");
-            if (connection.getResponseCode() != 200) return 0;
-            long bytes = connection.getContentLength();
-            return bytes > 0 ? (long) (bytes * 8d / seconds) : 0;
+            if (connection.getResponseCode() != 200) {
+                InputStream error = connection.getErrorStream();
+                if (error != null) error.close();
+                return 0;
+            }
+            // HEAD has no payload, but OkHttp still owns a response body. Cancel
+            // alone does not close it and can leave a pooled connection leaked.
+            try (InputStream body = connection.getInputStream()) {
+                long bytes = connection.getContentLength();
+                return bytes > 0 ? (long) (bytes * 8d / seconds) : 0;
+            }
         } catch (Exception ignored) { return 0; }
         finally { if (connection != null) connection.disconnect(); }
     }
@@ -273,7 +286,11 @@ final class SniffedMediaProbe {
         connection.setReadTimeout((int)Math.max(1L,Math.min(10000L,deadline-SystemClock.elapsedRealtime())));
         try {
             int status = connection.getResponseCode();
-            if (status != 200) throw new IOException(httpFailure(status));
+            if (status != 200) {
+                InputStream error = connection.getErrorStream();
+                if (error != null) error.close();
+                throw new IOException(httpFailure(status));
+            }
             try (InputStream input = connection.getInputStream(); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[4096]; int count;
                 while (expected == generation.get() && SystemClock.elapsedRealtime() < deadline
@@ -289,6 +306,21 @@ final class SniffedMediaProbe {
                 return manifest.replace("\uFEFF", "").trim();
             }
         } finally { connection.disconnect(); }
+    }
+    private static boolean initializationOnly(String url,String page,String agent,String cookies,long deadline)throws Exception {
+        HttpURLConnection connection=openConnection(url,page,agent,cookies);
+        connection.setRequestProperty("Range","bytes=0-65535");
+        connection.setReadTimeout((int)Math.max(1,Math.min(3000,deadline-SystemClock.elapsedRealtime())));
+        try{
+            int status=connection.getResponseCode();if(status!=200&&status!=206)return false;
+            byte[] bytes=new byte[65536];int count=0,n;boolean complete=false;
+            try(InputStream in=connection.getInputStream()){
+                while(count<bytes.length&&(n=in.read(bytes,count,bytes.length-count))>0){count+=n;if(count>=12&&!LiteMp4Probe.isMp4(bytes,count))return false;}
+                if(count<bytes.length)complete=true;
+            }
+            if(status==206){String range=connection.getHeaderField("Content-Range");complete=range!=null&&range.endsWith("/"+count);}
+            return LiteMp4Probe.initializationOnly(bytes,count,complete);
+        }finally{connection.disconnect();}
     }
     private static HttpURLConnection openConnection(String url, String page, String agent, String cookies) throws java.io.IOException {
         HttpURLConnection connection = NetworkClient.open(new URL(url));

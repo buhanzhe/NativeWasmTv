@@ -12,10 +12,15 @@ import java.util.regex.Pattern;
 final class AppLogReader {
     private static final Pattern ERROR_LINE = Pattern.compile("^\\S+\\s+\\S+\\s+\\d+\\s+\\d+\\s+[EF]\\s+.*");
     static String read(String filter) throws Exception {
-        final Process process = new ProcessBuilder(Build.VERSION.SDK_INT >= 21
-                ? new String[] {"logcat", "-d", "-v", "threadtime", "-b", "main", "-b", "crash"}
-                : new String[] {"logcat", "-d", "-v", "threadtime", "-b", "main"})
-                .redirectErrorStream(true).start();
+        final Process process;
+        try {
+            process = new ProcessBuilder(Build.VERSION.SDK_INT >= 21
+                    ? new String[] {"/system/bin/logcat", "-d", "-v", "threadtime", "-b", "main", "-b", "crash"}
+                    : new String[] {"/system/bin/logcat", "-d", "-v", "threadtime", "-b", "main"})
+                    .redirectErrorStream(true).start();
+        } catch (java.io.IOException | SecurityException unavailable) {
+            return unavailable();
+        }
         Thread timeout = new Thread(new Runnable() {
             public void run() {
                 try { Thread.sleep(4000L); process.destroy(); }
@@ -46,10 +51,17 @@ final class AppLogReader {
                 lines.addLast(line); size += line.length() + 1;
                 while (size > 256 * 1024 || lines.size() > 1500) size -= lines.removeFirst().length() + 1;
             }
+            if (process.waitFor() != 0) return unavailable();
+        } catch (java.io.IOException | SecurityException unavailable) {
+            return unavailable();
         } finally { timeout.interrupt(); process.destroy(); }
         StringBuilder result = new StringBuilder(size);
         for (String line : lines) result.append(line).append('\n');
         return new JSONObject().put("ok", true).put("text", result.toString())
                 .put("note", "仅显示系统允许读取的应用日志；日志缓冲被清理后无法恢复。").toString();
+    }
+    private static String unavailable() throws org.json.JSONException {
+        return new JSONObject().put("ok", true).put("available", false).put("text", "")
+                .put("note", "系统不允许读取日志或读取超时，请通过已授权的 ADB 导出日志。").toString();
     }
 }

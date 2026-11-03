@@ -9,6 +9,9 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+import base64
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +174,29 @@ assert np.max(np.abs(render(new,6)[2059]-219))<=3,'PQ 203-nit reference white'
 
 # Compile the actual Java production shader string (not a duplicate).
 java=(ROOT/'app/src/main/java/xiao/bu/tv/HdrDisplayPolicy.java').read_text()
+# Execute the production Java specialization, then compile its actual output.
+with tempfile.TemporaryDirectory() as directory:
+    folder=Path(directory)
+    (folder/'HdrDisplayPolicy.java').write_text(java,encoding='utf8')
+    (folder/'SdrShaderCheck.java').write_text('''package xiao.bu.tv;
+import java.nio.file.*;import java.util.Base64;
+class SdrShaderCheck { public static void main(String[] args) throws Exception {
+ String reference=new String(Files.readAllBytes(Paths.get(args[0])),"UTF-8");
+ for(int trc:new int[]{1,3})System.out.println(Base64.getEncoder().encodeToString(
+  HdrDisplayPolicy.sdrShader(reference,trc).getBytes("UTF-8")));
+ try {HdrDisplayPolicy.sdrShader(reference,7);throw new AssertionError("HDR specialized as SDR");}
+ catch(IllegalArgumentException expected) {}
+}}''',encoding='utf8')
+    jdk=Path(os.environ['JAVA_HOME'])/'bin'
+    subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8','-d',str(folder),
+                    str(folder/'HdrDisplayPolicy.java'),str(folder/'SdrShaderCheck.java')],check=True)
+    sources=subprocess.check_output([str(jdk/'java.exe'),'-cp',str(folder),'xiao.bu.tv.SdrShaderCheck',
+                                    str(ROOT/'app/src/main/res/raw/hdr_tonemap.glsl')]).splitlines()
+    for trc,encoded in zip([1,3],sources):
+        specialized=program(base64.b64decode(encoded).decode())
+        diff=np.abs(render(new,trc)-render(specialized))
+        assert diff.max()<=1,('Specialized SDR gamut changed pixels',trc,int(diff.max()))
+        cases.append(dict(specialized_sdr_transfer=trc,max_codes=int(diff.max()),mean_codes=float(diff.mean())))
 literal=re.search(r'BT709_SHADER\s*=\s*(.*?);\s*\n',java,re.S).group(1)
 tiny=''.join(json.loads(s) for s in re.findall(r'"(?:\\.|[^"\\])*"',literal))
 fast=program(tiny,'ntvFastToSdr')

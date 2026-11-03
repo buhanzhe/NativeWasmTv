@@ -281,6 +281,7 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
                         samples.put(new JSONObject().put("second",second+1)
                                 .put("positionMs",media.getCurrentPosition())
                                 .put("outputFps",IjkStreamMetrics.outputFrameRate(media))
+                                .put("gpuTiming",NativeHdrOutput.performance())
                                 .put("decodeFps",media.getVideoDecodeFramesPerSecond())
                                 .put("tcpBytesPerSecond",media.getTcpSpeed())
                                 .put("videoCacheBytes",media.getVideoCachedBytes())
@@ -354,6 +355,7 @@ public final class HdrPlaybackInstrumentation extends Instrumentation {
                                 ? "hardware" : "software")
                         .put("width",media.getVideoWidth()).put("height",media.getVideoHeight())
                         .put("outputFps",fps).put("gpuFrames",frames)
+                        .put("gpuTiming",NativeHdrOutput.performance())
                         .put("captureVisible",colored>=100)
                         .put("videoInfo",videoInfo)
                         .put("positionMs",media.getCurrentPosition()).put("screenshot",file.getAbsolutePath());

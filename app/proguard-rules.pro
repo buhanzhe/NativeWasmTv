@@ -14,6 +14,7 @@
 
 # Bugly reflection/JNI entry points and retraceable crash source locations.
 -keep class com.tencent.bugly.** { *; }
+-keepnames class xiao.bu.tv.PlayerErrorReports$PlaybackFailure
 -dontwarn com.tencent.bugly.**
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
@@ -71,3 +72,10 @@
 -keep class tv.danmaku.ijk.media.player.IjkTimedText { *; }
 -keep interface tv.danmaku.ijk.media.player.misc.ITrackInfo { *; }
 -keep interface tv.danmaku.ijk.media.player.misc.IMediaFormat { *; }
+# TVBus upstream JNI names and child-loaded bridge must stay stable.
+-keep class com.tvbus.engine.TVCore { *; }
+-keep interface com.tvbus.engine.TVListener { *; }
+-keepclassmembers class * implements com.tvbus.engine.TVListener { public *; }
+
+-keep interface com.tvbus.engine.Listener { *; }
+-keepclassmembers class * implements com.tvbus.engine.Listener { public *; }

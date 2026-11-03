@@ -20,6 +20,7 @@ public final class Ku9SignedHeadersInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();HlsProxyServer proxy=null;int code=-1;
         try {
+            checkMediaHeaders();
             JSONObject fields=new JSONObject("{\"headers\":{\"uid\":\"fixture\",\"APPID\":\"app\",\"APPSIGN\":\"sig1\",\"APPRANDOMSTR\":\"nonce1\"}}");
             Ku9ScriptResolver.Result initial=new Ku9ScriptResolver.Result("http://127.0.0.1/live.m3u8",false,fields);
             check(initial.signedHeaders.size()==4&&!initial.playlistRefresh,"result fields");
@@ -45,4 +46,30 @@ public final class Ku9SignedHeadersInstrumentation extends Instrumentation {
         finish(code,result);
     }
     private static void check(boolean condition,String reason){if(!condition)throw new AssertionError(reason);}
+    static void checkMediaHeaders() throws Exception {
+        JSONObject fields=new JSONObject().put("headers",new JSONObject()
+                .put("Content-Type","application/json").put("Origin","https://share.jxgdw.com")
+                .put("X-Test","value").put("Range","bytes=0-1").put("Host","wrong.test")
+                .put("X-Bad","value\r\nInjected: yes").put("Bad Name","value")
+                .put("APPSIGN","cctv-only"));
+        Ku9ScriptResolver.Result parsed=new Ku9ScriptResolver.Result("http://127.0.0.1/live.m3u8",false,fields);
+        check(parsed.mediaHeaders.size()==3,"media header filtering");
+        HlsProxyServer proxy=new HlsProxyServer();
+        try {
+            Method apply=HlsProxyServer.class.getDeclaredMethod("applyRequestHeaders",HttpURLConnection.class,String.class);
+            apply.setAccessible(true);
+            proxy.setWebRequestHeaders(parsed.referer,parsed.userAgent,parsed.cookies,false,false,
+                    parsed.signedHeaders,parsed.mediaHeaders);
+            HttpURLConnection segment=connection("play-live-jsp.jxtvcn.com.cn");
+            apply.invoke(proxy,segment,segment.getURL().toString());
+            check("application/json".equals(segment.getRequestProperty("Content-Type")),"Jiangxi segment Content-Type");
+            check("https://share.jxgdw.com".equals(segment.getRequestProperty("Origin")),"explicit Origin");
+            check(segment.getRequestProperty("APPSIGN")==null,"CCTV signature remains scoped");
+            check(segment.getRequestProperty("Range")==null,"player owns range");
+            proxy.setWebRequestHeaders(null,null,null);
+            segment=connection("play-live-jsp.jxtvcn.com.cn");
+            apply.invoke(proxy,segment,segment.getURL().toString());
+            check(segment.getRequestProperty("Content-Type")==null,"media headers reset between channels");
+        } finally {proxy.close();}
+    }
 }

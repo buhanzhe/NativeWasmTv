@@ -10,6 +10,18 @@ module.exports=function(root) {
     for(const file of ['ntv_deinterlace.h','ntv_bwdif_kernel.h'])
         fs.copyFileSync(path.join(__dirname,file),path.join(root,'ijkmedia/ijkplayer',file));
     const play='ijkmedia/ijkplayer/ff_ffplay.c';
+    // BWDIF needs consecutive source frames. Dropping a decoded interlaced
+    // frame here removes both fields and makes its temporal neighbours 80 ms
+    // apart at 1080i50. Keep references intact; video_refresh can still drop
+    // late progressive output after filtering to maintain audio sync.
+    edit(play,
+        '        if (ffp->framedrop>0 || (ffp->framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) {',
+        '        if (!frame->interlaced_frame &&\n            (ffp->framedrop>0 || (ffp->framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER))) {');
+    // Wake when a filtered field is queued, instead of polling an empty queue
+    // every 10 ms. Do not turn on the unrelated hardware frame-sync policies.
+    edit(play,
+        '            } else if (ffp->ntv_frame_sync && !is->paused) {',
+        '            } else if ((ffp->ntv_frame_sync ||\n                    (__atomic_load_n(&ffp->ntv_video_description, __ATOMIC_RELAXED) & (1U << 30)))\n                    && !is->paused) {');
     edit(play,'    if (ffp->stat.vdec_type == FFP_PROPV_DECODER_AVCODEC && is->video_st)\n        __atomic_store_n(&ffp->ntv_video_description, ntv_describe_video(is->video_st, is->viddec.avctx, src_frame) | NTV_DESCRIPTION_FRAME, __ATOMIC_RELAXED);',
         '    /* Software source metadata is published before deinterlacing. */');
     edit(play,'static int ffplay_video_thread(void *arg)',

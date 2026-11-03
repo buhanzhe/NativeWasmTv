@@ -1,2 +1,9 @@
 rootProject.name = 'nTv'
 include ':app'
+def browserCore = file('browser-core')
+if (!new File(browserCore, 'litecore/build.gradle').isFile()) {
+    throw new GradleException('Private browser core is missing. Place the separately authorized core checkout in browser-core; see README.md. Public prebuilt .so files alone do not include the Java/JS build dependencies.')
+}
+include ':litebrowser', ':litecore'
+project(':litebrowser').projectDir = new File(browserCore, 'litebrowser')
+project(':litecore').projectDir = new File(browserCore, 'litecore')

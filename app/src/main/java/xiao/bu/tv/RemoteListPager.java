@@ -57,10 +57,22 @@ final class RemoteListPager {
     }
 
     int move(ListView view, int count, int current, int offset, int height) {
+        return move(view, count, current, offset, height, false);
+    }
+
+    int moveWrapping(ListView view, int count, int current, int offset, int height) {
+        return move(view, count, current, offset, height, true);
+    }
+
+    private int move(ListView view, int count, int current, int offset, int height, boolean wrap) {
         if (count <= 0) { reset(); return -1; }
         prepare(view, count, current, height);
-        int next = Math.max(0, Math.min(count - 1, selected + offset));
-        if (next >= start + capacity) start = next;
+        long target = (long) selected + offset;
+        int next = wrap ? (int) ((target % count + count) % count)
+                : (int) Math.max(0L, Math.min(count - 1L, target));
+        // Wrap onto a complete navigation page, including a short final page.
+        if (wrap && (target < 0 || target >= count)) start = next / capacity * capacity;
+        else if (next >= start + capacity) start = next;
         else if (next < start) start = Math.max(0, start - capacity);
         selected = next; apply(count); return next;
     }

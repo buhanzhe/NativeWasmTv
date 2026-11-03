@@ -473,7 +473,7 @@ final class EpgManager {
         if (stored == null && cacheMatches) {
             try {
                 cachedGuide = readCache(slot.file);
-                if (cachedGuide != null) {
+                if (cachedGuide != null && !cachedGuide.programsByChannel.isEmpty()) {
                     resolveLogos(cachedGuide, cachedUrl);
                     saveDatabase(sourceUrl,cachedUrl,cachedGuide,slot.file.lastModified());
                     if (isCacheFresh(slot.file)) return new LoadedGuide(cachedGuide, cachedUrl);
@@ -486,23 +486,23 @@ final class EpgManager {
         RemoteFileMetadata previous = cacheMatches ? RemoteFileMetadata.fromJson(
                 preferences.getString(slot.metadataKey, "")) : null;
         try {
-            Download downloaded;
+            ValidatedDownload remote;
             try {
-                downloaded = download(sourceUrl, previous, slot.file,force);
+                remote = downloadUsableGuide(sourceUrl, previous, slot.file, force, cachedGuide);
             } catch (Exception primaryError) {
                 if (!DEFAULT_URL.equals(sourceUrl)) throw primaryError;
                 Log.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
-                downloaded = download(FALLBACK_URL, previous, slot.file,force);
+                remote = downloadUsableGuide(FALLBACK_URL, previous, slot.file, force, cachedGuide);
             }
+            Download downloaded = remote.download;
             if (downloaded.notModified) {
                 refreshCacheValidation(slot, downloaded.metadata, downloaded.url);
-                if (cachedGuide == null) throw new IOException("节目单缓存不可用");
                 android.content.ContentValues validated=new android.content.ContentValues();
                 validated.put("validated",System.currentTimeMillis());validated.put("resolved",downloaded.url);
                 database.getWritableDatabase().update("sources",validated,"source=?",new String[]{sourceUrl});
                 return new LoadedGuide(cachedGuide, downloaded.url);
             }
-            Guide parsed = parse(downloaded.bytes);
+            Guide parsed = remote.guide;
             resolveLogos(parsed, downloaded.url);
             try{saveDatabase(sourceUrl,downloaded.url,parsed,System.currentTimeMillis());}
             catch(android.database.SQLException cacheError){Log.w(TAG,"SQLite EPG write failed; using downloaded guide",cacheError);}
@@ -510,12 +510,28 @@ final class EpgManager {
             catch(IOException cacheError){Log.w(TAG,"XML backup unavailable; SQLite EPG retained",cacheError);}
             return new LoadedGuide(parsed, downloaded.url);
         } catch (Exception downloadError) {
-            if (cachedGuide != null) {
+            if (cachedGuide != null && !cachedGuide.programsByChannel.isEmpty()) {
                 Log.w(TAG, "Using stale EPG cache for " + sourceUrl, downloadError);
                 return new LoadedGuide(cachedGuide, cachedUrl);
             }
             throw downloadError;
         }
+    }
+
+    private static final class ValidatedDownload {
+        final Download download; final Guide guide;
+        ValidatedDownload(Download download, Guide guide) { this.download=download;this.guide=guide; }
+    }
+
+    private ValidatedDownload downloadUsableGuide(String source, RemoteFileMetadata previous,
+            File cache, boolean force, Guide cached) throws Exception {
+        Download downloaded=download(source,previous,cache,force);
+        Guide parsed=downloaded.notModified?cached:parse(downloaded.bytes);
+        // HTTP 200 may be a proxy error page or an XMLTV file with no usable
+        // programmes. Validate before choosing a source or replacing good cache.
+        if(parsed==null||parsed.programsByChannel.isEmpty())
+            throw new IOException(downloaded.notModified?"节目单缓存不可用":"节目单没有有效节目内容");
+        return new ValidatedDownload(downloaded,parsed);
     }
 
     private static void resolveLogos(Guide next, String sourceUrl) {

@@ -20,7 +20,7 @@ final class NetworkClient {
     static final String DNS_114 = "114";
     static final String DNS_BAIDU = "baidu";
     static final String DNS_SYSTEM = "system";
-    static final String DEFAULT_DNS = DNS_ALI;
+    static final String DEFAULT_DNS = DNS_SYSTEM;
     private static final String PREF_DNS = "network_dns";
 
     private static Context context;
@@ -66,11 +66,11 @@ final class NetworkClient {
     }
 
     static String sanitizeDnsMode(String value) {
-        if (DNS_TENCENT.equals(value) || DNS_114.equals(value)
+        if (DNS_ALI.equals(value) || DNS_TENCENT.equals(value) || DNS_114.equals(value)
                 || DNS_BAIDU.equals(value) || DNS_SYSTEM.equals(value)) {
             return value;
         }
-        return DNS_ALI;
+        return DEFAULT_DNS;
     }
 
     static HttpURLConnection open(URL url) throws IOException {
@@ -179,7 +179,7 @@ final class NetworkClient {
         if (factory == null) {
             http1Factory = null;
             Dns dns = DNS_SYSTEM.equals(getDnsMode())
-                    ? Dns.SYSTEM : new PublicDns(getDnsMode());
+                    ? LegacySystemDns.create() : new PublicDns(getDnsMode());
             OkHttpClient.Builder builder = new OkHttpClient.Builder()
                     .dns(new ProcessDns(dns))
                     .connectTimeout(10, TimeUnit.SECONDS)
