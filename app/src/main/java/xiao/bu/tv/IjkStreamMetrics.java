@@ -5,6 +5,11 @@ import tv.danmaku.ijk.media.player.IjkMediaPlayer;
 
 /** Optional nTv properties, independent of the bundled upstream Java API. */
 final class IjkStreamMetrics {
+    static void measureAudio(IjkMediaPlayer player, boolean enabled) {
+        if (SET_LONG != null) try { SET_LONG.invoke(player, 22017, enabled ? 1L : 0L); }
+        catch (Exception ignored) { }
+    }
+    static long audioPower(IjkMediaPlayer player) { return longProperty(player, 22017, -1L); }
     private static final Method GET_FLOAT = findGetter("_getPropertyFloat", int.class, float.class);
     private static final Method GET_LONG = findGetter("_getPropertyLong", int.class, long.class);
     private static final Method SET_LONG = findGetter("_setPropertyLong", int.class, long.class);

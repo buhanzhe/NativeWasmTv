@@ -146,6 +146,7 @@ final class HlsProxyServer implements Closeable {
             new LinkedHashMap<String, Long>() {
                 @Override protected boolean removeEldestEntry(Map.Entry<String, Long> entry) { return size() > 128; }
             });
+    boolean isKnownAudioBalanceSegment(String url) { return segmentDurations.containsKey(url); }
     private void rememberSegmentDuration(String url, List<String> tags) {
         for (String tag : tags) if (tag.startsWith("#EXTINF:")) try {
             long duration = Math.round(Double.parseDouble(tag.substring(8).split(",", 2)[0]) * 1000);
@@ -250,6 +251,11 @@ final class HlsProxyServer implements Closeable {
         systemPlayerStartsAtFirst = Build.VERSION.SDK_INT <= 15;
         synchronized (sourceProbeLock) { deferStartupMetadata = true; playbackVideoReady = false; }
         return systemPlayerHlsUrl(url);
+    }
+    String legacyTsUrl(String url) {
+        playerHlsUrl(url); // Retain the existing startup/history and metadata policy.
+        return "http://"+loopbackHost+":"+serverSocket.getLocalPort()
+                +"/legacy-ts/"+playlistAliases.token(url)+".ts";
     }
     boolean canUseDirectHttpHlsUrl(String url) {
         if(catchupStart>=0)return false;
@@ -1105,6 +1111,11 @@ final class HlsProxyServer implements Closeable {
 
             int pathEnd = requestLine.indexOf(' ', 4);
             String path = pathEnd < 0 ? "" : requestLine.substring(4, pathEnd);
+            if(path.startsWith("/legacy-ts/")&&path.endsWith(".ts")) {
+                String token=path.substring("/legacy-ts/".length(),path.length()-3);
+                writeLegacyTs(playlistAliases.resolve(token),output);
+                return;
+            }
             boolean directMedia = path.startsWith("/media/");
             String prefix = directMedia ? "/media/" : "/proxy/";
             if (!path.startsWith(prefix)) {
@@ -1218,6 +1229,53 @@ final class HlsProxyServer implements Closeable {
             cause = cause.getCause();
         }
         return false;
+    }
+
+    private void writeLegacyTs(String origin, final OutputStream output) throws IOException {
+        final boolean[] started={false};
+        OutputStream body=new OutputStream() {
+            @Override public void write(int value) throws IOException { write(new byte[]{(byte)value},0,1); }
+            @Override public void write(byte[] bytes,int offset,int count) throws IOException {
+                if(!started[0]) {
+                    // A close-delimited MPEG-TS stream has no finite duration or seek range.
+                    writeStreamingHeaders(output,200,"video/mp2ts",-1,null);
+                    started[0]=true;
+                    AppLog.i(TAG,"Legacy TS transport started; bypassing framework HLS demuxer");
+                }
+                output.write(bytes,offset,count);
+                startupMilestone("first-player-byte",null);
+                lastMediaSegmentServedAt=SystemClock.elapsedRealtime();
+            }
+            @Override public void flush() throws IOException { output.flush(); }
+        };
+        try {
+            LegacyTsStream.pipe(new LegacyTsStream.Source() {
+                public String playlist(String address)throws IOException {
+                    return new String(fetch(probeOriginUrl(address)).body,UTF_8);
+                }
+                public byte[] segment(String address)throws IOException {
+                    String upstream=probeOriginUrl(address);
+                    startupMilestone("player-ts-request",upstream);
+                    byte[] clear=fetch(upstream).body; // Reuse decrypted cache; never transcode.
+                    inspectStartupVideoCodec(clear);
+                    if(sourceVideoProbeEnabled)sampleSourceVideo(clear);
+                    return clear;
+                }
+                public boolean active(){return running&&!playbackSuspended&&!Thread.currentThread().isInterrupted();}
+                public long now(){return SystemClock.elapsedRealtime();}
+                public void waitForUpdate()throws IOException {
+                    try { Thread.sleep(1000); }
+                    catch(InterruptedException e){Thread.currentThread().interrupt();throw new java.io.InterruptedIOException("Legacy TS cancelled");}
+                }
+            },origin,body);
+        } catch(IOException error) {
+            if(started[0])throw new StreamingResponseException(error);
+            throw error;
+        } catch(RuntimeException error) {
+            IOException failure=new IOException("Legacy TS transport failed",error);
+            if(started[0])throw new StreamingResponseException(failure);
+            throw failure;
+        }
     }
 
     private static final class PlayerOutputFailure extends IOException {

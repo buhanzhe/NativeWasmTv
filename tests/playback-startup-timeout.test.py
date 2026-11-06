@@ -33,7 +33,7 @@ class StartupCheck {
  Queue channelBar=new Queue();Runnable playerStartupWatchdog;
  boolean isFinishing(){return false;}String startupVideoMime(){return mime;}
  void failPlayerStartup(int r,IMediaPlayer p,String m,String d){failures++;message=m;}
- static class Log {static void w(String t,String m){}}
+ static class AppLog {static void w(String t,String m){}}
  String decodeMode="auto",directHttpMediaUrl="";static String TAG="test",DECODE_MODE_HARDWARE="hardware";
  int missingCodecSoftwareRetryRequestId=-1,softwareAttempts;
  void updateLoadingStatus(String text){}void startIjkPlayer(Channel c,String url,boolean software,boolean direct)throws IOException{softwareAttempts++;player=new IjkMediaPlayer();}

@@ -9,6 +9,7 @@ stubs = {
     'android/os/Build.java': 'package android.os; public class Build { public static class VERSION {public static int SDK_INT;} }',
     'android/os/SystemClock.java': 'package android.os; public class SystemClock {public static long elapsedRealtime(){return System.nanoTime()/1000000;}}',
     'android/util/Log.java': 'package android.util; public class Log {public static int i(String t,String s){return 0;} public static int w(String t,String s,Throwable e){return 0;}}',
+    'xiao/bu/tv/AppLog.java': 'package xiao.bu.tv; public class AppLog {public static void loadIjkLibraries(){} public static void i(String t,String s){} public static void w(String t,String s,Throwable e){}}',
     'xiao/bu/tv/VideoStreamDescription.java': '''package xiao.bu.tv;
 class VideoStreamDescription {
  static final VideoStreamDescription UNKNOWN=new VideoStreamDescription();

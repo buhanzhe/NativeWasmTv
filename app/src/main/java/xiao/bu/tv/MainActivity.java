@@ -430,6 +430,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private int healthNeighborRequest=-1;
     private void updateChannelHealth(){
         if(channelHealth==null)return;
+        // A second decrypt/demux workload can consume the only CPU on ICS TVs.
+        // Keep explicit scans available; automatic neighbors yield to playback.
+        if(Build.VERSION.SDK_INT<=15 && Runtime.getRuntime().availableProcessors()==1
+                && !channelHealth.scanning){channelHealth.pause();return;}
         boolean stable=false;long position=-1,now=SystemClock.elapsedRealtime();
         try{stable=prepared&&hasCurrentPlaybackStats()&&player.isPlaying()&&!buffering
                 &&(audioOnlyPlayback||videoRenderingStarted)&&!backgroundPlaybackSuspended;
@@ -755,6 +759,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private volatile IMediaPlayer player;
     private int androidMp3FallbackRequestId = -1;
     private int systemCodecFallbackRequestId = -1;
+    // API14/15 use native TS push, avoiding vendor HTTP/elementary-stream prefetchers.
+    private static boolean LEGACY_TS_COMPATIBILITY_ENABLED = true;
+    private Channel legacyHlsCompatibilityChannel;
     private String systemCodecFallbackUrl;
     private boolean legacyPlayerReleasePending;
     private int legacyPlayerReleaseGeneration;
@@ -997,6 +1004,75 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private volatile boolean rememberChannelSource=true, rememberChannelDecode=true;
     private volatile boolean rememberChannelUserAgent=true, rememberChannelWebEngine=true;
     private volatile String defaultWebViewUserAgent, defaultWebSourceEngine;
+    private volatile boolean playerVolumeBalance;
+    private double playerVolumeTarget = -30;
+    private PlaybackVolumeBalance volumeBalance = new PlaybackVolumeBalance();
+    private IMediaPlayer volumeBalancePlayer;
+    private Channel volumeBalanceChannel;
+    private int balanceSystemVolume = -1;
+    private boolean balanceApplied, balanceMeasuring;
+    private int balanceSegments, balanceObservedSegments;
+    private String balanceSegmentUrl = "";
+    private boolean balanceManualPending;
+    private final Runnable volumeBalanceTick = new Runnable() {
+        @Override public void run() {
+            if (!playerVolumeBalance || isFinishing()) return;
+            IMediaPlayer active = player;
+            if (active != volumeBalancePlayer) { updateVolumeBalance(); return; }
+            if (active instanceof IjkMediaPlayer && !isPlaybackMuted()) try {
+                AudioManager audio = (AudioManager)getSystemService(AUDIO_SERVICE);
+                int current = audio == null ? 0 : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+                int maximum = audio == null ? 0 : audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                if (active.isPlaying() && (videoRenderingStarted || audioOnlyPlayback) && current > 0 && maximum > 0) {
+                    if(!balanceMeasuring && !balanceApplied) {
+                        balanceMeasuring=true; balanceObservedSegments=balanceSegments;
+                        IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,true);
+                    }
+                    if(balanceObservedSegments!=balanceSegments) {
+                        volumeBalance.finishSegment(); balanceObservedSegments=balanceSegments;
+                    }
+                    if(!balanceApplied || balanceManualPending) volumeBalance.sample(IjkStreamMetrics.audioPower((IjkMediaPlayer)active));
+                    boolean manual = balanceSystemVolume > 0 && current != balanceSystemVolume;
+                    if(manual) { balanceManualPending=true; balanceApplied=true;
+                        if(volumeBalance.samples<3) IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,true);
+                    }
+                    if (balanceManualPending && volumeBalance.samples >= 3) {
+                        balanceManualPending=false;
+                        IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
+                        playerVolumeTarget = volumeBalance.learn(current, maximum);
+                        getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit()
+                                .putFloat("player_volume_target",(float)playerVolumeTarget).apply();
+                    }
+                    if (!balanceApplied && volumeBalance.ready()) {
+                        volumeBalance.adjust(playerVolumeTarget,current,maximum);
+                        balanceApplied=true;
+                        IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
+                        applyPlaybackMuteState();
+                        int percent=Math.round(volumeBalance.gain*100);
+                        Toast.makeText(MainActivity.this,"根据频道设置音量为 " + percent + "%",Toast.LENGTH_SHORT).show();
+                    }
+                }
+                balanceSystemVolume = current;
+            } catch (RuntimeException error) { AppLog.w(TAG,"Volume balance unavailable",error); }
+            channelBar.postDelayed(this,1000);
+        }
+    };
+    private void updateVolumeBalance() {
+        channelBar.removeCallbacks(volumeBalanceTick);
+        if (player instanceof IjkMediaPlayer) IjkStreamMetrics.measureAudio((IjkMediaPlayer)player,false);
+        balanceSegments=0; balanceSegmentUrl="";
+        Channel channel=currentChannel();
+        if(!playerVolumeBalance || channel!=volumeBalanceChannel) {
+            volumeBalance = new PlaybackVolumeBalance(); balanceApplied=false;
+            balanceManualPending=false;
+        }
+        volumeBalanceChannel=channel;
+        volumeBalancePlayer=player;
+        balanceSystemVolume=-1; balanceMeasuring=false; balanceObservedSegments=0;
+        applyPlaybackMuteState();
+        if (playerVolumeBalance && player instanceof IjkMediaPlayer)
+            channelBar.postDelayed(volumeBalanceTick,1000);
+    }
     private volatile boolean groupPasswordRequired;
     private int passwordKeyUntilUp=-1;
     private volatile String hdrMode;
@@ -1426,7 +1502,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         });
         epgAdapter = new EpgListAdapter(this, uiScaleHelper);
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
-        neighborProbeEnabled=preferences.getBoolean("neighbor_probe_enabled",true);
+        neighborProbeEnabled=preferences.getBoolean("neighbor_probe_enabled",false);
         channelHealth=new ChannelHealth(this,()->{if(!isFinishing()&&channelAdapter!=null)channelAdapter.notifyDataSetChanged();});
         channelAdapter.setHealth(channelHealth);
         personalBackground=new PersonalBackground(this,findViewById(R.id.startup_background),preferences);
@@ -1457,6 +1533,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         rememberChannelDecode=preferences.getBoolean("remember_channel_decode",true);
         rememberChannelUserAgent=preferences.getBoolean("remember_channel_ua",true);
         rememberChannelWebEngine=LiteWebPlayback.supported()&&preferences.getBoolean("remember_channel_web_engine",true);
+        playerVolumeBalance=preferences.getBoolean("player_volume_balance",false);
+        playerVolumeTarget=preferences.getFloat("player_volume_target",-30f);
         groupPasswordRequired=preferences.getBoolean("group_password_required",false);
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT && DECODE_MODE_AUTO.equals(decodeMode))
             channelDecodeHints = new ChannelDecodeHints(this); // Async disk warmup; never gates prepare.
@@ -3551,6 +3629,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("rememberChannelWebEngine",rememberChannelWebEngine)
                     .put("liteBrowserSupported",LiteWebPlayback.supported())
                     .put("groupPasswordRequired",groupPasswordRequired)
+                    .put("playerVolumeBalance",playerVolumeBalance)
                     .put("personalBackground",personalBackground.state());
         }
         if(full||"channels".equals(view))settings.put("neighborProbeEnabled",neighborProbeEnabled).put("channelProbe",channelHealth==null?new JSONObject():channelHealth.status());
@@ -5311,6 +5390,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             restartPlayback |= !requestedDns.equals(NetworkClient.getDnsMode());
             NetworkClient.setDnsMode(requestedDns);
+        }
+        if (request.has("playerVolumeBalance")) {
+            playerVolumeBalance=request.getBoolean("playerVolumeBalance");
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit()
+                    .putBoolean("player_volume_balance",playerVolumeBalance).apply();
+            runOnUiThread(this::updateVolumeBalance);
         }
         if (request.has("leftVerticalGesture") || request.has("rightVerticalGesture")) {
             String left = request.optString("leftVerticalGesture", leftVerticalGesture);
@@ -9296,6 +9381,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private void startAndroidMediaPlayer(final Channel channel, final String streamUrl,
             boolean forceSoftwareDecode, final boolean systemVideo, final long resumePositionMs) throws IOException {
         final boolean hls = isHttpHlsSource(streamUrl);
+        final boolean legacyTs = LEGACY_TS_COMPATIBILITY_ENABLED && hls && systemVideo && !channel.radio && catchupProgram==null
+                && Build.VERSION.SDK_INT<=15 && proxy!=null && !proxy.finiteMedia()
+                && (legacyHlsCompatibilityChannel==channel
+                    || LegacyTsStream.needed(Build.VERSION.SDK_INT,Build.MODEL,Runtime.getRuntime().availableProcessors())
+                        && (channel.streamId!=null||channel.yangshipinPid!=null));
+        if(legacyTs)legacyHlsCompatibilityChannel=channel;
         if (!videoView.isSurfaceReady()) {
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
             updateLoadingStatus("等待视频输出界面");
@@ -9317,12 +9408,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
             return;
         }
-        final AndroidMediaPlayer nextPlayer = new AndroidMediaPlayer();
+        final AndroidMediaPlayer nextPlayer = legacyTs ? new LegacyStreamMediaPlayer() : new AndroidMediaPlayer();
         final int sourceRequestId = playRequestId;
         final boolean customSource = currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM;
         final boolean radioChannel = channel.radio;
         final Bitmap[] initialArtwork = new Bitmap[1];
         player = nextPlayer;
+        updateVolumeBalance();
         PlaybackErrorReporting.begin(sourceRequestId,"SystemPlayer",channel.name,streamUrl,decodeMode,currentSourceIndex);
         activePlayerStatsRequestId = playRequestId;
         playbackDebugPending = false;
@@ -9444,6 +9536,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             channelBar.post(() -> {
                 if (player == mediaPlayer && sourceRequestId == playRequestId) {
                     if(liteWebPlayback!=null&&liteWebPlayback.finishTemporary(false))return;
+                    AppLog.i(TAG,"System player completion request=" + sourceRequestId
+                            + " hls=" + hls + " finite=" + (proxy!=null&&proxy.finiteMedia())
+                            + " confirmedFrame=" + (systemFirstFrameRequestId==sourceRequestId)
+                            + " positionMs=" + mediaPlayer.getCurrentPosition()
+                            + " durationMs=" + mediaPlayer.getDuration());
+                    if (retryLegacyHlsCompatibility(sourceRequestId, nextPlayer, channel, streamUrl, hls)) return;
                     if (seekableDuration() > 0 && isNormalPlaybackCompletion(mediaPlayer.getDuration(), mediaPlayer.getCurrentPosition())) {
                         completeVideoPlayback();
                         return;
@@ -9500,13 +9598,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         Uri.parse(streamUrl).getPath())) {
                     systemPlayer.setDataSource(input.getFD(), 0L, input.getChannel().size());
                 }
+            } else if(legacyTs) {
+                nextPlayer.setDataSource(this,Uri.parse(proxy.legacyTsUrl(streamUrl)),LegacyTsStream.playerHeaders());
             } else nextPlayer.setDataSource(proxy == null ? streamUrl : hls
                     ? proxy.playerHlsUrl(streamUrl)
                     : !systemVideo && useAndroidMp3Player(Build.VERSION.SDK_INT, streamUrl)
                         ? proxy.systemPlayerMp3Url(streamUrl) : proxy.mediaUrl(streamUrl));
             showChannelBar(channel.name, "系统播放器播放中");
             prepareSystemPlayerAfterRelease(nextPlayer, sourceRequestId);
-            AppLog.i(TAG, "Android MediaPlayer " + (hls ? "HLS" : systemVideo ? "MP4" : "MP3")
+            AppLog.i(TAG, "Android MediaPlayer " + (legacyTs ? "linear TS (HLS bypass)" : hls ? "HLS" : systemVideo ? "MP4" : "MP3")
                     + (useSystemDolbyVisionPlayer() ? " Dolby Vision passthrough codecs=" + proxy.selectedVideoCodecs() : "")
                     + " sdk=" + Build.VERSION.SDK_INT
                     + " channel=" + channel.name);
@@ -9597,6 +9697,31 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         markAndroidHlsVideoReady(expected, channel, requestId, false);
     }
 
+    private boolean retryLegacyHlsCompatibility(int requestId, AndroidMediaPlayer expected,
+            Channel channel, String url, boolean hls) {
+        if (!LEGACY_TS_COMPATIBILITY_ENABLED || requestId != playRequestId || player != expected || Build.VERSION.SDK_INT > 15
+                || !hls || channel.radio || catchupProgram != null || proxy == null || proxy.finiteMedia()
+                || systemFirstFrameRequestId == requestId || legacyHlsCompatibilityChannel == channel)
+            return false;
+        legacyHlsCompatibilityChannel = channel;
+        AppLog.w(TAG, "Legacy HLS completed without confirmed video; retrying continuous TS"
+                + " channel=" + channel.name + " positionMs=" + expected.getCurrentPosition()
+                + " durationMs=" + expected.getDuration() + " size=" + expected.getVideoWidth()
+                + "x" + expected.getVideoHeight());
+        showLoading(channel.name, "正在重试旧系统兼容播放");
+        // Reuse the live proxy and completed decrypt cache; do not re-resolve a valid URL.
+        try { startAndroidMediaPlayer(channel, url, false, true); }
+        catch (IOException | RuntimeException error) {
+            AppLog.w(TAG, "Legacy HLS compatibility retry failed", error);
+            if (player != null) recoverStalledPlayback(requestId, player,"system HLS compatibility open failed");
+            else {
+                hideLoading();
+                showChannelBar(channel.name,"旧系统兼容播放失败，请重试或切换线路");
+            }
+        }
+        return true;
+    }
+
     private void markAndroidHlsVideoReady(AndroidMediaPlayer expected, Channel channel,
             int requestId, boolean renderingCallback) {
         if (player != expected || requestId != playRequestId) return;
@@ -9669,6 +9794,20 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 new java.util.concurrent.atomic.AtomicBoolean();
         nextPlayer.setOnNativeInvokeListener(new IjkMediaPlayer.OnNativeInvokeListener() {
             @Override public boolean onNativeInvoke(int what, Bundle args) {
+                if(playerVolumeBalance && (videoRenderingStarted || audioOnlyPlayback)
+                        && what==EVENT_DID_HTTP_OPEN && args!=null
+                        && args.getInt(ARG_HTTP_CODE)>=200 && args.getInt(ARG_HTTP_CODE)<300) {
+                    final String opened=args.getString(ARG_URL, "");
+                    final String origin=proxy==null?opened:proxy.probeOriginUrl(opened);
+                    final String path=Uri.parse(origin).getPath();
+                    if((proxy!=null && proxy.isKnownAudioBalanceSegment(origin)) || path!=null && (path.toLowerCase(Locale.US).endsWith(".ts")
+                            || path.toLowerCase(Locale.US).endsWith(".m4s")))
+                        runOnUiThread(()->{
+                            if(player==nextPlayer && !opened.equals(balanceSegmentUrl)) {
+                                balanceSegmentUrl=opened; balanceSegments++;
+                            }
+                        });
+                }
                 if((what==EVENT_DID_HTTP_OPEN||what==EVENT_DID_HTTP_SEEK)&&args!=null&&args.getInt(ARG_HTTP_CODE)>=400){
                     final int code=args.getInt(ARG_HTTP_CODE);runOnUiThread(()->{if(player==nextPlayer&&seekFeedback.pending())seekFeedback.failed(code==403?PlaybackHttpError.FORBIDDEN_MESSAGE:"下载失败（HTTP "+code+"），请重试或切换线路");});
                 }
@@ -9710,6 +9849,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "ntv-initial-subtitle", initialTracks[2]);
         }
         player = nextPlayer;
+        updateVolumeBalance();
         activePlayerStatsRequestId = playRequestId;
         playbackDebugPending = false;
         bindSeekCompletion(nextPlayer);
@@ -9819,7 +9959,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "an", 0);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "subtitle", 1);
         requestPlaybackAudioFocus();
-        float playbackVolume = isPlaybackMuted() ? 0f : 1f;
+        float playbackVolume = isPlaybackMuted() ? 0f : playerVolumeBalance
+                && nextPlayer == volumeBalancePlayer ? volumeBalance.gain : 1f;
         nextPlayer.setVolume(playbackVolume, playbackVolume);
         // Keep every compressed reference frame for realtime casting. IJK's
         // generic framedrop can skip a HEVC reference before MediaCodec sees it,
@@ -10006,7 +10147,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         /* Start at the first segment exposed by the selected startup policy. Using a
          * negative index would discard already prepared data in the two-segment modes. */
-        int liveStartIndex = catchupProgram!=null || cctvSource || yangshipinSource ? 0
+        // Virtual MSE feeds the SDK a clock relative to its first buffered
+        // fragment. Starting several fragments later would shift that origin.
+        int liveStartIndex = catchupProgram!=null || cctvSource || yangshipinSource
+                || liteWebPlayback!=null && liteWebPlayback.isVirtualMseSource(streamUrl) ? 0
                 : LIVE_DELAY_LOW.equals(liveDelayMode) || LIVE_DELAY_AUTO.equals(liveDelayMode) ? -2 : -3;
         if (proxy != null) {
             proxy.decoderHandoff.begin(liveStartIndex);
@@ -15978,7 +16122,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (activePlayer == null) {
             return;
         }
-        float volume = isPlaybackMuted() ? 0f : 1f;
+        float volume = isPlaybackMuted() ? 0f : playerVolumeBalance && activePlayer == volumeBalancePlayer ? volumeBalance.gain : 1f;
         try {
             activePlayer.setVolume(volume, volume);
         } catch (RuntimeException error) {
@@ -17421,6 +17565,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override
     protected void onDestroy() {
+        if(channelBar!=null)channelBar.removeCallbacks(volumeBalanceTick);
         if(channelHealth!=null)channelHealth.close();
         PlaybackErrorReporting.close();
         if(channelActionsDialog!=null){channelActionsDialog.setOnDismissListener(null);channelActionsDialog.dismiss();channelActionsDialog=null;}

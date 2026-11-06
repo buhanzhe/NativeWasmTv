@@ -5,7 +5,7 @@ function saveNeighborProbe(){
   neighborProbeSaving=true;toggle.disabled=true;
   api("/api/settings",{neighborProbeEnabled:toggle.checked},function(error){
     neighborProbeSaving=false;toggle.disabled=false;
-    if(error&&state&&state.settings)toggle.checked=state.settings.neighborProbeEnabled!==false;
+    if(error&&state&&state.settings)toggle.checked=state.settings.neighborProbeEnabled===true;
     toast(error?error.message:"已保存",!!error);refresh();
   });
 }
@@ -1325,7 +1325,7 @@ function saveEpg() {
 function renderPageState() {
   if(state&&state.settings){
     var settings=state.settings,probe=settings.channelProbe||{};
-    if(!neighborProbeSaving)document.getElementById("neighborProbeEnabled").checked=settings.neighborProbeEnabled!==false;
+    if(!neighborProbeSaving)document.getElementById("neighborProbeEnabled").checked=settings.neighborProbeEnabled===true;
     document.getElementById("probeAllButton").disabled=probeAllPending||!!probe.running;
     document.getElementById("channelProbeStatus").textContent=probe.running?
       ((probe.completed||0)+" / "+(probe.total||0)):

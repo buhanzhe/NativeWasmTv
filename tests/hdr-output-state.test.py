@@ -83,6 +83,7 @@ class HdrOutputStateCheck {
         int getVideoWidth(){return width;} int getVideoHeight(){return height;}
         int getVideoSarNum(){return 1;} int getVideoSarDen(){return 1;}
     }
+    static class AndroidMediaPlayer extends IMediaPlayer {}
     static class IjkMediaPlayer extends IMediaPlayer {
         static final int FFP_PROPV_DECODER_AVCODEC=1;
         int decoder=2;int getVideoDecoder(){return decoder;}
@@ -107,7 +108,7 @@ class HdrOutputStateCheck {
         Surface target;boolean closed;
         REQUEST_BUFFER
     }
-    static class Log {static void i(String tag,String value) {}}
+    static class AppLog {static void i(String tag,String value) {}}
     static class Layout {
         static final String TAG="test";
         int videoWidth,videoHeight,videoSarNum,videoSarDen;
@@ -219,6 +220,12 @@ class HdrOutputStateCheck {
     }
     public static void main(String[] args) {
         presentation();contexts();surfaces();layouts();cropValidation();queuedResizes();
+        Build.VERSION.SDK_INT=15;
+        Layout legacy=new Layout();AndroidMediaPlayer framework=new AndroidMediaPlayer();framework.width=1920;framework.height=1080;
+        legacy.updateVideoLayout(framework);
+        ok(!legacy.videoView.viewportBufferMode&&legacy.videoView.surfaceView.holder.fixed==1,"ICS framework retains source-sized native buffers");
+        Build.VERSION.SDK_INT=19;legacy=new Layout();legacy.updateVideoLayout(framework);
+        ok(!legacy.videoView.viewportBufferMode&&legacy.videoView.surfaceView.holder.fixed==1,"Modern framework retains source-sized output");
         System.out.println("PASS HDR swap policy/fallback, 4K Surface recreation, invalid mode-reopen sizes and repeated metadata");
     }
 }

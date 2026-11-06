@@ -59,6 +59,7 @@ final class LiteWebPlayback implements Closeable {
     void setActive(boolean value){active=value;if(engine!=null&&renderedPage!=null)engine.setRendering(value);}
     private String coverStyle="status";
     boolean isRendering(){return renderedPage!=null;}
+    boolean isVirtualMseSource(String source){return !closed&&streamActive&&virtualPlayback&&controlledSource.equals(source);}
     void applyPageCover(boolean enabled,String style){
         pageCovered=enabled;coverStyle=style;
         if(renderedPage==null)return;

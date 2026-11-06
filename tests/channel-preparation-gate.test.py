@@ -29,7 +29,7 @@ public class PreparationCheck {
   Callback callback;void cancel(){}void resolve(int id,String n,String p,String q,String s,boolean f,Callback c){callback=c;}
  }
  static class ChannelNetworkWarmup {static class CjsLease{CjsSiteResolver resolver;CjsSiteResolver.Result result;}CjsLease takeCjs(String p,String q,String s,int i,CjsSiteResolver.Callback c){return null;}}
- static class Log {static void w(String tag,String message){}}
+ static class AppLog {static void w(String tag,String message){}}
  static String TAG="test";
  void updateLoadingStatus(String s){}void showChannelBar(String n,String s){}String customSourceStatus(String s){return s;}
  void logSelectedChannelUrl(int i){}boolean refreshYangshipinPlayback(int i,String s){return false;}boolean retryWarmedSource(int i){return false;}

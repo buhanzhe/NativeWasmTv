@@ -40,7 +40,17 @@ function saveRadioUiStyle() {
   },40000);
 }
 
-var gestureSaving = false, memorySaving=false;
+var gestureSaving = false, memorySaving=false, volumeBalanceSaving=false;
+function savePlayerVolumeBalance(){
+  var input=document.getElementById("playerVolumeBalance"),value=input.checked;
+  volumeBalanceSaving=true;input.disabled=true;
+  api("/api/settings",{playerVolumeBalance:value},function(error){
+    volumeBalanceSaving=false;input.disabled=false;
+    if(error)input.checked=!value;
+    if(state&&state.settings)state.settings.playerVolumeBalance=input.checked;
+    toast(error?error.message:"播放器音量均衡已"+(value?"开启":"关闭"),!!error);refresh();
+  });
+}
 var groupPasswordSaving=false,groupPasswordLoaded=false,groupPasswordReading=false,groupPasswordRevision=0;
 var groupPasswordStateAfter=-1;
 function loadGroupPasswordState(){
@@ -96,6 +106,7 @@ function gestureInputs(disabled) {
 function renderPageState() {
   if (!state || !state.settings || gestureSaving) return;
   var settings = state.settings;
+  if(!volumeBalanceSaving){var balance=document.getElementById("playerVolumeBalance");balance.checked=settings.playerVolumeBalance===true;balance.disabled=false;}
   if(!groupPasswordSaving){
     var groupInput=document.getElementById("groupPasswordRequired");groupInput.disabled=false;
     if(typeof settings.groupPasswordRequired==="boolean"){

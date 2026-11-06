@@ -19,7 +19,7 @@ class LiveWindowCheck {
  Map<String,Boolean> cctvStartupReady=new HashMap<>();
  Map<String,FutureTask<byte[]>> cmgSegmentTasks=new HashMap<>(),cctvSegmentTasks=new HashMap<>();
  Map<String,byte[]> cctvSegmentCache=new HashMap<>();Map<String,String> cctvNextSegments=new LinkedHashMap<>();
- static class Log {static void w(String t,String s){}}
+ static class AppLog {static void w(String t,String s){}}
  static class YangshipinSegment {long number;}
  static class PlaylistSegment {long sequence;String url;List<String>tags;PlaylistSegment(long s,String u,List<String>t){sequence=s;url=u;tags=t;}}
  YangshipinSegment parseYangshipinSegment(String s){return null;}

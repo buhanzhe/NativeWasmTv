@@ -255,6 +255,12 @@ tools/
 !/tests/app-log-reader.test.py
 !/tools/ijk/ntv_app_log.c
 !/tools/ijk/apply-app-log-patches.cjs
+!/tools/ijk/apply-audio-balance-patches.cjs
+!/tests/playback-volume-balance.test.py
+!/tests/legacy-hls-compatibility.test.py
+!/tests/legacy-ts-stream.test.py
+!/app/src/androidTest/java/xiao/bu/tv/LegacyTsPlaybackInstrumentation.java
+!/app/src/androidTest/java/xiao/bu/tv/Legacy404MainChecks.java
 /browser-core/
 /.gitmodules
 # Accidental browser evaluation output, not project source.

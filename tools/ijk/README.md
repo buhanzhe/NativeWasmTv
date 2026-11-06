@@ -1,5 +1,18 @@
 # nTv IJK / Dolby changes
 
+## Optional channel volume balance
+
+Run `node tools/ijk/apply-audio-balance-patches.cjs` before rebuilding all three
+IJK ABIs. Property 22017 enables decoded S16 power measurement and reads its
+mean square value. Measurement defaults off; the app enables it after the first
+rendered frame and disables it after its single adjustment (or manual learning).
+Each output chunk samples at most 256 values, with no allocations or network work.
+The controller uses three observed HLS segment intervals, ignores silence, and
+only attenuates player gain (10–100%). It does not set Android system volume.
+Manual system-volume changes update the persisted preferred relative output
+level; mixer volume is an approximation rather than calibrated acoustic SPL.
+Sources without observable segment boundaries keep their original gain.
+
 ## App-owned log files
 
 `apply-app-log-patches.cjs` mirrors SDL/IJK and FFmpeg `ALOG`/`VLOG` output into

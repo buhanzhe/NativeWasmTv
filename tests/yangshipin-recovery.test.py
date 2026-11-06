@@ -27,7 +27,7 @@ public class YangshipinRecoveryCheck {
  static final String TAG="test";
  static void check(boolean ok){if(!ok)throw new AssertionError();}
  static class SystemClock {static long elapsedRealtime(){return 1000;}}
- static class Log {static void w(String a,String b){}static void i(String a,String b){}}
+ static class AppLog {static void w(String a,String b){}static void i(String a,String b){}}
  static class Channel {String name="CCTV-1";int sourceCount(){return 2;}}
  static class ChannelCatalog {static final int SOURCE_YSP_CCTV=1,SOURCE_YSP_SATELLITE=2,SOURCE_CUSTOM=3;}
  static class Queue {Runnable next;long delay;void postDelayed(Runnable r,long d){next=r;delay=d;}void run(){Runnable r=next;next=null;r.run();}}

@@ -52,6 +52,10 @@
         <input id="groupPasswordRequired" aria-label="分组输入密码" type="checkbox" disabled onchange="saveGroupPasswordRequired()" />
       </div>
     </section>
+    <section>
+      <h2>播放器</h2>
+      <div class="switch-row"><div class="switch-copy"><b>播放器音量均衡</b><div class="hint">首帧后根据最近三次 TS 分片的实际响度调整，每次切台仅一次；手动调节后记住偏好。适用于 IJK 分片播放，默认关闭。</div></div><input id="playerVolumeBalance" aria-label="播放器音量均衡" type="checkbox" disabled onchange="savePlayerVolumeBalance()" /></div>
+    </section>
     <section id="backgroundSettings">
       <h2>闪屏设置</h2>
       <div class="browser-setting-row compact-select-row"><div class="browser-setting-copy"><label for="personalBackground">背景图片</label></div><select id="personalBackground" disabled onchange="saveBackground()"><option value="off">关闭</option><option value="bing">Bing 壁纸</option><option value="custom">本地图片</option><option value="url">图片链接</option></select></div>
@@ -79,7 +83,7 @@
   <div id="message" class="message"></div>
   <script src="/js/navigation.js?v=20261030-ui"></script>
   <script src="/js/common.js?v=20261030-ui"></script>
-  <script src="/js/pages/personalization.js?v=web-channel-memory1"></script>
+  <script src="/js/pages/personalization.js?v=volume-balance1"></script>
 <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>
