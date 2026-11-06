@@ -1,13 +1,15 @@
 {
-    "versionCode": 8,
-    "versionName": "1.8.0",
-    "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
-    "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
-    "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
-    "apkX86Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTvX86.apk",
-    "sha256": "87bc46b996c5198f1da93411f05a965431a4909bb52cdecbd4d783875fe6f81a",
-    "sha25632": "87bc46b996c5198f1da93411f05a965431a4909bb52cdecbd4d783875fe6f81a",
-    "sha25664": "68540ab301e09e295d58fda3b1350992793503f8077e9650d4a6ad50015ec37b",
-    "sha256X86": "246d89b6b3ca475e02cd3252b683955cd78606c267153a37192438fd198770d1",
-    "releaseNotes": "\u4fee\u590d\u95ee\u9898\u5e76\u63d0\u5347\u64ad\u653e\u4f53\u9a8c\u3002"
+  "versionCode": 10,
+  "versionName": "1.8.2",
+  "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+  "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
+  "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
+  "apkX86Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTvX86.apk",
+  "apkBroUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/ntv_bro.apk",
+  "sha256Bro": "4ede234d5e9a0f9927e5150db0a0978f1c67d5ed08658b00aa0b01981593b17b",
+  "sha256": "78fdfa266d093d0eca4106cc5b0dfaeddd276587eb66ee9c9d62a135d29ecdea",
+  "sha25632": "78fdfa266d093d0eca4106cc5b0dfaeddd276587eb66ee9c9d62a135d29ecdea",
+  "sha25664": "2ecceb66720fdafe68268c1132b9852c5d0ed02e6c0cc172e60dac0fe0897447",
+  "sha256X86": "6cb822b3feb47e4b2147c4b1fa8ec60fe56398db964fd68cc492a2d1754215f8",
+  "releaseNotes": "修复问题并提升播放体验。"
 }

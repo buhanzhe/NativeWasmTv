@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebResourceResponse;
 import java.io.FilterInputStream;
 import java.io.IOException;
@@ -87,7 +87,7 @@ final class LegacyWebHttp {
                         try { super.close(); } finally { owned.disconnect(); }
                     }
                 };
-                Log.i("LegacyWebHttp", "HTTPS GET 200 " + target.getHost());
+                AppLog.i("LegacyWebHttp", "HTTPS GET 200 " + target.getHost());
                 WebResourceResponse response = new WebResourceResponse("text/html",
                         (type == null ? Charset.forName("UTF-8")
                                 : type.charset(Charset.forName("UTF-8"))).name(), stream);
@@ -114,7 +114,7 @@ final class LegacyWebHttp {
                 return response;
             }
         } catch (IOException | RuntimeException error) {
-            Log.w("LegacyWebHttp", "HTTPS GET failed: " + error.getClass().getSimpleName());
+            AppLog.w("LegacyWebHttp", "HTTPS GET failed: " + error.getClass().getSimpleName());
         } finally {
             if (connection != null) connection.disconnect();
         }

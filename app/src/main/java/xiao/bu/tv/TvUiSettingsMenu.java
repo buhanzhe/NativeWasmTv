@@ -26,8 +26,7 @@ final class TvUiSettingsMenu implements TvUi.Events {
         }
         if("display".equals(key))return choices(new String[]{check("屏显时间",s.getBoolean("clock")),check("显示网速",s.getBoolean("speed")),check("调试信息",s.getBoolean("debug")),check("播放进度",s.getBoolean("position")),"界面大小","HDR 模式","遥控器说明"},-1);
         if("preferences".equals(key)){
-            String[] rows={check("开机自启",s.getBoolean("boot")),check("换台反转",s.getBoolean("reverse")),"界面主题","唱片界面","网页管理","清空缓存",check("线路记忆",s.getBoolean("rememberChannelSource")),check("解码记忆",s.getBoolean("rememberChannelDecode")),check("UA 记忆",s.getBoolean("rememberChannelUserAgent")),check("内核记忆",s.getBoolean("rememberChannelWebEngine"))};
-            if(!s.getBoolean("liteBrowserSupported"))rows=java.util.Arrays.copyOf(rows,rows.length-1);
+            String[] rows={check("开机自启",s.getBoolean("boot")),check("换台反转",s.getBoolean("reverse")),"界面主题","唱片界面","网页管理","清空缓存",check("线路记忆",s.getBoolean("rememberChannelSource")),check("解码记忆",s.getBoolean("rememberChannelDecode"))};
             return choices(rows,-1);
         }
         if("browser".equals(key))return choices(TvUiBrowserMenu.titles(s.getBoolean("liteBrowserSupported")),-1);
@@ -47,7 +46,7 @@ final class TvUiSettingsMenu implements TvUi.Events {
         else if("decode".equals(key))host.setting("decodeMode",new String[]{"auto","hardware","software"}[option]);
         else if("timeout".equals(key))host.setting("autoSwitchSourceSeconds",option*5);
         else if("display".equals(key)){if(option==0)host.setting("showDateTime",!s.getBoolean("clock"));else if(option==1)host.setting("showNetworkSpeed",!s.getBoolean("speed"));else if(option==2)host.setting("showDebugInfo",!s.getBoolean("debug"));else if(option==3)host.setting("showPlaybackPosition",!s.getBoolean("position"));else go(option==4?"ui-size":option==5?"hdr":"guide");}
-        else if("preferences".equals(key)){if(option==0)host.setting("autoStart",!s.getBoolean("boot"));else if(option==1)host.setting("reverseKeys",!s.getBoolean("reverse"));else if(option==6)host.setting("rememberChannelSource",!s.getBoolean("rememberChannelSource"));else if(option==7)host.setting("rememberChannelDecode",!s.getBoolean("rememberChannelDecode"));else if(option==8)host.setting("rememberChannelUserAgent",!s.getBoolean("rememberChannelUserAgent"));else if(option==9)host.setting("rememberChannelWebEngine",!s.getBoolean("rememberChannelWebEngine"));else go(option==2?"styles":option==3?"radio-styles":option==4?"manage":"cache");}
+        else if("preferences".equals(key)){if(option==0)host.setting("autoStart",!s.getBoolean("boot"));else if(option==1)host.setting("reverseKeys",!s.getBoolean("reverse"));else if(option==6)host.setting("rememberChannelSource",!s.getBoolean("rememberChannelSource"));else if(option==7)host.setting("rememberChannelDecode",!s.getBoolean("rememberChannelDecode"));else go(option==2?"styles":option==3?"radio-styles":option==4?"manage":"cache");}
         else if("browser".equals(key))go("browser:"+option);
         else{if(option==1){String state=s.getString("updateState");if(!"checking".equals(state)&&!"downloading".equals(state))host.navigate("available".equals(state)||"ready".equals(state)?"install-update":"update");}}
     }

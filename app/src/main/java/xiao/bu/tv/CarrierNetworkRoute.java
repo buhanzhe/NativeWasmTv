@@ -9,7 +9,7 @@ import android.net.NetworkInfo;
 import android.net.NetworkRequest;
 import android.os.Build;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -95,7 +95,7 @@ final class CarrierNetworkRoute implements Closeable {
                         synchronized (lock) {
                             lock.notifyAll();
                         }
-                        Log.i(TAG, "Carrier IPTV cellular route available");
+                        AppLog.i(TAG, "Carrier IPTV cellular route available");
                     }
 
                     @Override
@@ -111,7 +111,7 @@ final class CarrierNetworkRoute implements Closeable {
                         synchronized (lock) {
                             lock.notifyAll();
                         }
-                        Log.i(TAG, "Carrier IPTV cellular route unavailable; using default network");
+                        AppLog.i(TAG, "Carrier IPTV cellular route unavailable; using default network");
                     }
                 };
                 try {
@@ -121,7 +121,7 @@ final class CarrierNetworkRoute implements Closeable {
                             .build();
                     connectivity.requestNetwork(request, callback);
                 } catch (RuntimeException error) {
-                    Log.w(TAG, "Unable to request cellular route", error);
+                    AppLog.w(TAG, "Unable to request cellular route", error);
                     requested = false;
                     waitExpired = true;
                     callback = null;
@@ -146,7 +146,7 @@ final class CarrierNetworkRoute implements Closeable {
                     long remaining = deadline - SystemClock.elapsedRealtime();
                     if (remaining <= 0L) {
                         waitExpired = true;
-                        Log.i(TAG, "Carrier IPTV cellular route timed out; using default network");
+                        AppLog.i(TAG, "Carrier IPTV cellular route timed out; using default network");
                         break;
                     }
                     try {

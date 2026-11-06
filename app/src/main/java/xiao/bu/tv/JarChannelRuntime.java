@@ -117,7 +117,7 @@ final class JarChannelRuntime {
     }
     void update(long position,boolean playing) {
         if(callback!=null&&!callback.current()){close();return;}
-        if(plugin!=null)try{plugin.update(position,playing);}catch(Throwable error){android.util.Log.w("JarChannel","Plugin update",error);close();}
+        if(plugin!=null)try{plugin.update(position,playing);}catch(Throwable error){xiao.bu.tv.AppLog.w("JarChannel","Plugin update",error);close();}
     }
     void close() {
         generation++;
@@ -126,7 +126,7 @@ final class JarChannelRuntime {
         browser=null;
         filePicker.cancel();
         if(view!=null){root.removeView(view);view=null;}
-        if(plugin!=null){try{plugin.dispose();}catch(Throwable error){android.util.Log.w("JarChannel","Plugin dispose",error);}plugin=null;}
+        if(plugin!=null){try{plugin.dispose();}catch(Throwable error){xiao.bu.tv.AppLog.w("JarChannel","Plugin dispose",error);}plugin=null;}
     }
     void destroy(){destroyed=true;close();worker.shutdownNow();}
     boolean fileResult(int request,int result,android.content.Intent data){return filePicker.result(request,result,data);}
@@ -207,7 +207,7 @@ final class JarChannelRuntime {
         if(browser!=null){if(active)browser.onResume();else{update(0,false);browser.onPause();}}
     }
     private void failNativePage(String action,Throwable error){
-        android.util.Log.w("JarChannel","Plugin "+action,error);
+        xiao.bu.tv.AppLog.w("JarChannel","Plugin "+action,error);
         Callback owner=callback;
         close();
         if(owner!=null&&owner.current())owner.status("频道页面运行失败，请重新进入");

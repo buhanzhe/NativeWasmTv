@@ -114,7 +114,7 @@ final class SniffedMediaProbe {
                 if (expected != generation.get()) return;
                 if (SystemClock.elapsedRealtime() >= deadline)
                     throw new java.net.SocketTimeoutException("Media probe deadline exceeded");
-                IjkMediaPlayer.loadLibrariesOnce(null);
+                AppLog.loadIjkLibraries();
                 player = new IjkMediaPlayer();
                 final CountDownLatch ready = new CountDownLatch(1);
                 final boolean[] prepared = {false};

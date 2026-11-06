@@ -50,7 +50,7 @@ final class CatchupPreloader {
     private void openDecoder(HlsProxyServer prepared){
         if(closed)return;
         try{
-            IjkMediaPlayer.loadLibrariesOnce(null);decoder=new IjkMediaPlayer();
+            AppLog.loadIjkLibraries();decoder=new IjkMediaPlayer();
             decoder.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,"mediacodec",0);
             decoder.setOption(IjkMediaPlayer.OPT_CATEGORY_CODEC,"threads",2);
             decoder.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,"live_start_index",0);

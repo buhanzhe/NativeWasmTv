@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.content.Context;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
@@ -18,7 +18,7 @@ final class WebMediaSession {
             while ((size = input.read(buffer)) != -1) output.write(buffer, 0, size);
             script = output.toString("UTF-8");
         } catch (Exception error) {
-            Log.w("WebMediaSession", "Unable to load media integration", error);
+            AppLog.w("WebMediaSession", "Unable to load media integration", error);
             script = "";
         }
         return script;

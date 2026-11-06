@@ -10,12 +10,12 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.util.HashMap;
 import java.util.UUID;
 import org.json.JSONObject;
 
-/** Player-side facade. No WebView or WebKit singleton is constructed here on API 14-25. */
+/** Player-side facade. No WebView or WebKit singleton is constructed here on API 14-23. */
 final class LegacyWebSession {
     static LegacyWebSession current;
     static final int HELLO = 1, EVENT = 2, HEARTBEAT = 3, COMMAND = 4, RESULT = 5;
@@ -143,7 +143,7 @@ final class LegacyWebSession {
         if (!active) return;
         int failedRequest = request;
         boolean wasVisible = visible;
-        Log.w("LegacyWebGuard", "unavailable request=" + request + " browserPid=" + pid + " reason=" + reason);
+        AppLog.w("LegacyWebGuard", "unavailable request=" + request + " browserPid=" + pid + " reason=" + reason);
         stop(true);
         // A hidden sniffing document failing must not interrupt an already playing native stream.
         if (wasVisible) owner.legacyUnavailable(failedRequest, reason);

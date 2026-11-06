@@ -104,7 +104,7 @@ final class LegacyTlsSocket extends SSLSocket {
                 }
                 trust.checkServerTrusted(chain, chain[0].getPublicKey().getAlgorithm());
                 session = new Session(chain, nativeCipher(handle).replace('-', '_'));
-                android.util.Log.i("LegacyTls", "TLS 1.2 host=" + host + " handshakeMs="
+                xiao.bu.tv.AppLog.i("LegacyTls", "TLS 1.2 host=" + host + " handshakeMs="
                         + (android.os.SystemClock.elapsedRealtime() - started));
             } catch (Exception error) {
                 close();

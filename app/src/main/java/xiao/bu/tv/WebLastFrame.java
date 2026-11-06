@@ -26,6 +26,8 @@ final class WebLastFrame {
     private final ImageView cover;
     private final View matte;
     private boolean swipePreview;
+    private boolean nativeSwipe, nativeSwipeAnimating, nativeFrameReady;
+    private int nativeSwipeGeneration;
     private int previewOrigin = -1;
     private float previewX, previewY;
     private final Handler ui = new Handler();
@@ -59,6 +61,7 @@ final class WebLastFrame {
 
     boolean active() { return frame != null || capturing; }
     boolean isSwipePreview() { return swipePreview; }
+    boolean isNativeSwipe() { return nativeSwipe; }
     View animationView() { return frame == null ? null : cover; }
 
     void preview(float x, float y) {
@@ -161,8 +164,28 @@ final class WebLastFrame {
         PixelCopy.request((Surface) field.get(viewRoot), bitmap, done, ui);
     }
 
-    void bind(int id) { if (frame != null) { request = id; if (swipePreview) previewOrigin = id; polls = 0; } }
-    void nativeReady(int id) { if (frame != null && request == id) { clear(); host.finished(false); } }
+    void bind(int id) { if (frame != null) { if(request!=id)nativeFrameReady=false;request = id; if (swipePreview) previewOrigin = id; polls = 0; } }
+    void nativeReady(int id) {
+        if (frame == null || request != id) return;
+        if (nativeSwipeAnimating) { nativeFrameReady=true; return; }
+        clear(); host.finished(false);
+    }
+
+    /** Preserve the decoded outgoing pixels after the old player is released. */
+    void animateNativeSwipe(float startX,float startY,float directionX,float directionY,
+            android.animation.TimeInterpolator interpolator) {
+        if(frame==null)return;
+        nativeSwipe=nativeSwipeAnimating=true;nativeFrameReady=false;
+        final int token=++nativeSwipeGeneration;
+        cover.animate().withEndAction(null).cancel();
+        cover.setTranslationX(startX);cover.setTranslationY(startY);
+        cover.animate().translationX(directionX*root.getWidth()).translationY(directionY*root.getHeight())
+                .setDuration(160L).setInterpolator(interpolator).withEndAction(()->{
+                    if(token!=nativeSwipeGeneration||!nativeSwipe)return;
+                    nativeSwipeAnimating=false;
+                    if(nativeFrameReady){clear();host.finished(false);}
+                }).start();
+    }
 
     void raise() {
         if (frame == null || source.getParent() != root) return;
@@ -185,6 +208,8 @@ final class WebLastFrame {
     void clear() {
         cancelCapture(); ui.removeCallbacks(check); request = -1;
         swipePreview = false; previewOrigin = -1; previewX = previewY = 0f;
+        nativeSwipe=nativeSwipeAnimating=nativeFrameReady=false;
+        nativeSwipeGeneration++;
         cover.animate().withEndAction(null).cancel();
         cover.setTranslationX(0f); cover.setTranslationY(0f); matte.setVisibility(View.GONE);
         cover.setVisibility(View.GONE); cover.setImageDrawable(null);

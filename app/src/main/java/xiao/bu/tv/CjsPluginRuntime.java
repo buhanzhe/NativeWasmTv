@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -267,7 +267,7 @@ public final class CjsPluginRuntime {
             if (!s.used && pending > active) {
                 JSONObject next = null;
                 try { next = readRuntime(s, directory(s, pending)); }
-                catch (Exception error) { Log.w(TAG, "Pending site incomplete; retaining active " + id, error); }
+                catch (Exception error) { AppLog.w(TAG, "Pending site incomplete; retaining active " + id, error); }
                 if (next != null) {
                     active = pending;
                     preferences().edit().putInt(pref(s, "active"), active).remove(pref(s, "pending")).commit();
@@ -337,7 +337,7 @@ public final class CjsPluginRuntime {
             // catalog refresh may replace it.
             for (String id : installed) {
                 try { installOrUpdate(id); }
-                catch (Exception error) { Log.w(TAG, "Startup site update failed: " + id, error); }
+                catch (Exception error) { AppLog.w(TAG, "Startup site update failed: " + id, error); }
             }
         }
     }
@@ -399,7 +399,7 @@ public final class CjsPluginRuntime {
                     }
                     if (!staging.renameTo(target)) {
                         if (replaced != null && !replaced.renameTo(target))
-                            Log.w(TAG, "Unable to restore incomplete cache " + target);
+                            AppLog.w(TAG, "Unable to restore incomplete cache " + target);
                         throw new IOException("无法启用站点插件");
                     }
                     if (s.used) preferences().edit().putInt(pref(s, "pending"), version).commit();
@@ -409,7 +409,7 @@ public final class CjsPluginRuntime {
                     }
                 }
                 deleteRecursively(replaced);
-                Log.i(TAG, "Site installed id=" + id + " version=" + version + " abi=" + currentAbi() + " pending=" + s.used);
+                AppLog.i(TAG, "Site installed id=" + id + " version=" + version + " abi=" + currentAbi() + " pending=" + s.used);
                 return String.valueOf(version);
             } finally { deleteRecursively(staging); }
         }
@@ -421,7 +421,7 @@ public final class CjsPluginRuntime {
             if (!s.loaded) {
                 System.load(new File(s.directory, s.entry.getString("module") + ".so").getAbsolutePath());
                 s.used = true; s.loaded = true;
-                Log.i(TAG, "Site native loaded id=" + id);
+                AppLog.i(TAG, "Site native loaded id=" + id);
             }
         } catch (Exception e) { throw new UnsatisfiedLinkError(e.toString()); }
     }
@@ -554,7 +554,7 @@ public final class CjsPluginRuntime {
         final String resource=new URL(originalUrl).getPath();
         final int budgetMs=resource.endsWith(".so") ? 30000 : 8000;
         String url=GithubProxy.apply(originalUrl);
-        Log.i(TAG,"Download begin resource="+resource);
+        AppLog.i(TAG,"Download begin resource="+resource);
         for(int attempt=0;attempt<2;attempt++) {
             if(Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Plugin download cancelled");
             long remaining=budgetMs-(android.os.SystemClock.elapsedRealtime()-startedAt);
@@ -564,11 +564,11 @@ public final class CjsPluginRuntime {
             } catch(IOException error) {
                 if(attempt!=0 || !retryableDownloadFailure(error)
                         || android.os.SystemClock.elapsedRealtime()-startedAt>=budgetMs) {
-                    Log.w(TAG,"Download failed resource="+resource+" elapsedMs="
+                    AppLog.w(TAG,"Download failed resource="+resource+" elapsedMs="
                             +(android.os.SystemClock.elapsedRealtime()-startedAt),error);
                     throw error;
                 }
-                Log.w(TAG,"Plugin download interrupted; retry once over HTTP/1.1: "+resource,error);
+                AppLog.w(TAG,"Plugin download interrupted; retry once over HTTP/1.1: "+resource,error);
             }
         }
         throw new IOException("Plugin download failed");
@@ -602,7 +602,7 @@ public final class CjsPluginRuntime {
                     output.write(buffer,0,count);
                 }
                 if(length>=0 && total!=length) throw new EOFException("Unexpected end of stream downloading plugin");
-                Log.i(TAG,"Download complete bytes="+total+" http1Retry="+http1
+                AppLog.i(TAG,"Download complete bytes="+total+" http1Retry="+http1
                         +" waitMs="+(headersAt-startedAt)+" bodyMs="+(android.os.SystemClock.elapsedRealtime()-headersAt)
                         +" host="+connection.getURL().getHost());
                 return output.toByteArray();
@@ -660,6 +660,6 @@ public final class CjsPluginRuntime {
             File[] children = file.listFiles();
             if (children != null) for (File child : children) deleteRecursively(child);
         }
-        if (!file.delete()) Log.w(TAG, "Unable to delete " + file);
+        if (!file.delete()) AppLog.w(TAG, "Unable to delete " + file);
     }
 }

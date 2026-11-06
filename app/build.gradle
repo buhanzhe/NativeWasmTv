@@ -137,6 +137,7 @@ android {
         x86 {
             dimension 'architecture'
             minSdkVersion 14
+            if (project.hasProperty('liteKernelFixtures')) buildConfigField 'boolean', 'BUNDLED_LITE_BROWSER', 'true'
             ndk { abiFilters 'x86' }
             buildConfigField 'String', 'CJS_PLUGIN_ABI', '"x86"'
             buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apkX86Url"'
@@ -285,7 +286,8 @@ dependencies {
     ntvBroImplementation project(':litecore')
     arm32Implementation files(packageLiteCoreBridge)
     arm64Implementation files(packageLiteCoreBridge)
-    x86Implementation files(packageLiteCoreBridge)
+    if (project.hasProperty('liteKernelFixtures')) x86Implementation project(':litecore')
+    else x86Implementation files(packageLiteCoreBridge)
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
     // All ABIs use the patched local libraries, including Dolby audio and metrics.
     implementation('androidx.webkit:webkit:1.9.0') {

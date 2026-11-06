@@ -44,6 +44,13 @@
 #channelConfigPage .browser-setting-row>button{min-height:38px;background:#f5f7fb;border-radius:8px;font-weight:400}
 #channelConfigPage .switch-row .hint{font-size:11px}
 #channelConfigPage .switch-row{padding-bottom:0}
+#channelConfigPage .channel-probe-section .switch-row{padding:0;gap:12px}
+#channelConfigPage .probe-actions{display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;-webkit-box-flex:0;flex:0 0 auto}
+#channelConfigPage #probeAllButton{min-height:34px;margin-right:12px;padding:7px 11px;border:0;border-radius:8px;background:#f5f7fb;color:#007aff;font-size:12px;font-weight:400;white-space:nowrap}
+#channelConfigPage #probeAllButton:disabled{opacity:.45}
+#channelConfigPage .probe-footer{display:-webkit-box;display:flex;-webkit-box-pack:justify;justify-content:space-between;margin-top:10px;color:#96969c;font-size:11px;line-height:1.6}
+#channelProbeStatus{margin-left:12px;white-space:nowrap}
+html[data-theme="dark"] #channelConfigPage #probeAllButton{background:#2c2c2e;color:#0a84ff}
 html[data-theme="dark"] #channelConfigPage .source-name{color:#f2f2f7}
 html[data-theme="dark"] #channelConfigPage .source-item{background:transparent;border-color:#38383a}
 html[data-theme="dark"] #channelConfigPage .source-location-row .source-location,html[data-theme="dark"] #channelConfigPage .source-file,html[data-theme="dark"] #channelConfigPage .epg-source-row>input,html[data-theme="dark"] #channelConfigPage .config-actions,html[data-theme="dark"] #channelConfigPage .config-epg-section>.actions,html[data-theme="dark"] #channelConfigPage .merge-panel{background:#2c2c2e;color:#f2f2f7}

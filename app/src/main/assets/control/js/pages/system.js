@@ -159,10 +159,11 @@ function openAppLogs() {
 }
 function refreshAppLogs() {
   var id = ++appLogRequestId;
+  document.getElementById("appLogNote").textContent = "正在读取已保存的应用与 IJK 日志…";
   api("/api/logs?filter=" + encodeURIComponent(document.getElementById("appLogFilter").value), null, function (error, data) {
     if (id !== appLogRequestId) return;
     document.getElementById("appLogText").value = error ? error.message : data.text || "";
-    document.getElementById("appLogNote").textContent = error ? "读取失败，请重试" : data.note + (data.text || data.available === false ? "" : " 当前筛选没有日志。");
+    document.getElementById("appLogNote").textContent = error ? "读取失败，请重试" : (data.note || "") + (data.text || data.available === false ? "" : " 当前筛选没有日志。");
   });
 }
 function saveAppLogs() {

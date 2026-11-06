@@ -7,7 +7,7 @@ public final class TVCore {
  private int playPort=8902;
  public TVCore(String path) { System.load(path); handle=initialise(); if(handle==0||handle==-1)throw new IllegalStateException("TVBus initialise failed"); }
  private void optional(String name,Runnable setter) {
-  try { setter.run(); } catch (Throwable error) { android.util.Log.w("TvbusPlugin","Optional native API unavailable: "+name+" ("+error.getClass().getSimpleName()+")"); }
+  try { setter.run(); } catch (Throwable error) { xiao.bu.tv.AppLog.w("TvbusPlugin","Optional native API unavailable: "+name+" ("+error.getClass().getSimpleName()+")"); }
  }
  public void configure() {
   optional("setServPort",()->setServPort(handle,0));

@@ -39,11 +39,13 @@ function saveWebViewSettings(includeScript) {
     adBlock = document.getElementById("webViewAdBlock"),
     webRtc = document.getElementById("webViewWebRtcEnabled");
   var payload = {
+    webPreferenceScope: "global",
     webSourceEngine: document.getElementById("webSourceEngine").value,
     liteNetworkThreadMultiplier: Number(document.getElementById("liteNetworkThreadMultiplier").value) || 0,
     webViewMinimalMode: document.getElementById("webViewMinimalMode").checked,
-    webViewPageCoverStyle: document.getElementById("webViewPageCoverStyle").value,
-    webViewPageCover: document.getElementById("webViewPageCover").checked,
+    webViewPageCoverStyle: document.getElementById("webViewPageCoverStyle").value === "off"
+      ? (state.settings.webViewPageCoverStyle || "status") : document.getElementById("webViewPageCoverStyle").value,
+    webViewPageCover: document.getElementById("webViewPageCoverStyle").value !== "off",
     webViewResolution: resolution.value,
     webViewPageScale: Number(pageScale.value),
     webViewUserAgent: userAgent.value,
@@ -79,18 +81,16 @@ function renderPageState() {
   liteOption.disabled = !liteSupported;
   liteOption.textContent = liteSupported ? "轻量嗅探" : "轻量嗅探（需浏览器版）";
   document.getElementById("webSourceEngineSummary").textContent = liteSupported
-    ? "下次打开频道生效，必要时自动使用系统内核"
+    ? "全局默认；右侧菜单的域名设置优先"
     : "此安装包仅含系统内核；轻量内核需 ARM32 浏览器版（ntv_bro.apk）";
   document.getElementById("liteNetworkThreadMultiplier").value = String(s.liteNetworkThreadMultiplier || 0);
   updateLiteThreadSetting();
   document.getElementById("webViewMinimalMode").checked = s.webViewMinimalMode === true;
-  document.getElementById("webViewPageCover").checked = s.webViewPageCover === true;
-  document.getElementById("webViewPageCoverStyle").value = s.webViewPageCoverStyle || "status";
+  document.getElementById("webViewPageCoverStyle").value = s.webViewPageCover === true
+    ? (s.webViewPageCoverStyle === "black" ? "black" : "status") : "off";
   document.getElementById("webViewResolution").value = s.webViewResolution || "720p";
   document.getElementById("webViewPageScale").value = String(s.webViewPageScale || 1);
-  document.getElementById("webViewUserAgent").value = s.webViewUserAgent || "windows";
-  var automaticUa = document.getElementById("webViewUserAgent").querySelector('option[value="auto"]');
-  if (automaticUa) automaticUa.disabled = s.webViewAutomaticUserAgentSupported !== true;
+  document.getElementById("webViewUserAgent").value = s.webViewUserAgent === "auto" ? "windows" : s.webViewUserAgent || "windows";
   document.getElementById("webViewBrowserVersion").value =
     s.webViewBrowserVersion || "native";
   document.getElementById("webViewLoadImages").checked = s.webViewLoadImages !== false;

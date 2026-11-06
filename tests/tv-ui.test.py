@@ -61,14 +61,13 @@ with tempfile.TemporaryDirectory() as folder:
               ok(!menu.options(6).getBoolean("openOnClick"));menu.action(6,0);ok(h.key.equals("autoStart")&&h.value.equals(true));
               menu.action(6,1);ok(h.key.equals("reverseKeys")&&h.value.equals(true));
               menu.action(6,2);ok(h.where.equals("styles"));menu.action(6,3);ok(h.where.equals("radio-styles"));menu.action(6,4);ok(h.where.equals("manage"));menu.action(6,5);ok(h.where.equals("cache"));
-              ok(menu.options(6).getStringArray("items").length==9);
-              menu.action(6,8);ok(h.key.equals("rememberChannelUserAgent")&&h.value.equals(true));
-              h.key="unchanged";menu.action(6,9);ok(h.key.equals("unchanged"));
-              h.state.putBoolean("liteBrowserSupported",true);ok(menu.options(6).getStringArray("items").length==10);
+              ok(menu.options(6).getStringArray("items").length==8);
+              h.key="unchanged";h.where=null;menu.action(6,8);menu.action(6,9);ok(h.key.equals("unchanged")&&h.where==null);
+              ok(menu.options(7).getStringArray("items")[3].equals("浏览器 UA"));
+              h.state.putBoolean("liteBrowserSupported",true);ok(menu.options(6).getStringArray("items").length==8);
               ok(menu.options(7).getStringArray("items").length==10&&menu.options(7).getStringArray("items")[6].equals("网页内核"));
-              menu.action(6,9);ok(h.key.equals("rememberChannelWebEngine")&&h.value.equals(true));
-              h.state.putBoolean("rememberChannelWebEngine",true);menu.action(6,9);ok(h.value.equals(false));
-              h.state.putBoolean("liteBrowserSupported",false);ok(menu.options(6).getStringArray("items").length==9);
+              menu.action(7,3);ok(h.where.equals("browser:3"));menu.action(7,6);ok(h.where.equals("browser:6"));
+              h.state.putBoolean("liteBrowserSupported",false);ok(menu.options(6).getStringArray("items").length==8);
               menu.action(6,6);ok(h.key.equals("rememberChannelSource")&&h.value.equals(true));h.state.putBoolean("rememberChannelSource",true);menu.action(6,6);ok(h.value.equals(false));
               menu.action(6,7);ok(h.key.equals("rememberChannelDecode")&&h.value.equals(true));h.state.putBoolean("rememberChannelDecode",true);menu.action(6,7);ok(h.value.equals(false));
               ok(menu.options(6).getStringArray("items")[0].endsWith(" ○"));h.state.putBoolean("boot",true);ok(menu.options(6).getStringArray("items")[0].endsWith(" ●"));
@@ -92,6 +91,7 @@ with tempfile.TemporaryDirectory() as folder:
             }
             browser.action(1,2);ok(bh.last.getBoolean("webViewPageCover")&&bh.last.getString("webViewPageCoverStyle").equals("black"));
             browser.action(1,0);ok(!bh.last.getBoolean("webViewPageCover")&&bh.last.get("webViewPageCoverStyle")==null);
+            ok(browser.options(3).getStringArray("items").length==4);int uaCalls=bh.calls;browser.action(3,4);ok(bh.calls==uaCalls);
             browser.action(3,2);ok(bh.last.getString("webViewUserAgent").equals("ipad"));browser.action(4,3);ok(bh.last.getString("webViewBrowserVersion").equals("138"));
             browser.action(4,4);ok(bh.last.getString("webViewBrowserVersion").equals("155"));
             browser.action(5,0);ok(((Double)bh.last.get("webViewPageScale"))==.5d);

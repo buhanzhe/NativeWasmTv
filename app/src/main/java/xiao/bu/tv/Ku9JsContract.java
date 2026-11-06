@@ -102,7 +102,7 @@ final class Ku9JsContract {
                 input.close();
             }
         } catch (java.io.IOException error) {
-            android.util.Log.e("Ku9JsContract", "Unable to load Ku9 module " + path, error);
+            xiao.bu.tv.AppLog.e("Ku9JsContract", "Unable to load Ku9 module " + path, error);
             source = "throw new Error('酷9内置模块加载失败: " + path + "');";
         }
         if (crypto) {

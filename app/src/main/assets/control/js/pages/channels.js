@@ -1,3 +1,22 @@
+var neighborProbeSaving=false, probeAllPending=false;
+function saveNeighborProbe(){
+  if(neighborProbeSaving)return;
+  var toggle=document.getElementById("neighborProbeEnabled");
+  neighborProbeSaving=true;toggle.disabled=true;
+  api("/api/settings",{neighborProbeEnabled:toggle.checked},function(error){
+    neighborProbeSaving=false;toggle.disabled=false;
+    if(error&&state&&state.settings)toggle.checked=state.settings.neighborProbeEnabled!==false;
+    toast(error?error.message:"已保存",!!error);refresh();
+  });
+}
+function probeAllChannels(){
+  if(probeAllPending||(state&&state.settings&&state.settings.channelProbe&&state.settings.channelProbe.running))return;
+  probeAllPending=true;document.getElementById("probeAllButton").disabled=true;
+  api("/api/settings",{probeAllChannels:true},function(error){
+    probeAllPending=false;document.getElementById("probeAllButton").disabled=false;
+    toast(error?error.message:"已加入探测",!!error);refresh();
+  });
+}
 var recommended = "",
   recommendedSources = [],
   recommendedEpg = "",
@@ -259,7 +278,7 @@ function renderPlaylistSources() {
     location.setAttribute("aria-label","频道源地址");
     location.type = "text";
     location.inputMode = "url";
-    location.placeholder = "粘贴 M3U / M3U8 / TXT 地址";
+    location.placeholder = "频道列表地址或 RTP / UDP / RTSP 频道地址";
     location.value = source.location || "";
     location.disabled = mergeBusy;
     location._source = source;
@@ -552,6 +571,21 @@ function playlistAddressProblem(value, sourceLocation) {
   if (/^webview:\/\//i.test(text) && !sourceLocation) text = text.replace(/^webview:\/\//i, "");
   var absolute = /^(https?|rtmps?|rtmpt|rtsp|rtp|udp|tvbus|sop):\/\/([^/?#]+)/i.exec(text);
   if (absolute) {
+    if (/^(rtp|udp|rtsp)$/i.test(absolute[1])) {
+      // Legacy URL constructors can reject native protocols. Validate the endpoint
+      // without rewriting multicast @ notation, IPv6, ports or query parameters.
+      var authority = absolute[2].substring(absolute[2].lastIndexOf("@") + 1),
+        endpoint = /^(\[[0-9a-f:.%]+\]|[^:@\[\]]+)(?::([0-9]+))?$/i.exec(authority);
+      if (!endpoint) return "直播地址缺少有效的服务器 IP 或端口";
+      if (endpoint[2] && (Number(endpoint[2]) < 1 || Number(endpoint[2]) > 65535))
+        return "直播端口需要在 1–65535 之间";
+      if (/^[0-9.]+$/.test(endpoint[1])) {
+        var octets = endpoint[1].split(".");
+        if (octets.length !== 4 || octets.some(function (part) { return !part || Number(part) > 255; }))
+          return "直播 IP 地址不正确";
+      }
+      return "";
+    }
     if (sourceLocation && !/^https?:/i.test(text)) return "频道列表来源需要 HTTP/HTTPS 地址，或选择本地文件";
     if (typeof URL === "function") {
       try { if (!new URL(text).hostname) return "网址缺少服务器域名或 IP"; }
@@ -600,6 +634,11 @@ function githubProxySourceUrl(value) {
 }
 
 function requestPlaylistText(source, done, browserFirst, sharedDeadline) {
+  if (/^(rtp|udp|rtsp):\/\//i.test(source.location)) {
+    done(null, "#EXTM3U\n#EXTINF:-1," + String(source.name || "直播频道").replace(/[\r\n]/g, " ")
+      + "\n" + source.location + "\n");
+    return;
+  }
   if (browserFirst === true && /^https?:\/\//i.test(source.location)) {
     var phone = new XMLHttpRequest(), phoneDone = false, end = Date.now() + 25000;
     function phoneComplete(error) {
@@ -1239,7 +1278,7 @@ function cleanEpgUrls() {
   for (var i = 0; i < epgUrls.length; i++) {
     var value = String(epgUrls[i] || "").replace(/^\s+|\s+$/g, "");
     if (!value) continue;
-    var problem = playlistAddressProblem(value, true);
+    var problem = /^(rtp|udp|rtsp):\/\//i.test(value) ? "直播流或组播地址不能作为节目单地址" : playlistAddressProblem(value, true);
     if (problem) throw new Error("节目单地址 " + (i + 1) + "：" + problem);
     if (!seen[value]) {
       seen[value] = true;
@@ -1284,6 +1323,15 @@ function saveEpg() {
   });
 }
 function renderPageState() {
+  if(state&&state.settings){
+    var settings=state.settings,probe=settings.channelProbe||{};
+    if(!neighborProbeSaving)document.getElementById("neighborProbeEnabled").checked=settings.neighborProbeEnabled!==false;
+    document.getElementById("probeAllButton").disabled=probeAllPending||!!probe.running;
+    document.getElementById("channelProbeStatus").textContent=probe.running?
+      ((probe.completed||0)+" / "+(probe.total||0)):
+      (probe.bad?"失效 "+probe.bad+" 项":"");
+  }
+
   if (mergeBusy || playlistFileBusy) return;
   saveChannelDraft();
   var draft = readChannelDraft();

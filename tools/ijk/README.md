@@ -1,5 +1,28 @@
 # nTv IJK / Dolby changes
 
+## App-owned log files
+
+`apply-app-log-patches.cjs` mirrors SDL/IJK and FFmpeg `ALOG`/`VLOG` output into
+`AppLog.appendNative` while preserving logcat output. Application startup binds
+the JNI sink; messages enter the same bounded asynchronous queue as Java app
+logs. Only INFO and above are mirrored; native INFO and warning/error traffic
+have separate budgets of 100 records/second each, before JNI allocation. Dropped
+records are counted in the web UI. Native-only threads attach once per lifetime.
+Java producers enqueue at most 256 records / 64K characters without taking the
+file lock. A low-priority worker formats timestamps (cached per second) and
+writes buffered batches every 250 ms while active; it blocks without a timer
+when idle. Decoder libraries load only on first IJK use, not for log recording.
+UTF-8 bytes avoid JNI modified-UTF-8 assumptions. The app stores two rotating
+files under its private `files/logs` directory; `/api/logs` reads these files
+without invoking logcat or requiring log-reading/storage permissions.
+Rebuild and copy **both libijksdl.so and libijkplayer.so for every ABI** after
+applying this overlay. FFmpeg itself is unchanged; its existing callback routes
+through the player log macros. `tests/app-log-reader.test.py` checks persistence,
+rotation, filters and producer progress while the disk lock is held.
+`AppLogInstrumentation` verifies actual JNI output, HTTP download, caller timing,
+idle CPU and playback-clock progression under 100 log calls/second. Its local
+12-second MP3 fixture must be pushed to `/data/local/tmp/ntv-app-log-perf.mp3`.
+
 ## Source frame rate counting
 
 The source packet instrumentation is canonicalised by

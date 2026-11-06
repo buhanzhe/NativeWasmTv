@@ -4,7 +4,7 @@ import android.annotation.TargetApi;
 import android.graphics.Bitmap;
 import android.net.http.SslError;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.webkit.RenderProcessGoneDetail;
@@ -42,7 +42,7 @@ final class WebViewRecovery {
         @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
             if (gone) return true;
             gone = true;
-            Log.e("WebViewRecovery", "Renderer gone: crashed=" + detail.didCrash()
+            AppLog.e("WebViewRecovery", "Renderer gone: crashed=" + detail.didCrash()
                     + " priority=" + detail.rendererPriorityAtExit()
                     + " owner=" + delegate.getClass().getName());
             try {

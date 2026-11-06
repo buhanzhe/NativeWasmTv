@@ -1,18 +1,33 @@
 package xiao.bu.tv;
 
 import android.content.Context;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URI;
 
 /** Provider decisions apply to the document, never to a CDN URL substring. */
 final class WebTvPlaybackPolicy {
+    static boolean youtubePlayer(String url) {
+        try {
+            if (url != null && url.startsWith("webview://")) url = url.substring(10);
+            URI page = new URI(url);
+            if (!"http".equalsIgnoreCase(page.getScheme()) && !"https".equalsIgnoreCase(page.getScheme())) return false;
+            String host = page.getHost(), path = page.getPath();
+            if (host == null || path == null) return false;
+            host = host.toLowerCase(java.util.Locale.US);
+            if (host.equals("youtu.be")) return path.matches("/[^/]+/?");
+            return (host.equals("youtube.com") || host.endsWith(".youtube.com")
+                    || host.equals("youtube-nocookie.com") || host.endsWith(".youtube-nocookie.com"))
+                    && (path.equals("/watch") || path.matches("/(embed|live|shorts)/[^/]+/?"));
+        } catch (Exception ignored) { return false; }
+    }
+
     static boolean webPlayerOnly(String url) {
         if (url == null) return false;
         try {
             String host = new URI(url).getHost();
-            return jiangsu4kOriginalPlayer(url) || host != null && (host.equalsIgnoreCase("gdtv.cn")
+            return youtubePlayer(url) || jiangsu4kOriginalPlayer(url) || host != null && (host.equalsIgnoreCase("gdtv.cn")
                     || host.toLowerCase(java.util.Locale.US).endsWith(".gdtv.cn"));
         } catch (Exception ignored) { return false; }
     }
@@ -37,6 +52,7 @@ final class WebTvPlaybackPolicy {
     }
 
     static boolean requiresWebView(String url, boolean autoPlay, boolean autoPlaySniffed) {
+        if (youtubePlayer(url)) return true;
         try {
             URI page = new URI(url);
             String host = page.getHost(), path = page.getPath();
@@ -60,6 +76,7 @@ final class WebTvPlaybackPolicy {
     }
 
     static boolean autoTakeoverAllowed(String pageUrl, String channelUrl) {
+        if (youtubePlayer(pageUrl) || youtubePlayer(channelUrl)) return false;
         // MGTV requests a default channel before its in-page channel selection
         // completes. Keep discovered resources available for manual playback,
         // while its original SDK selects and plays the requested camera.
@@ -118,7 +135,7 @@ final class WebTvPlaybackPolicy {
                 byte[] buffer = new byte[4096]; int count;
                 while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
                 source = output.toString("UTF-8");
-            } catch (Exception error) { Log.w("WebTvPlayback", "Unable to load TV helper", error); source = ""; }
+            } catch (Exception error) { AppLog.w("WebTvPlayback", "Unable to load TV helper", error); source = ""; }
         }
         return "window.__ntvTvAutoPlay=" + autoPlay + ";\n" + source;
     }

@@ -10,7 +10,7 @@ import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.os.Build;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.nio.ByteBuffer;
 
 /** Compressed AudioTrack sink called by the IJK audio thread, never by the UI thread. */
@@ -55,11 +55,11 @@ public final class DolbyAudioOutput {
                 output.release();
                 return null;
             }
-            Log.i(TAG, "Passthrough encoding=" + encoding + " rate=" + sampleRate + " channels=" + channels);
+            AppLog.i(TAG, "Passthrough encoding=" + encoding + " rate=" + sampleRate + " channels=" + channels);
             return new DolbyAudioOutput(output, encoding, sampleRate, channels);
         } catch (RuntimeException error) {
             if (output != null) output.release();
-            Log.w(TAG, "Passthrough unavailable; use FFmpeg PCM", error);
+            AppLog.w(TAG, "Passthrough unavailable; use FFmpeg PCM", error);
             return null;
         }
     }
@@ -124,7 +124,7 @@ public final class DolbyAudioOutput {
             if (packet == null) return -1;
             return track.write(packet, length, AudioTrack.WRITE_NON_BLOCKING);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Encoded write failed; use FFmpeg PCM", error);
+            AppLog.w(TAG, "Encoded write failed; use FFmpeg PCM", error);
             return -1;
         }
     }
@@ -158,7 +158,7 @@ public final class DolbyAudioOutput {
             lastHead = head;
             return ((wraps << 32) + head) * 1000000L / sampleRate;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Encoded output lost; use FFmpeg PCM", error);
+            AppLog.w(TAG, "Encoded output lost; use FFmpeg PCM", error);
             return -1;
         }
     }

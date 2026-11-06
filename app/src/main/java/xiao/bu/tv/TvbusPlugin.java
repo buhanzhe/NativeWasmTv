@@ -4,7 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import com.tvbus.engine.Listener;
 import com.tvbus.engine.TVListener;
 import dalvik.system.DexClassLoader;
@@ -83,7 +83,7 @@ final class TvbusPlugin implements Closeable {
             try {
                 final Profile profile = new Profile(provider.load(), context);
                 final TvbusAddress.Route route = TvbusAddress.route(url, profile.core.optString("broker_url", ""));
-                Log.i(TAG, "Core selected: " + (profile.key.isEmpty() ? "generic SDK fallback" : "provider descriptor " + profile.key.substring(0, 12)));
+                AppLog.i(TAG, "Core selected: " + (profile.key.isEmpty() ? "generic SDK fallback" : "provider descriptor " + profile.key.substring(0, 12)));
                 File file;
                 try { file = cached(profile); } catch (Exception invalid) { file = null; }
                 if (file == null) {
@@ -93,7 +93,7 @@ final class TvbusPlugin implements Closeable {
                 if (closed || token != generation.get()) return;
                 try { activate(file, profile); }
                 catch (Throwable failure) {
-                    Log.w(TAG, "Cached engine failed, retry upstream", failure);
+                    AppLog.w(TAG, "Cached engine failed, retry upstream", failure);
                     post(token, () -> callback.status("TVBus 插件加载失败，正在重新下载…"));
                     activate(downloadWithRetry(profile), profile);
                 }
@@ -109,7 +109,7 @@ final class TvbusPlugin implements Closeable {
                 active.ensureStarted();
                 if (closed || token != generation.get()) return;
                 active.call("play", String.class, active.broker.address());
-                Log.i(TAG, "Channel started token=" + token + " plugin=" + active.file.getName());
+                AppLog.i(TAG, "Channel started token=" + token + " plugin=" + active.file.getName());
                 main.postDelayed(() -> {
                     if (closed || generation.get() != token) return;
                     if (!request.completed.get()) {
@@ -119,7 +119,7 @@ final class TvbusPlugin implements Closeable {
                 }, 45000);
                 updater.execute(() -> checkInBackground(profile));
             } catch (Throwable error) {
-                Log.e(TAG, "TVBus open failed", error);
+                AppLog.e(TAG, "TVBus open failed", error);
                 if (engine != null && engine.broker != null) { engine.broker.close(); engine.broker = null; }
                 post(token, () -> callback.failed(error instanceof IOException ? error.getMessage() : "TVBus 插件安装或加载失败，下次打开频道将重试"));
             }
@@ -171,16 +171,16 @@ final class TvbusPlugin implements Closeable {
             // FongMi binds the native listener once, before setters and init/run.
             call("listen", Listener.class, new TVListener() {
                 public void onInited(String result) {
-                    Log.i(TAG, "onInited " + result);
+                    AppLog.i(TAG, "onInited " + result);
                     try {
                         if (new JSONObject(result).optInt("tvcore", -1) == 0) initialized.countDown();
                     } catch (Exception ignored) { }
                 }
-                public void onStart(String result) { Log.i(TAG, "onStart " + result); }
+                public void onStart(String result) { AppLog.i(TAG, "onStart " + result); }
                 public void onInfo(String result) { }
-                public void onQuit(String result) { Log.i(TAG, "onQuit " + result); }
+                public void onQuit(String result) { AppLog.i(TAG, "onQuit " + result); }
                 public void onPrepared(String result) {
-                    Log.i(TAG, "onPrepared " + result);
+                    AppLog.i(TAG, "onPrepared " + result);
                     Request active = request;
                     if (active == null || generation.get() != active.token) return;
                     try {
@@ -195,7 +195,7 @@ final class TvbusPlugin implements Closeable {
                     } catch (Exception error) { fail(active, "TVBus 返回的 HLS 地址无效"); }
                 }
                 public void onStop(String result) {
-                    Log.i(TAG, "onStop " + result);
+                    AppLog.i(TAG, "onStop " + result);
                     Request active = request;
                     if (active == null || generation.get() != active.token) return;
                     try {
@@ -214,13 +214,13 @@ final class TvbusPlugin implements Closeable {
                     int result = (Integer) call("initialize", Context.class, context);
                     // FongMi runs the event loop regardless of init's return value;
                     // some SDK versions complete initialization asynchronously.
-                    Log.i(TAG, "Engine init returned " + result + " (mode=1, serv=0) " + file.getName());
+                    AppLog.i(TAG, "Engine init returned " + result + " (mode=1, serv=0) " + file.getName());
                     if (profile.core.optBoolean("waitForInit", false) && result != 0) throw new IOException("TVBus init=" + result);
                     call("loop");
                 } catch (Throwable error) {
                     startupError = error;
                     initialized.countDown();
-                    Log.e(TAG, "Engine loop ended", error);
+                    AppLog.e(TAG, "Engine loop ended", error);
                     Request active = request;
                     if (active != null) fail(active, "TVBus 引擎运行失败，请重试");
                 }
@@ -310,7 +310,7 @@ final class TvbusPlugin implements Closeable {
                 boolean changed;
                 try {
                     int status = connection.getResponseCode();
-                    if (status == 304) { Log.i(TAG, "Plugin unchanged (304), no download"); return; }
+                    if (status == 304) { AppLog.i(TAG, "Plugin unchanged (304), no download"); return; }
                     if (status != 200) throw new IOException("TVBus HEAD HTTP " + status);
                     String freshEtag = header(connection, "ETag"), freshModified = header(connection, "Last-Modified");
                     int length = connection.getContentLength();
@@ -322,10 +322,10 @@ final class TvbusPlugin implements Closeable {
                     if (bundledBaseline && !changed) prefs(profile).edit().putString("url",connection.getURL().toString())
                             .putString("etag",freshEtag).putString("modified",freshModified).putInt("length",length).apply();
                 } finally { connection.disconnect(); }
-                if (changed) { downloadWithRetry(profile); Log.i(TAG, "New plugin staged; next channel will use it"); }
-                else Log.i(TAG, "Plugin metadata unchanged, no download");
+                if (changed) { downloadWithRetry(profile); AppLog.i(TAG, "New plugin staged; next channel will use it"); }
+                else AppLog.i(TAG, "Plugin metadata unchanged, no download");
             }
-        } catch (Exception error) { Log.w(TAG, "Silent update skipped; keep installed engine", error); }
+        } catch (Exception error) { AppLog.w(TAG, "Silent update skipped; keep installed engine", error); }
     }
     static String preparedUrl(JSONObject result) {
         return preparedUrl(result, false);
@@ -368,7 +368,7 @@ final class TvbusPlugin implements Closeable {
                             .putString("modified", header(connection, "Last-Modified"))
                             .putString("url", connection.getURL().toString().replaceAll("([?&])retry=[0-9]+$", ""))
                             .putInt("length", bytes.length).apply();
-                    Log.i(TAG, "Plugin downloaded bytes=" + bytes.length + " sha256=" + digest);
+                    AppLog.i(TAG, "Plugin downloaded bytes=" + bytes.length + " sha256=" + digest);
                     return target;
                 } catch (Exception error) { failure = error; }
                 finally { connection.disconnect(); }

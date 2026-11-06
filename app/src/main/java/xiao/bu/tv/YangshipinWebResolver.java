@@ -8,7 +8,7 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -167,7 +167,7 @@ final class YangshipinWebResolver {
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler,
                     SslError error) {
-                Log.w(TAG, "Ignoring WebView SSL error: " + error);
+                AppLog.w(TAG, "Ignoring WebView SSL error: " + error);
                 handler.proceed();
             }
 
@@ -185,7 +185,7 @@ final class YangshipinWebResolver {
                         return new WebResourceResponse("text/html", "UTF-8",
                                 new ByteArrayInputStream(pending.apiHtml.getBytes("UTF-8")));
                     } catch (UnsupportedEncodingException error) {
-                        Log.e(TAG, "Unable to serve Yangshipin API page", error);
+                        AppLog.e(TAG, "Unable to serve Yangshipin API page", error);
                     }
                 }
                 if (pending != null && pending.bootstrapScript != null && url != null
@@ -258,7 +258,7 @@ final class YangshipinWebResolver {
                     apiCache.remove(cacheKey);
                     String key = "url_" + cacheKey;
                     resolverPrefs.edit().remove(key).remove(key + "_at").apply();
-                    Log.i(TAG, "Discarding cached Yangshipin URL for " + channel.name);
+                    AppLog.i(TAG, "Discarding cached Yangshipin URL for " + channel.name);
                 }
                 CachedUrl cached = apiCache.get(cacheKey);
                 if (cached == null) {
@@ -272,7 +272,7 @@ final class YangshipinWebResolver {
                 long cacheAge = cached == null ? Long.MAX_VALUE
                         : System.currentTimeMillis() - cached.createdAt;
                 if (cached != null && cacheAge >= 0L && cacheAge < API_CACHE_MS) {
-                    Log.i(TAG, "Using cached Yangshipin " + pendingRequest.definition
+                    AppLog.i(TAG, "Using cached Yangshipin " + pendingRequest.definition
                             + " URL for " + channel.name);
                     completeApi(pendingRequest, cached.url);
                     return;
@@ -288,7 +288,7 @@ final class YangshipinWebResolver {
 
     private void startNativeApi(final Pending pending) {
         final long clockOffset = serverClockOffsetMs;
-        Log.i(TAG, "Resolving Yangshipin " + pending.definition + " API without WebView for " + pending.channel.name);
+        AppLog.i(TAG, "Resolving Yangshipin " + pending.definition + " API without WebView for " + pending.channel.name);
         pending.nativeWork = nativeWorkers.submit(() -> {
             try {
                 YangshipinNativeResolver.Result result = new YangshipinNativeResolver().resolve(
@@ -304,7 +304,7 @@ final class YangshipinWebResolver {
                 });
             } catch (Exception | LinkageError error) {
                 if (pendingRequest != pending || Thread.currentThread().isInterrupted()) return;
-                Log.w(TAG, "Native Yangshipin API failed; trying browser compatibility path: " + error.getMessage());
+                AppLog.w(TAG, "Native Yangshipin API failed; trying browser compatibility path: " + error.getMessage());
                 activity.runOnUiThread(() -> {
                     if (pendingRequest != pending) return;
                     if (android.os.SystemClock.elapsedRealtime() >= pending.deadlineAt) fail(pending, "央视频解析超时");
@@ -332,13 +332,13 @@ final class YangshipinWebResolver {
             pendingRequest.clockSynced = clockKnown;
             pendingRequest.bootstrapScript = buildOfficialBootstrapScript(payload);
             installApiCookies(payload);
-            Log.i(TAG, "Resolving Yangshipin " + pendingRequest.definition
+            AppLog.i(TAG, "Resolving Yangshipin " + pendingRequest.definition
                     + " API for " + channel.name);
             webView.onResume();
             webView.loadUrl("https://www.yangshipin.cn/");
             webView.postDelayed(timeout, Math.max(1L, pending.deadlineAt - android.os.SystemClock.elapsedRealtime()));
         } catch (Exception error) {
-            Log.e(TAG, "Unable to build Yangshipin API request", error);
+            AppLog.e(TAG, "Unable to build Yangshipin API request", error);
             fail(pendingRequest, error instanceof WebViewAvailability.UnavailableException
                     ? WebViewAvailability.MESSAGE : "央视频请求生成失败");
         }
@@ -404,7 +404,7 @@ final class YangshipinWebResolver {
                 pending.apiHtml = buildApiPage(pending.channel, corrected);
                 pending.bootstrapScript = buildOfficialBootstrapScript(corrected);
                 installApiCookies(corrected);
-                Log.i(TAG, "Yangshipin clock calibrated offsetMs=" + serverClockOffsetMs
+                AppLog.i(TAG, "Yangshipin clock calibrated offsetMs=" + serverClockOffsetMs
                         + "; refreshing auth identity");
                 webView.loadUrl("about:blank");
                 webView.postDelayed(new Runnable() {
@@ -421,7 +421,7 @@ final class YangshipinWebResolver {
                     pending.apiPayload.guid, pending.apiPayload.liveRandom, serverSeconds,
                     pending.definition);
             String sdkInput = YangshipinApiPayload.createSdkInput(liveBody);
-            Log.i(TAG, "Yangshipin live request serverSeconds=" + serverSeconds
+            AppLog.i(TAG, "Yangshipin live request serverSeconds=" + serverSeconds
                     + " guid=" + pending.apiPayload.guid
                     + " requestId=" + pending.apiPayload.requestId);
             String script = buildLiveRequestScript(pending, token, serverSeconds,
@@ -432,7 +432,7 @@ final class YangshipinWebResolver {
                 webView.loadUrl("javascript:" + script);
             }
         } catch (Exception error) {
-            Log.e(TAG, "Unable to continue Yangshipin server-time request", error);
+            AppLog.e(TAG, "Unable to continue Yangshipin server-time request", error);
             fail(pending, "央视频服务器时间处理失败");
         }
         return true;
@@ -496,11 +496,11 @@ final class YangshipinWebResolver {
                         response = new JSONObject(result);
                     }
                 }
-                Log.i(TAG, "Legacy native API path=" + path + " code=" + response.optInt("code")
+                AppLog.i(TAG, "Legacy native API path=" + path + " code=" + response.optInt("code")
                         + " error=" + response.optString("error"));
                 return pendingRequest == work ? result : "{\"code\":0,\"error\":\"request cancelled\"}";
             } catch (Exception error) {
-                Log.w(TAG, "Legacy native API request failed", error);
+                AppLog.w(TAG, "Legacy native API request failed", error);
                 return "{\"code\":0}";
             }
         }
@@ -509,7 +509,7 @@ final class YangshipinWebResolver {
             try {
                 return NativeYspSigner.tokenRnd(guid, timestampMs);
             } catch (Throwable error) {
-                Log.e(TAG, "Unable to create Yangshipin token rnd", error);
+                AppLog.e(TAG, "Unable to create Yangshipin token rnd", error);
                 return "";
             }
         }
@@ -519,7 +519,7 @@ final class YangshipinWebResolver {
             try {
                 return NativeYspSigner.signature(guid, token, input);
             } catch (Throwable error) {
-                Log.e(TAG, "Unable to create Yangshipin SDK signature", error);
+                AppLog.e(TAG, "Unable to create Yangshipin SDK signature", error);
                 return "";
             }
         }
@@ -582,7 +582,7 @@ final class YangshipinWebResolver {
             String extended = data == null ? "" : data.optString("extended_param", "");
             if (root.optInt("code", -1) != 0 || url.length() == 0
                     || !url.contains(".m3u8") || !url.contains("ysp.cctv.cn")) {
-                Log.w(TAG, "Yangshipin live response code=" + root.optInt("code", -1)
+                AppLog.w(TAG, "Yangshipin live response code=" + root.optInt("code", -1)
                         + " msg=" + root.optString("msg", "")
                         + " urlLength=" + url.length());
                 fail(pending, "央视频接口未返回可用线路");
@@ -594,7 +594,7 @@ final class YangshipinWebResolver {
             cacheApiUrl(pending, url);
             completeApi(pending, url);
         } catch (Exception error) {
-            Log.e(TAG, "Unable to parse Yangshipin API response", error);
+            AppLog.e(TAG, "Unable to parse Yangshipin API response", error);
             fail(pending, "央视频接口数据异常");
         }
         return true;
@@ -603,7 +603,7 @@ final class YangshipinWebResolver {
     private void startOfficialBootstrap(Pending pending) {
         pending.bootstrapAttempted = true;
         pending.apiHtml = null;
-        Log.i(TAG, "Starting Yangshipin official auth bootstrap for " + pending.channel.name);
+        AppLog.i(TAG, "Starting Yangshipin official auth bootstrap for " + pending.channel.name);
         webView.loadUrl("https://www.yangshipin.cn/tv/home?pid="
                 + Uri.encode(pending.channel.yangshipinPid));
     }
@@ -620,7 +620,7 @@ final class YangshipinWebResolver {
         pending.cmgInitTimeMs = now;
         pending.cmgUpdateBaseTimeMs = now;
         pending.cmgUpdateTrace = "";
-        Log.i(TAG, "Resolved Yangshipin " + pending.definition + " API for "
+        AppLog.i(TAG, "Resolved Yangshipin " + pending.definition + " API for "
                 + pending.channel.name
                 + " in native-light mode");
         complete(pending);
@@ -767,7 +767,7 @@ final class YangshipinWebResolver {
         pending.cmgInitTimeMs = initTimeMs;
         pending.cmgUpdateBaseTimeMs = warmupBaseTimeMs;
         pending.cmgUpdateTrace = warmupTrace;
-        Log.i(TAG, "Resolved Yangshipin CMG tag for " + pending.channel.name + ": "
+        AppLog.i(TAG, "Resolved Yangshipin CMG tag for " + pending.channel.name + ": "
                 + tag + " initialTag=" + initialUpdateTag + " updateTag=" + updateTag
                 + " warmupCount=" + warmupCount + " initTime=" + initTimeMs
                 + " initResult=" + pending.cmgInitResult
@@ -847,7 +847,7 @@ final class YangshipinWebResolver {
                 if (pendingRequest != pending) {
                     return;
                 }
-                Log.i(TAG, "Resolved Yangshipin HLS for " + pending.channel.name + ": "
+                AppLog.i(TAG, "Resolved Yangshipin HLS for " + pending.channel.name + ": "
                         + pending.resolvedUrl + " cmgTag=" + pending.cmgTag
                         + " initialTag=" + pending.cmgInitialUpdateTag
                         + " updateTag=" + pending.cmgUpdateTag);
@@ -868,7 +868,7 @@ final class YangshipinWebResolver {
                 if (pendingRequest != pending) {
                     return;
                 }
-                Log.w(TAG, "Yangshipin resolve failed for " + pending.channel.name + ": " + reason);
+                AppLog.w(TAG, "Yangshipin resolve failed for " + pending.channel.name + ": " + reason);
                 clearPending(true);
                 pending.callback.onFailed(pending.requestId, reason);
             }
@@ -921,7 +921,7 @@ final class YangshipinWebResolver {
             webView.onResume();
             webView.evaluateJavascript(pluginScript("keepalive.js", null), null);
         } catch (Throwable error) {
-            Log.w(TAG, "Unable to keep Yangshipin trace playback alive", error);
+            AppLog.w(TAG, "Unable to keep Yangshipin trace playback alive", error);
         }
         webView.postDelayed(traceKeepAlive, 2500L);
     }
@@ -931,7 +931,7 @@ final class YangshipinWebResolver {
         try {
             webView.evaluateJavascript(pluginScript("pause.js", null), null);
         } catch (Throwable error) {
-            Log.w(TAG, "Unable to pause Yangshipin WebView media", error);
+            AppLog.w(TAG, "Unable to pause Yangshipin WebView media", error);
         }
     }
 
@@ -1001,7 +1001,7 @@ final class YangshipinWebResolver {
             return new WebResourceResponse("application/javascript", "UTF-8",
                     new ByteArrayInputStream(patched.getBytes("UTF-8")));
         } catch (IOException error) {
-            Log.w(TAG, "Unable to patch hls.cmg.js", error);
+            AppLog.w(TAG, "Unable to patch hls.cmg.js", error);
             return null;
         } finally {
             if (connection != null && !responseConsumed) {
@@ -1029,7 +1029,7 @@ final class YangshipinWebResolver {
             return new WebResourceResponse("text/html", "UTF-8",
                     new ByteArrayInputStream(patched.getBytes("UTF-8")));
         } catch (IOException error) {
-            Log.w(TAG, "Unable to patch Yangshipin bootstrap page", error);
+            AppLog.w(TAG, "Unable to patch Yangshipin bootstrap page", error);
             return null;
         } finally {
             if (connection != null && !responseConsumed) {

@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -82,7 +82,7 @@ final class ChannelDecodeHints {
             try(Cursor c=store.getReadableDatabase().query("hints",COLUMNS,null,null,null,null,"updated DESC","512")) {
                 while(c.moveToNext()) {Hint hint=read(c);if(hint.valid()){keys.add(c.getString(0));hints.add(hint);}}
                 for(int n=keys.size()-1;n>=0;n--)cache(keys.get(n),hints.get(n));
-            } catch(RuntimeException e) { Log.w("ChannelDecodeHints","Unable to load advisory metadata",e); }
+            } catch(RuntimeException e) { AppLog.w("ChannelDecodeHints","Unable to load advisory metadata",e); }
         });
     }
     static String key(String url) { return MediaTrackSelection.urlKey("decode_hint",url); }
@@ -116,7 +116,7 @@ final class ChannelDecodeHints {
         try(Cursor c=store.getReadableDatabase().query("hints",COLUMNS,"source_key=?",new String[]{key},null,null,null)) {
             if(c.moveToFirst()) {hint=read(c);if(hint.valid()){cache(key,hint);return hint;}}
             markMissing(key);
-        }catch(RuntimeException e){markMissing(key);Log.w("ChannelDecodeHints","Unable to read advisory metadata",e);}
+        }catch(RuntimeException e){markMissing(key);AppLog.w("ChannelDecodeHints","Unable to read advisory metadata",e);}
         return null;
     }
     void remember(String url,int w,int h,String codec,VideoStreamDescription description,float fps) {
@@ -137,7 +137,7 @@ final class ChannelDecodeHints {
             values.put("codec",hint.codec);values.put("depth",hint.depth);values.put("scan",hint.scan);values.put("fps",hint.fps);
             values.put("origin",hint.origin);values.put("updated",hint.updated);
             store.getWritableDatabase().insertWithOnConflict("hints",null,values,SQLiteDatabase.CONFLICT_REPLACE);
-        }catch(RuntimeException e){Log.w("ChannelDecodeHints","Unable to save advisory metadata",e);}
+        }catch(RuntimeException e){AppLog.w("ChannelDecodeHints","Unable to save advisory metadata",e);}
     }
     void invalidate(String url) {
         if(url==null || closed)return;
@@ -149,7 +149,7 @@ final class ChannelDecodeHints {
         worker.post(() -> {
             synchronized(memory){memory.remove(key);}markMissing(key);
             try {store.getWritableDatabase().delete("hints","source_key=?",new String[]{key});}
-            catch(RuntimeException e){Log.w("ChannelDecodeHints","Unable to invalidate hint",e);}
+            catch(RuntimeException e){AppLog.w("ChannelDecodeHints","Unable to invalidate hint",e);}
         });
     }
     private void defer(String key,long delay) {
@@ -196,7 +196,7 @@ final class ChannelDecodeHints {
                 acceptProbe(key,hint,startedAt,"ready".equals(result.status));
                 if(expected!=generation.get())return;
                 activeKey=null;
-                Log.i("ChannelDecodeHints","Preparse neighbor "+(index+1)+"/"+sources.size()+" status="+result.status
+                AppLog.i("ChannelDecodeHints","Preparse neighbor "+(index+1)+"/"+sources.size()+" status="+result.status
                         +" scan="+result.videoDescription.scanType+" fps="+result.frameRate);
                 worker.postDelayed(() -> next(sources,index+1,expected),1000L);
             }));

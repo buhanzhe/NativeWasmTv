@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Process;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -42,7 +42,7 @@ final class CastDeviceDiscovery implements Closeable {
             }, "cast-device-discovery");
             responderThread.start();
         } catch (IOException error) {
-            Log.w(TAG, "Unable to start LAN discovery responder", error);
+            AppLog.w(TAG, "Unable to start LAN discovery responder", error);
         }
     }
 
@@ -62,10 +62,10 @@ final class CastDeviceDiscovery implements Closeable {
                 socket.send(new DatagramPacket(response, response.length,
                         request.getAddress(), request.getPort()));
             } catch (SocketException closed) {
-                if (running) Log.w(TAG, "LAN discovery socket stopped", closed);
+                if (running) AppLog.w(TAG, "LAN discovery socket stopped", closed);
                 break;
             } catch (IOException error) {
-                if (running) Log.w(TAG, "LAN discovery response failed", error);
+                if (running) AppLog.w(TAG, "LAN discovery response failed", error);
             }
         }
     }

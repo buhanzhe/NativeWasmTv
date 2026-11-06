@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.app.Activity;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -84,16 +84,16 @@ final class Ku9ScriptLoader {
             }
             if (!temporary.renameTo(target)) {
                 if (replaced && !backup.renameTo(target)) {
-                    Log.e(TAG, "Unable to restore user script backup " + backup);
+                    AppLog.e(TAG, "Unable to restore user script backup " + backup);
                 }
                 throw new IOException("无法保存 JS 文件");
             }
             if (backup.exists() && !backup.delete()) {
-                Log.w(TAG, "Unable to remove user script backup " + backup);
+                AppLog.w(TAG, "Unable to remove user script backup " + backup);
             }
         } finally {
             if (temporary.exists() && !temporary.delete()) {
-                Log.w(TAG, "Unable to remove temporary user script " + temporary);
+                AppLog.w(TAG, "Unable to remove temporary user script " + temporary);
             }
         }
     }
@@ -173,10 +173,10 @@ final class Ku9ScriptLoader {
         long age = System.currentTimeMillis() - file.lastModified();
         if (file.isFile() && age >= 0 && age < ONLINE_CACHE_MS) {
             try {
-                Log.i(TAG,"Online script cache hit ageMs="+age);
+                AppLog.i(TAG,"Online script cache hit ageMs="+age);
                 return readFile(file);
             } catch (IOException error) {
-                Log.w(TAG, "Unable to read script cache " + file, error);
+                AppLog.w(TAG, "Unable to read script cache " + file, error);
             }
         }
         try {
@@ -186,11 +186,11 @@ final class Ku9ScriptLoader {
         } catch (IOException networkError) {
             if (file.isFile()) {
                 try {
-                    Log.w(TAG, "Refresh failed; using stale script cache " + url,
+                    AppLog.w(TAG, "Refresh failed; using stale script cache " + url,
                             networkError);
                     return readFile(file);
                 } catch (IOException cacheError) {
-                    Log.w(TAG, "Unable to read stale script cache " + file, cacheError);
+                    AppLog.w(TAG, "Unable to read stale script cache " + file, cacheError);
                 }
             }
             throw networkError;
@@ -215,7 +215,7 @@ final class Ku9ScriptLoader {
         try {
             return activity.getExternalFilesDir(null);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to resolve external user script directory", error);
+            AppLog.w(TAG, "Unable to resolve external user script directory", error);
             return null;
         }
     }
@@ -225,10 +225,10 @@ final class Ku9ScriptLoader {
             return null;
         }
         if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
-            Log.w(TAG, "Unable to create user script directory " + directory);
+            AppLog.w(TAG, "Unable to create user script directory " + directory);
             return null;
         }
-        Log.i(TAG, "User script directory: " + directory.getAbsolutePath());
+        AppLog.i(TAG, "User script directory: " + directory.getAbsolutePath());
         return directory;
     }
 
@@ -299,7 +299,7 @@ final class Ku9ScriptLoader {
                 }
             }
         } catch (IOException error) {
-            Log.w(TAG, "Unable to write script cache " + file, error);
+            AppLog.w(TAG, "Unable to write script cache " + file, error);
         }
     }
 

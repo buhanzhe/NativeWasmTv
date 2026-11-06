@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteStatement;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,7 +79,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
         try {
             database = getReadableDatabase();
         } catch (SQLiteException error) {
-            Log.w(TAG, "Unable to open channel catalog", error);
+            AppLog.w(TAG, "Unable to open channel catalog", error);
             return null;
         }
         if (!isComplete(database)) {
@@ -145,13 +145,13 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
                     database.execSQL("INSERT OR REPLACE INTO catalog_meta(name,value) VALUES(?,?)",
                             new Object[]{ChannelNameWidth.META, Float.toString(width)});
                 } catch (SQLiteException error) {
-                    Log.w(TAG, "Unable to cache channel name width", error);
+                    AppLog.w(TAG, "Unable to cache channel name width", error);
                 }
             }
             ChannelNameWidth.restore(width);
             return loaded;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to read channel catalog", error);
+            AppLog.w(TAG, "Unable to read channel catalog", error);
             return null;
         } finally {
             if (cursor != null) {
@@ -184,7 +184,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
         try {
             database = getWritableDatabase();
         } catch (SQLiteException error) {
-            Log.w(TAG, "Unable to open writable channel catalog", error);
+            AppLog.w(TAG, "Unable to open writable channel catalog", error);
             return false;
         }
         SQLiteStatement insertGroup = null;
@@ -267,7 +267,7 @@ final class ChannelCatalogStore extends SQLiteOpenHelper {
             database.setTransactionSuccessful();
             return true;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to replace channel catalog", error);
+            AppLog.w(TAG, "Unable to replace channel catalog", error);
             return false;
         } finally {
             if (insertGroup != null) {

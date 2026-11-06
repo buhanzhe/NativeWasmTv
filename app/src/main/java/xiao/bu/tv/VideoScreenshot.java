@@ -251,7 +251,7 @@ final class VideoScreenshot {
                 bitmap.recycle(); bitmap = small;
             }
             byte[] smallImage = encode(bitmap, true);
-            android.util.Log.i("VideoScreenshot", "legacy preview=" + preview + " native=" + nativeFrame
+            xiao.bu.tv.AppLog.i("VideoScreenshot", "legacy preview=" + preview + " native=" + nativeFrame
                     + " writeMs=" + (written - begin)
                     + " muxMs=" + (muxed - written) + " decodeMs=" + (decoded - muxed)
                     + " encodeMs=" + (SystemClock.elapsedRealtime() - decoded));

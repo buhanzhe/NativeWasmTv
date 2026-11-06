@@ -246,10 +246,15 @@ tools/
 !/tests/channel-preparation-gate.test.py
 
 !/tests/web-tv-playback-policy.test.py
+!/tests/web-domain-settings.test.py
+!/tests/channel-info-input.test.py
 !/tests/playback-startup-timeout.test.py
 !/app/src/androidTest/java/xiao/bu/tv/BrowserKernelInstrumentation.java
 
 # Private lightweight browser implementation stays local; publish only prebuilt .so files.
+!/tests/app-log-reader.test.py
+!/tools/ijk/ntv_app_log.c
+!/tools/ijk/apply-app-log-patches.cjs
 /browser-core/
 /.gitmodules
 # Accidental browser evaluation output, not project source.

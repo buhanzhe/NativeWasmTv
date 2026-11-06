@@ -10,7 +10,7 @@ public final class NativeH5eDecryptor {
                 System.loadLibrary("h5estream");
                 bundled = true;
             } catch (UnsatisfiedLinkError unavailable) {
-                android.util.Log.w("NativeH5eDecryptor", "Bundled H5E unavailable; using site plugin", unavailable);
+                xiao.bu.tv.AppLog.w("NativeH5eDecryptor", "Bundled H5E unavailable; using site plugin", unavailable);
             }
         }
         if (!bundled) CjsPluginRuntime.loadNativeLibrary("tv.cctv.com");

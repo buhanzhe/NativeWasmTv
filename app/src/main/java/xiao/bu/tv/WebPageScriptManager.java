@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebView;
 
 import androidx.webkit.ScriptHandler;
@@ -84,7 +84,7 @@ final class WebPageScriptManager {
                             item.optString("name", "脚本 " + (index + 1))));
                 }
             } catch (JSONException error) {
-                Log.w(TAG, "Unable to parse userscript list", error);
+                AppLog.w(TAG, "Unable to parse userscript list", error);
             }
         }
         sharedSources = sources;
@@ -115,7 +115,7 @@ final class WebPageScriptManager {
                 }
             } catch (RuntimeException | LinkageError error) {
                 dispose();
-                Log.w(TAG, "Document-start script unavailable", error);
+                AppLog.w(TAG, "Document-start script unavailable", error);
             }
         }
     }

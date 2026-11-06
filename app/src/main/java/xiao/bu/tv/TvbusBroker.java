@@ -74,7 +74,7 @@ final class TvbusBroker implements Closeable {
                 try (OutputStream out = upstream.getOutputStream()) { out.write(body); }
                 int status = upstream.getResponseCode();
                 if(status>=400)failure="上游 broker 返回 HTTP " + status;
-                android.util.Log.i("TvbusPlugin", "Broker upstream HTTP " + status);
+                xiao.bu.tv.AppLog.i("TvbusPlugin", "Broker upstream HTTP " + status);
                 InputStream response = status >= 400 ? upstream.getErrorStream() : upstream.getInputStream();
                 byte[] bytes = response == null ? new byte[0] : read(response);
                 reply(output, status, bytes, "application/vnd.brk", upstream.getHeaderField("X-Message-Seed"));
@@ -82,7 +82,7 @@ final class TvbusBroker implements Closeable {
         } catch (IOException error) {
             if(!server.isClosed()) {
                 failure=error instanceof UnknownHostException?"上游 broker 域名无法解析":error instanceof java.net.SocketTimeoutException?"上游 broker 连接超时":error instanceof javax.net.ssl.SSLException?"上游 broker TLS 连接失败":"上游 broker 连接失败";
-                android.util.Log.w("TvbusPlugin", "Broker relay failed: " + error.getClass().getSimpleName());
+                xiao.bu.tv.AppLog.w("TvbusPlugin", "Broker relay failed: " + error.getClass().getSimpleName());
             }
             try { reply(socket.getOutputStream(), 502, new byte[0], "text/plain", null); } catch (IOException closed) { }
         } finally { sockets.remove(socket); try {socket.close();}catch(IOException ignored){} }

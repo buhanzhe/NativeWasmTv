@@ -1,6 +1,6 @@
 package xiao.bu.tv;
 
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import org.json.JSONObject;
 
@@ -159,7 +159,7 @@ final class LocalControlServer implements Closeable {
                 socket.bind(new InetSocketAddress(port));
                 serverSocket = socket;
                 if (port != PREFERRED_PORT) {
-                    Log.w(TAG, "Management port " + PREFERRED_PORT
+                    AppLog.w(TAG, "Management port " + PREFERRED_PORT
                             + " occupied; using " + port);
                 }
                 break;
@@ -183,7 +183,7 @@ final class LocalControlServer implements Closeable {
             }
         }, "local-control-server");
         acceptThread.start();
-        Log.i(TAG, "Management server listening on " + getPort());
+        AppLog.i(TAG, "Management server listening on " + getPort());
     }
 
     int getPort() {
@@ -227,7 +227,7 @@ final class LocalControlServer implements Closeable {
                 }
             }
         } catch (Exception error) {
-            Log.d(TAG, "Unable to select peer-facing LAN address", error);
+            AppLog.d(TAG, "Unable to select peer-facing LAN address", error);
         }
         return getLanUrl();
     }
@@ -259,12 +259,12 @@ final class LocalControlServer implements Closeable {
                 } catch (RejectedExecutionException error) {
                     socket.close();
                     if (running) {
-                        Log.w(TAG, "Management worker pool rejected connection", error);
+                        AppLog.w(TAG, "Management worker pool rejected connection", error);
                     }
                 }
             } catch (IOException error) {
                 if (running) {
-                    Log.w(TAG, "Unable to accept management connection", error);
+                    AppLog.w(TAG, "Unable to accept management connection", error);
                 }
             }
         }
@@ -352,8 +352,8 @@ final class LocalControlServer implements Closeable {
             route(socket, method, path, body);
         } catch (Exception error) {
             if(error instanceof ControlRequestException)
-                Log.i(TAG,"Management request rejected: "+error.getMessage());
-            else Log.w(TAG, "Management request failed", error);
+                AppLog.i(TAG,"Management request rejected: "+error.getMessage());
+            else AppLog.w(TAG, "Management request failed", error);
             try {
                 int status = error instanceof ControlRequestException
                         ? ((ControlRequestException) error).status
@@ -423,7 +423,7 @@ final class LocalControlServer implements Closeable {
             }
         } catch (Exception error) {
             if (running) {
-                Log.i(TAG, "Takeover session ended: " + error.getMessage());
+                AppLog.i(TAG, "Takeover session ended: " + error.getMessage());
             }
         } finally {
             if (cursor != null) cursor.close();
@@ -465,7 +465,7 @@ final class LocalControlServer implements Closeable {
                 takeoverOutput.flush();
                 return true;
             } catch (Exception error) {
-                Log.w(TAG, "Unable to send takeover session message", error);
+                AppLog.w(TAG, "Unable to send takeover session message", error);
                 return false;
             }
         }
@@ -503,19 +503,16 @@ final class LocalControlServer implements Closeable {
                             .getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/logs".equals(path)) {
             String filter = queryParameter(requestTarget, "filter");
-            String snapshot = AppLogReader.read(filter);
             if ("1".equals(queryParameter(requestTarget, "download"))) {
-                JSONObject logs = new JSONObject(snapshot);
-                String text = logs.optString("text");
-                if (text.isEmpty()) text = logs.optBoolean("available", true)
-                        ? "当前筛选没有日志。\n" : logs.optString("note") + "\n";
+                String text = AppLogReader.readText(filter);
+                if (text.isEmpty()) text = "当前筛选没有日志。\n";
                 String label = "error".equals(filter) ? "error" : "crash".equals(filter) ? "crash" : "all";
                 String timestamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
                         java.util.Locale.US).format(new java.util.Date());
                 sendDownload(socket, "text/plain; charset=utf-8", text.getBytes("UTF-8"),
                         "ntv-logs-" + label + "-" + timestamp + ".txt");
             } else {
-                send(socket, 200, "application/json; charset=utf-8", snapshot.getBytes("UTF-8"));
+                send(socket, 200, "application/json; charset=utf-8", AppLogReader.read(filter).getBytes("UTF-8"));
             }
         } else if ("GET".equals(method) && "/api/catalog".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8",
@@ -843,7 +840,7 @@ final class LocalControlServer implements Closeable {
             if (chunks != null) chunks.finish();
             output.flush();
         } catch (IOException error) {
-            Log.w(TAG, "Media download closed before completion", error);
+            AppLog.w(TAG, "Media download closed before completion", error);
         } finally {
             try { download.close(); } catch (IOException ignored) { }
         }
@@ -875,7 +872,7 @@ final class LocalControlServer implements Closeable {
             if (chunks != null) chunks.finish();
             output.flush();
         } catch (IOException error) {
-            Log.w(TAG, "Recording transfer closed before completion", error);
+            AppLog.w(TAG, "Recording transfer closed before completion", error);
         } finally {
             try { resource.close(); } catch (IOException ignored) { }
         }
@@ -942,7 +939,7 @@ final class LocalControlServer implements Closeable {
                 }
             }
         } catch (SocketException error) {
-            Log.w(TAG, "Unable to inspect network interfaces", error);
+            AppLog.w(TAG, "Unable to inspect network interfaces", error);
         }
         return preferred;
     }

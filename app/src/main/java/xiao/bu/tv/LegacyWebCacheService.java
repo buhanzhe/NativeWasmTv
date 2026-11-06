@@ -15,7 +15,7 @@ public final class LegacyWebCacheService extends Service {
             cleaner.clearCache(true); cleaner.clearFormData();
             android.webkit.WebStorage.getInstance().deleteAllData();
         } catch (RuntimeException error) {
-            android.util.Log.w("LegacyWebGuard", "Unable to clear browser cache", error);
+            xiao.bu.tv.AppLog.w("LegacyWebGuard", "Unable to clear browser cache", error);
             failure=error.getMessage()==null?"无法启动网页清理组件":error.getMessage();
         } finally {
             try { if (cleaner != null) cleaner.destroy(); }

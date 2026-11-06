@@ -55,6 +55,11 @@
   }
   function ownSnapshot() {
     var m = media(), meta = session && session.metadata, state = session && session.playbackState;
+    var frames = -1;
+    if (m && m.tagName.toLowerCase() === 'video') try {
+      if (typeof m.webkitDecodedFrameCount === 'number') frames = m.webkitDecodedFrameCount;
+      else if (typeof m.getVideoPlaybackQuality === 'function') frames = m.getVideoPlaybackQuality().totalVideoFrames;
+    } catch (ignored) {}
     var playing = state === 'playing' || (state !== 'paused' && !!m && !m.paused && !m.ended);
     var cover = '', coverScore = Infinity, covers = meta && meta.artwork || [];
     for (var i = 0; i < covers.length && i < 16; i++) {
@@ -73,6 +78,7 @@
       mediaReadyState: m ? Number(m.readyState) || 0 : 0,
       mediaTimeMs: m ? Math.round((Number(m.currentTime) || 0) * 1000) : 0,
       videoWidth: m ? Number(m.videoWidth) || 0 : 0, videoHeight: m ? Number(m.videoHeight) || 0 : 0,
+      videoFrames: typeof frames === 'number' && isFinite(frames) ? frames : -1,
       mediaPaused: !m || !!m.paused, mediaEnded: !!(m && m.ended),
       durationMs: Math.round(duration * 1000), positionMs: Math.round(Math.max(0, duration ? Math.min(duration, current) : current) * 1000),
       error: error };

@@ -83,8 +83,8 @@ function saveGroupPasswordRequired(){
 }
 function saveMemory(){
   if(memorySaving||!state||!state.settings)return;
-  var keys=["rememberChannelSource","rememberChannelDecode","rememberChannelUserAgent"],patch={};
-  if(state.settings.liteBrowserSupported===true)keys.push("rememberChannelWebEngine");
+  var keys=["rememberChannelSource","rememberChannelDecode"],patch={};
+
   memorySaving=true;keys.forEach(function(id){var input=document.getElementById(id);patch[id]=input.checked;input.disabled=true;});
   api("/api/settings",patch,function(error){memorySaving=false;if(!error){keys.forEach(function(id){state.settings[id]=patch[id];});}renderPageState();toast(error?error.message:"频道记忆已保存",!!error);refresh();});
 }

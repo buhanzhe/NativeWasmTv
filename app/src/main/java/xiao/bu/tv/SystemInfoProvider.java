@@ -14,7 +14,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebView;
 
 import org.json.JSONException;
@@ -107,7 +107,7 @@ final class SystemInfoProvider {
             result.put("app", BuildConfig.VERSION_NAME + " · versionCode "
                     + BuildConfig.VERSION_CODE);
         } catch (JSONException error) {
-            Log.w(TAG, "Unable to build system information", error);
+            AppLog.w(TAG, "Unable to build system information", error);
         }
         return result;
     }
@@ -138,7 +138,7 @@ final class SystemInfoProvider {
             if (active.getType() == ConnectivityManager.TYPE_WIFI) return "wifi";
             if (active.getType() == ConnectivityManager.TYPE_MOBILE) return "cellular";
         } catch (RuntimeException error) {
-            Log.d(TAG, "Unable to inspect active network", error);
+            AppLog.d(TAG, "Unable to inspect active network", error);
         }
         return "other";
     }
@@ -194,7 +194,7 @@ final class SystemInfoProvider {
                 }
             }
         } catch (Exception error) {
-            Log.d(TAG, "Unable to match receiver to active Wi-Fi", error);
+            AppLog.d(TAG, "Unable to match receiver to active Wi-Fi", error);
         }
         return false;
     }
@@ -357,7 +357,7 @@ final class SystemInfoProvider {
                 }
             }
         } catch (IOException error) {
-            Log.w(TAG, "Unable to inspect native libraries in " + apkPath, error);
+            AppLog.w(TAG, "Unable to inspect native libraries in " + apkPath, error);
         } finally {
             if (apk != null) {
                 try {
@@ -443,7 +443,7 @@ final class SystemInfoProvider {
                 }
             }
         } catch (IOException error) {
-            Log.w(TAG, "Unable to read CPU information", error);
+            AppLog.w(TAG, "Unable to read CPU information", error);
         } finally {
             closeQuietly(reader);
         }
@@ -504,7 +504,7 @@ final class SystemInfoProvider {
             }
             if (core) addCpuCoreName(names, implementer, part, model);
         } catch (IOException error) {
-            Log.d(TAG, "Unable to read CPU core names", error);
+            AppLog.d(TAG, "Unable to read CPU core names", error);
         } finally {
             closeQuietly(reader);
         }
@@ -727,7 +727,7 @@ final class SystemInfoProvider {
                 return digits.length() == 0 ? 0L : Long.parseLong(digits);
             }
         } catch (Exception error) {
-            Log.w(TAG, "Unable to read memory information", error);
+            AppLog.w(TAG, "Unable to read memory information", error);
         } finally {
             closeQuietly(reader);
         }
@@ -761,7 +761,7 @@ final class SystemInfoProvider {
             return new StorageInfo(blockSize * stats.getBlockCount(),
                     blockSize * stats.getAvailableBlocks());
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to read storage information", error);
+            AppLog.w(TAG, "Unable to read storage information", error);
             return new StorageInfo(0L, 0L);
         }
     }
@@ -839,7 +839,7 @@ final class SystemInfoProvider {
                 }
             }
         } catch (SocketException error) {
-            Log.w(TAG, "Unable to inspect network interfaces", error);
+            AppLog.w(TAG, "Unable to inspect network interfaces", error);
         }
         ArrayList<String> result = new ArrayList<String>(values);
         if (!publicIpv6) {

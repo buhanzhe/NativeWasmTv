@@ -16,7 +16,7 @@ final class TvUiMenu {
     void dismiss(){
         PopupWindow old=popup;popup=null;exitEvents=null;
         if(old!=null)try{old.dismiss();}catch(IllegalArgumentException detached){
-            android.util.Log.w("TvUiMenu","Popup window already detached",detached);
+            xiao.bu.tv.AppLog.w("TvUiMenu","Popup window already detached",detached);
         }
     }
     boolean visible(){return popup!=null&&popup.isShowing();}

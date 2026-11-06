@@ -21,7 +21,7 @@ methods = '\n'.join(method(s) for s in [
     '    void dismiss()', '    boolean visible()', '    boolean confirmExitFromBack()',
     '    boolean dispatchKeyEvent(', '    void show(View anchor,',
     '    private static Activity findActivity(', '    private static boolean canShow('])
-methods = methods.replace('android.util.Log', 'Log').replace('android.os.Build', 'Build')
+methods = methods.replace('android.util.Log', 'Log').replace('xiao.bu.tv.AppLog', 'Log').replace('android.os.Build', 'Build')
 methods = methods.replace('xiao.bu.tv.skin.SharedTvUi', 'SharedTvUi')
 java = r'''
 public class Check {

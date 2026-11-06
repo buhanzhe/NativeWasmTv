@@ -8,7 +8,7 @@ import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.SystemClock;
 import android.util.AttributeSet;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 
@@ -177,7 +177,7 @@ public final class SharpVideoView extends GLSurfaceView {
             texelSizeHandle = GLES20.glGetUniformLocation(program, "uTexelSize");
             sharpnessHandle = GLES20.glGetUniformLocation(program, "uSharpness");
             createInputSurface();
-            Log.i(TAG, "GL performance shader=" + performanceShader);
+            AppLog.i(TAG, "GL performance shader=" + performanceShader);
         }
 
         @Override
@@ -245,7 +245,7 @@ public final class SharpVideoView extends GLSurfaceView {
             this.sarNum = sarNum > 0 ? sarNum : 1;
             this.sarDen = sarDen > 0 ? sarDen : 1;
             updateVertices();
-            Log.i(TAG, "GL video layout source=" + videoWidth + "x" + videoHeight
+            AppLog.i(TAG, "GL video layout source=" + videoWidth + "x" + videoHeight
                     + " sar=" + this.sarNum + "/" + this.sarDen
                     + " view=" + viewWidth + "x" + viewHeight);
         }
@@ -269,7 +269,7 @@ public final class SharpVideoView extends GLSurfaceView {
             surfaceTexture.setOnFrameAvailableListener(this);
             videoSurface = new Surface(surfaceTexture);
             view.notifySurfaceCreated(videoSurface);
-            Log.i(TAG, "Created GL video input surface");
+            AppLog.i(TAG, "Created GL video input surface");
         }
 
         private void updateVertices() {

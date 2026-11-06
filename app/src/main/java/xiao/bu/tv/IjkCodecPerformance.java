@@ -4,7 +4,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 /** Called once at native codec configuration, never in the frame loop. */
 public final class IjkCodecPerformance {
@@ -24,12 +24,12 @@ public final class IjkCodecPerformance {
                 format.setInteger(MediaFormat.KEY_FRAME_RATE, Math.round(streamRate));
                 format.setFloat(MediaFormat.KEY_OPERATING_RATE, rate);
                 format.setInteger(MediaFormat.KEY_PRIORITY, 0);
-                Log.i("IjkCodecPerformance", name + " " + width + "x" + height
+                AppLog.i("IjkCodecPerformance", name + " " + width + "x" + height
                         + " stream=" + streamRate + " operating=" + rate);
                 return rate;
             }
         } catch (RuntimeException error) {
-            Log.w("IjkCodecPerformance", "Codec performance hint unavailable", error);
+            AppLog.w("IjkCodecPerformance", "Codec performance hint unavailable", error);
         }
         return 0f;
     }

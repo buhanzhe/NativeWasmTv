@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -58,10 +58,10 @@ final class TlsCompat {
             };
             HttpsURLConnection.setDefaultSSLSocketFactory(installedSocketFactory);
             HttpsURLConnection.setDefaultHostnameVerifier(installedHostnameVerifier);
-            Log.w(TAG, "HTTPS certificate and hostname verification disabled for Android "
+            AppLog.w(TAG, "HTTPS certificate and hostname verification disabled for Android "
                     + Build.VERSION.RELEASE);
         } catch (Exception error) {
-            Log.e(TAG, "Unable to install trust-all HTTPS compatibility", error);
+            AppLog.e(TAG, "Unable to install trust-all HTTPS compatibility", error);
         }
     }
 

@@ -15,6 +15,7 @@ final class LiteWebPlayback implements Closeable {
         void failure(String value);
         default void render(android.view.View page) { }
         default int networkThreadMultiplier() { return 0; }
+        default String userAgent(String page,String fallback) { return ""; }
         boolean playing();
         long position();
         long duration();
@@ -30,7 +31,7 @@ final class LiteWebPlayback implements Closeable {
     private int generation, navigations;
     private boolean closed, temporary, streamActive, finalStream;
     private int finalHandoffs;
-    private static final long SNIFF_TIMEOUT_MS = 60000L;
+    private static final long SNIFF_TIMEOUT_MS = 30000L;
     private boolean sniffDeadlineStarted;
     private final Runnable sniffDeadline = () -> {
         if (!closed && !finalStream) fail("网页嗅探超时，未找到可播放资源");
@@ -48,6 +49,7 @@ final class LiteWebPlayback implements Closeable {
     private long auditPoll;
     private JSONObject auditPage=new JSONObject();
     private final java.util.ArrayDeque<String> auditMessages=new java.util.ArrayDeque<>();
+    private final org.json.JSONArray auditControls=new org.json.JSONArray();
     private double lastPosition, lastDuration;
     private android.widget.FrameLayout renderedPage;
     private LiteCanvas canvas;
@@ -93,7 +95,10 @@ final class LiteWebPlayback implements Closeable {
         applyPageCover(pageCovered,coverStyle);
         // An interactive login page can legitimately take longer than a media
         // sniff deadline. Keep the original page alive while the user signs in.
-        handler.removeCallbacks(sniffDeadline);
+        // Give an original HTML error/challenge its normal rendering and scripts,
+        // but do not turn an unrecovered 4xx/5xx page into an endless loading slot.
+        if(engine.startupTimings().optInt("documentStatus",0)<400)
+            handler.removeCallbacks(sniffDeadline);
         engine.renderPage();host.render(renderedPage);
         if(pendingInput!=null)canvas.textInput(pendingInput);
     }};
@@ -108,6 +113,7 @@ final class LiteWebPlayback implements Closeable {
     JSONObject auditSnapshot(){
         JSONObject value=startupTimings();try{synchronized(auditMessages){value.put("messages",new org.json.JSONArray(auditMessages)).put("page",auditPage);}
             if(engine!=null)value.put("busy",engine.runtimeBusySnapshot());
+            value.put("controls",auditControls).put("controlPaused",controlPaused==null?JSONObject.NULL:controlPaused).put("virtualPlayback",virtualPlayback).put("liveHlsPlayback",liveHlsPlayback);
         }catch(Exception ignored){}return value;
     }
     void open(String url, String script) {
@@ -134,7 +140,7 @@ final class LiteWebPlayback implements Closeable {
                         java.util.regex.Matcher kind=java.util.regex.Pattern.compile("(?:Type|Reference|Range|Syntax|Internal|Eval|URI)?Error").matcher(value);
                         synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();String detail=value.split("\\r?\\n",2)[0].replaceAll("https?://[^\\s]+","[URL]").replaceAll("[A-Za-z0-9_=-]{64,}","[opaque]");auditMessages.addLast("JS exception: "+(kind.find()?kind.group():"unclassified")+" "+detail.substring(0,Math.min(detail.length(),240)));}
                     }
-                    if(auditEnabled&&(value.startsWith("Document clock metadata ")||value.startsWith("HTTP ")||value.startsWith("API metadata ")||value.startsWith("CORS rejected metadata ")||value.startsWith("SCRIPT ")||value.startsWith("MSE ")||value.startsWith("Original player API status ")||value.startsWith("虚拟 MSE")||value.startsWith("运行错误：")||value.startsWith("加载失败："))){
+                    if(auditEnabled&&(value.startsWith("Document clock metadata ")||value.startsWith("HTTP ")||value.startsWith("API metadata ")||value.startsWith("CORS rejected metadata ")||value.startsWith("SCRIPT ")||value.startsWith("MSE ")||value.startsWith("候选校验")||value.startsWith("捕获候选")||value.startsWith("观察播放器")||value.startsWith("播放器实例")||value.startsWith("Original player API status ")||value.startsWith("虚拟 MSE")||value.startsWith("运行错误：")||value.startsWith("加载失败："))){
                         String safe=value.replaceAll("https?://[^\\s]+","[URL]");
                         synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();auditMessages.addLast(safe.substring(0,Math.min(safe.length(),800)));}
                     }
@@ -161,6 +167,7 @@ final class LiteWebPlayback implements Closeable {
                         if(!liveHlsPlayback||!LiteEngine.sameHlsSessionSource(source,controlledSource))return;
                         controlledSource=source;
                     }
+                    if(auditEnabled&&auditControls.length()<32)try{auditControls.put(new JSONObject().put("atMs",android.os.SystemClock.elapsedRealtime()).put("paused",paused).put("virtualMse",virtualMse).put("nativePlaying",host.playing()));}catch(Exception ignored){}
                     controlPaused=paused;host.setPaused(paused);
                 }
                 private void deliver(String source,Map<String,String> headers,boolean preroll) {
@@ -196,18 +203,21 @@ final class LiteWebPlayback implements Closeable {
             if(android.os.Build.VERSION.SDK_INT==19&&(LiteEngine.keepsOriginalMediaPipeline(url)
                     ||desktopPage!=null&&desktopPage.host().equals("www.mgtv.com")))engine.viewport(1280,720,0);
             engine.setHeadless(true);
+            engine.userAgentOverride(host.userAgent(url,LiteEngine.defaultUserAgent(url)));
             // Keep catalogue selection code separate from diagnostic bootstrap.
             // The engine's existing ujs path executes it through the normal page flow.
             WebSourceOptions options=WebSourceOptions.parse(url,script);
-            host.status("轻量内核正在嗅探网页");engine.load(options.url,options.script);
+            host.status("轻量内核正在加载网页");engine.load(options.url,options.script);
             handler.postDelayed(renderFallback,500);
-        } catch(Exception | LinkageError error) { fail("轻量内核启动失败"); }
+        } catch(Exception | LinkageError error) {
+            AppLog.w("LiteWebPlayback","Unable to start selected web engine",error);
+            fail("轻量内核启动失败");
+        }
     }
     private final Runnable progress=new Runnable() {
         public void run() {
             if(closed||engine==null)return;
             try {
-                if(streamActive&&controlPaused!=null&&host.playing()==controlPaused)host.setPaused(controlPaused);
                 if(streamActive&&host.playing()) {
                     lastPosition=Math.max(0,host.position())/1000.0;
                     lastDuration=Math.max(0,host.duration())/1000.0;

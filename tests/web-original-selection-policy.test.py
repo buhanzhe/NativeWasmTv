@@ -46,7 +46,8 @@ public class SelectionPolicyCheck {
 }'''
 with tempfile.TemporaryDirectory() as tmp:
     folder=Path(tmp);test=folder/'SelectionPolicyCheck.java';test.write_text(harness,'utf8')
-    subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8','-cp',str(android),'-d',tmp,str(source),str(test)],check=True)
+    log=folder/'AppLog.java';log.write_text('package xiao.bu.tv; final class AppLog { static int w(String t,String m,Throwable e){return 0;} }','utf8')
+    subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8','-cp',str(android),'-d',tmp,str(source),str(test),str(log)],check=True)
     subprocess.run([str(jdk/'java.exe'),'-cp',tmp+os.pathsep+str(android),'xiao.bu.tv.SelectionPolicyCheck'],check=True)
 main=(root/'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text('utf8')
 at=main.index('public void onStreamDiscovered(');body=main[at:main.index('public void onBrowserChannelList()',at)]

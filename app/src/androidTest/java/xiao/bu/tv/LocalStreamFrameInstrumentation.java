@@ -18,6 +18,7 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 public final class LocalStreamFrameInstrumentation extends Instrumentation {
     private MainActivity activity;
     private Bundle args;
+    private Thread logStress;
     private android.view.Window.Callback originalWindowCallback;
     private Field field(String name) throws Exception {
         Field value = MainActivity.class.getDeclaredField(name);
@@ -39,7 +40,7 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
         try {
             activity = (MainActivity) startActivitySync(new Intent(getTargetContext(), MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            SystemClock.sleep(1500);
+            SystemClock.sleep(Long.parseLong(args.getString("startupWaitMs", "1500")));
             saved = activity.getSharedPreferences(MainActivity.PREFERENCES, 0).getAll();
             groups = ChannelCatalog.GROUPS;
             runOnMainSync(() -> {
@@ -61,6 +62,10 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
             Channel channel = new Channel("1", "LOCAL_FRAME_DIAG", "diag", url, null, null);
             runOnMainSync(() -> { try {
                 field("autoSwitchSource").setBoolean(activity, false);
+                if (args.containsKey("decodeMode")) {
+                    field("decodeMode").set(activity, args.getString("decodeMode"));
+                    field("defaultDecodeMode").set(activity, args.getString("decodeMode"));
+                }
                 if(args.containsKey("delayMode")) field("liveDelayMode").set(activity,
                         "true".equals(args.getString("settingsApi"))
                                 ? ("low".equals(args.getString("delayMode")) ? "stable" : "low")
@@ -72,6 +77,7 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
                 field("currentSourceIndex").setInt(activity, 0);
                 if (url.startsWith("/") || "true".equals(args.getString("direct"))) {
                     invoke("closeWebSource"); invoke("releasePlayer");
+                    AppLog.loadIjkLibraries();
                     IjkMediaPlayer local = new IjkMediaPlayer();
                     field("player").set(activity, local);
                     field("videoRenderingStarted").setBoolean(activity, false);
@@ -114,7 +120,9 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
                 }
             } catch (Exception e) { throw new RuntimeException(e); } });
             long deadline = SystemClock.elapsedRealtime() + 60000;
-            while (!field("videoRenderingStarted").getBoolean(activity)) {
+            while (!field("videoRenderingStarted").getBoolean(activity)
+                    || "software".equals(args.getString("decodeMode"))
+                    && !(field("player").get(activity) instanceof IjkMediaPlayer)) {
                 if (SystemClock.elapsedRealtime() > deadline) throw new AssertionError("First frame timeout");
                 SystemClock.sleep(200);
             }
@@ -208,6 +216,18 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
                 Method longProperty = IjkMediaPlayer.class.getDeclaredMethod("_getPropertyLong",int.class,long.class);
                 longProperty.setAccessible(true);
                 int seconds = Integer.parseInt(args.getString("seconds", "20"));
+                if ("true".equals(args.getString("logStress"))) {
+                    logStress = new Thread(() -> {
+                        try {
+                            int count = 0;
+                            while (!Thread.currentThread().isInterrupted()) {
+                                AppLog.i("VideoLogStress", "playback log " + count++);
+                                Thread.sleep(10);
+                            }
+                        } catch (InterruptedException stopped) { Thread.currentThread().interrupt(); }
+                    }, "video-log-stress");
+                    logStress.start();
+                }
                 for (int i=0; i<seconds; i++) {
                     SystemClock.sleep(1000);
                     if(field("player").get(activity)!=media) throw new AssertionError("Player replaced");
@@ -237,11 +257,13 @@ public final class LocalStreamFrameInstrumentation extends Instrumentation {
                         .put("positionAdvancedMs",media.getCurrentPosition()-position)
                         .put("processCpuMs",Process.getElapsedCpuTime()-cpu).put("samples",samples);
                 report.append(row).append('\n');
+                if (logStress != null) { logStress.interrupt(); logStress.join(1000); logStress = null; }
                 android.util.Log.i("LocalFrameDiag",row.toString());
             }
             }
         } catch (Throwable error) { code=1; report.append(android.util.Log.getStackTraceString(error)); }
         finally {
+            if (logStress != null) logStress.interrupt();
             final Map<String, ?> prefs=saved; final ChannelCatalog.Group[] original=groups;
             if(activity!=null) runOnMainSync(() -> { try {
                 invoke("closeWebSource"); invoke("releasePlayer");

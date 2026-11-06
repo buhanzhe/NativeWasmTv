@@ -5,7 +5,7 @@ import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.KeyEvent;
 import android.widget.Toast;
 
@@ -79,7 +79,7 @@ final class AutoUpdater {
                     if (update.versionCode <= BuildConfig.VERSION_CODE || destroyed) {
                         return;
                     }
-                    Log.i(TAG, "Update available: " + update.versionName + ", asset="
+                    AppLog.i(TAG, "Update available: " + update.versionName + ", asset="
                             + update.apkAsset);
                     activity.runOnUiThread(new Runnable() {
                         @Override
@@ -89,7 +89,7 @@ final class AutoUpdater {
                     });
                 } catch (Exception error) {
                     // Startup checks are intentionally silent when the device is offline.
-                    Log.w(TAG, "Update check failed", error);
+                    AppLog.w(TAG, "Update check failed", error);
                 } finally {
                     importantChecking = false;
                 }
@@ -132,7 +132,7 @@ final class AutoUpdater {
                 } catch (Exception error) {
                     liteState = "error";
                     liteMessage = "检查失败：" + readableMessage(error);
-                    Log.w(TAG, "Lightweight update check failed", error);
+                    AppLog.w(TAG, "Lightweight update check failed", error);
                 } finally {
                     liteChecking = false;
                     notifyLite(showResult ? liteMessage : null);
@@ -452,7 +452,7 @@ final class AutoUpdater {
                     if (!partial.renameTo(apk)) {
                         copyFile(partial, apk);
                         if (!partial.delete()) {
-                            Log.w(TAG, "Unable to remove partial APK " + partial);
+                            AppLog.w(TAG, "Unable to remove partial APK " + partial);
                         }
                     }
                     finishDownload(apk);
@@ -463,9 +463,9 @@ final class AutoUpdater {
                         liteMessage = "下载失败：" + readableMessage(error);
                     }
                     notifyLite();
-                    Log.e(TAG, "Update download failed", error);
+                    AppLog.e(TAG, "Update download failed", error);
                     if (partial != null && partial.exists() && !partial.delete()) {
-                        Log.w(TAG, "Unable to remove failed partial APK " + partial);
+                        AppLog.w(TAG, "Unable to remove failed partial APK " + partial);
                     }
                     activity.runOnUiThread(new Runnable() {
                         @Override
@@ -587,7 +587,7 @@ final class AutoUpdater {
                 liteMessage = "无法打开安装器：" + readableMessage(error) + "，可重试安装";
                 notifyLite();
             }
-            Log.e(TAG, "Unable to launch package installer", error);
+            AppLog.e(TAG, "Unable to launch package installer", error);
             Toast.makeText(activity, R.string.update_install_failed, Toast.LENGTH_LONG).show();
         }
     }

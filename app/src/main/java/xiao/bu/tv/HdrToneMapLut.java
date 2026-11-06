@@ -117,7 +117,7 @@ final class HdrToneMapLut {
             disableVolume();
             // A failed optional upload must not poison the working 2D fallback.
             for(int i=0;i<16&&GLES20.glGetError()!=GLES20.GL_NO_ERROR;i++){}
-            android.util.Log.w("nTvHdr","3D LUT unavailable; keep 2D lookup",failure);
+            xiao.bu.tv.AppLog.w("nTvHdr","3D LUT unavailable; keep 2D lookup",failure);
         }
     }
     private static int atlasOffset(int size,int r,int g,int b){return (((b/8)*size+g)*(size*8)+(b%8)*size+r)*4;}

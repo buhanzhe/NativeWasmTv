@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 /** Starts the TV activity after boot when the user has enabled auto start. */
 public final class BootReceiver extends BroadcastReceiver {
@@ -20,7 +20,7 @@ public final class BootReceiver extends BroadcastReceiver {
                 MainActivity.PREFERENCES, Context.MODE_PRIVATE)
                 .getBoolean(MainActivity.AUTO_START, false);
         if (!enabled) {
-            Log.i(TAG, "Ignoring boot broadcast because auto start is disabled");
+            AppLog.i(TAG, "Ignoring boot broadcast because auto start is disabled");
             return;
         }
         Intent launch = new Intent(context, MainActivity.class)
@@ -29,9 +29,9 @@ public final class BootReceiver extends BroadcastReceiver {
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         try {
             context.startActivity(launch);
-            Log.i(TAG, "Started TV activity after boot action=" + action);
+            AppLog.i(TAG, "Started TV activity after boot action=" + action);
         } catch (RuntimeException error) {
-            Log.e(TAG, "Unable to start TV activity after boot", error);
+            AppLog.e(TAG, "Unable to start TV activity after boot", error);
         }
     }
 }

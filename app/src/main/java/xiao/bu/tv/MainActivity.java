@@ -32,7 +32,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.TextUtils;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.InputDevice;
@@ -206,7 +206,6 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private static final String WEB_VIEW_AUTO_PLAY_SNIFFED =
             "web_view_auto_play_sniffed";
     private static final String WEB_VIEW_USER_AGENT = "web_view_user_agent";
-    private static final String WEB_VIEW_USER_AGENT_AUTO = "auto";
     private static final String WEB_VIEW_USER_AGENT_WINDOWS = "windows";
     private static final String WEB_VIEW_USER_AGENT_MACOS = "macos";
     private static final String WEB_VIEW_USER_AGENT_IPAD = "ipad";
@@ -286,6 +285,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private static final int PLAYBACK_RECOVERY_MAX_ATTEMPTS = 5;
     private static final int YANGSHIPIN_REFRESH_MAX_ATTEMPTS = 3;
     private static final long NUMERIC_CHANNEL_TIMEOUT_MS = 3000L;
+    private static final int NUMERIC_CHANNEL_MAX_DIGITS = 4;
+    private final WebChannelInfo webChannelInfo = new WebChannelInfo();
     private static final int LOCAL_PLAYLIST_PERMISSION_REQUEST = 4201;
 
     private static final int CAST_LOCAL_NETWORK_PERMISSION_REQUEST = 4205;
@@ -311,6 +312,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         @Override
         public void run() {
             if (!loadingActive) {
+                long remaining=webChannelInfo.remaining(playRequestId,SystemClock.elapsedRealtime());
+                if(channelBar.getVisibility()==View.VISIBLE&&remaining>0){channelBar.postDelayed(this,remaining);return;}
                 channelBar.setVisibility(View.GONE);
             }
         }
@@ -421,6 +424,30 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private TextView epgStatus;
     private ChannelListAdapter groupAdapter;
     private ChannelListAdapter channelAdapter;
+    private ChannelHealth channelHealth;
+    private boolean neighborProbeEnabled;
+    private long healthStableAt,healthPosition=-1;
+    private int healthNeighborRequest=-1;
+    private void updateChannelHealth(){
+        if(channelHealth==null)return;
+        boolean stable=false;long position=-1,now=SystemClock.elapsedRealtime();
+        try{stable=prepared&&hasCurrentPlaybackStats()&&player.isPlaying()&&!buffering
+                &&(audioOnlyPlayback||videoRenderingStarted)&&!backgroundPlaybackSuspended;
+            if(stable)position=player.getCurrentPosition();
+        }catch(IllegalStateException ignored){}
+        if(webSourceView!=null&&webSourceView.isPageVisible()){
+            JSONObject web=webSourceView.currentWebMediaState();position=web.optLong("mediaTimeMs",-1);
+            stable=web.optBoolean("playing")&&!web.optBoolean("mediaPaused",true)&&web.optInt("mediaReadyState")>=3;
+        }
+        if(!stable||position<=healthPosition){healthStableAt=0;healthNeighborRequest=-1;channelHealth.pause();}
+        else if(healthStableAt==0)healthStableAt=now;
+        healthPosition=position;
+        if(healthStableAt>0&&now-healthStableAt>=5000){
+            boolean catalogueLive=catchupProgram==null&&quickChannel==null&&multimediaReceiverChannel==null;
+            if(catalogueLive)channelHealth.success(currentChannel(),currentSourceIndex);
+            if(neighborProbeEnabled||channelHealth.scanning){channelHealth.resume();if(neighborProbeEnabled&&catalogueLive&&healthNeighborRequest!=playRequestId){healthNeighborRequest=playRequestId;channelHealth.neighbors(ChannelCatalog.GROUPS,currentGroupIndex,currentChannelIndex);}}
+        }
+    }
     private EpgListAdapter epgAdapter;
     private boolean channelPanelInitialized;
     private EpgManager epgManager;
@@ -678,7 +705,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if (player != null) releasePlayer(true);
             if (proxy != null) proxy.setPlaybackSuspended(true);
             abandonPlaybackAudioFocus();
-            Log.i(TAG,"Playback suspended in background; retaining resolved channel and HLS state");
+            AppLog.i(TAG,"Playback suspended in background; retaining resolved channel and HLS state");
         } else {
             if (proxy != null) proxy.setPlaybackSuspended(false);
             Channel channel=backgroundChannel; String url=backgroundStreamUrl;
@@ -690,7 +717,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 foregroundResumeSystem=backgroundSystem; foregroundResumeSystemVideo=backgroundSystemVideo;
                 backgroundPosition=0L; backgroundWasPaused=false; backgroundCompleted=false;
                 updateLoadingStatus("正在加载");
-                Log.i(TAG,"Resuming resolved playback without URL resolution");
+                AppLog.i(TAG,"Resuming resolved playback without URL resolution");
                 if (backgroundNeedsResolve) startResolvedPlayer(channel,url,backgroundDirect);
                 else try {
                     if (backgroundSystem) startAndroidMediaPlayer(channel,url,backgroundSoftware,backgroundSystemVideo);
@@ -698,7 +725,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
                 catch (IOException | RuntimeException error) {
                     hideLoading(); showChannelBar(channel.name,"恢复播放失败，请重试");
-                    Log.w(TAG,"Unable to resume foreground playback",error);
+                    AppLog.w(TAG,"Unable to resume foreground playback",error);
                 }
             }
         }
@@ -769,7 +796,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         if (quickImageBitmap != null) { quickImageBitmap.recycle(); quickImageBitmap=null; }
         quickWebInteractive=false;
-        if (quickChannel != null) Log.i(TAG, "Temporary channel cleared");
+        if (quickChannel != null) AppLog.i(TAG, "Temporary channel cleared");
         quickChannel = null;
         if (quickMediaFile != null) { quickMediaFile.delete(); quickMediaFile = null; }
     }
@@ -778,7 +805,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
     private void playQuickMedia(String url, String name, java.io.File file,
             android.graphics.Bitmap image, boolean interactiveWeb) {
-        Log.i(TAG, "Temporary channel requested");
+        AppLog.i(TAG, "Temporary channel requested");
         groupPasswordSession.clear();
         clearQuickMedia();
         quickMediaFile = file;
@@ -1021,6 +1048,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private volatile String webSourceEngine;
     private volatile int liteNetworkThreadMultiplier;
     private LiteWebPlayback liteWebPlayback;
+    private boolean channelRemovalBusy;
+    private android.app.AlertDialog channelRemovalDialog;
+    private android.app.AlertDialog channelActionsDialog;
     private Runnable liteWebFallback;
     private int webOriginalFallbackRequestId = -1;
     private volatile String webViewUserAgent;
@@ -1209,7 +1239,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             Channel[] channels = ChannelCatalog.GROUPS[groupIndex].channels;
             if (channels == null || channels.length == 0) {
-                Log.w(TAG, "Ignoring channel switch because group is empty index="
+                AppLog.w(TAG, "Ignoring channel switch because group is empty index="
                         + groupIndex);
                 return;
             }
@@ -1233,7 +1263,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         @Override
         public void run() {
             refreshVideoInfo();
-            if (hasActivePlayer() || liteWebPlayback != null) {
+            updateChannelHealth();
+            if (hasActivePlayer() || liteWebPlayback != null || webSourceView!=null&&webSourceView.isPageVisible()) {
                 root.postDelayed(this, 1000L);
             }
         }
@@ -1395,6 +1426,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         });
         epgAdapter = new EpgListAdapter(this, uiScaleHelper);
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
+        neighborProbeEnabled=preferences.getBoolean("neighbor_probe_enabled",true);
+        channelHealth=new ChannelHealth(this,()->{if(!isFinishing()&&channelAdapter!=null)channelAdapter.notifyDataSetChanged();});
+        channelAdapter.setHealth(channelHealth);
         personalBackground=new PersonalBackground(this,findViewById(R.id.startup_background),preferences);
         // Player selection was removed; discard values left by earlier test builds.
         preferences.edit().remove("player_backend").apply();
@@ -1464,8 +1498,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         webViewAutoPlaySniffed = preferences.getBoolean(
                 WEB_VIEW_AUTO_PLAY_SNIFFED, true);
         webViewAutoPlay = preferences.getBoolean("web_view_auto_play", true);
-        webViewUserAgent = sanitizeWebViewUserAgent(preferences.getString(
-                WEB_VIEW_USER_AGENT, WEB_VIEW_USER_AGENT_AUTO));
+        String storedUserAgent=preferences.getString(WEB_VIEW_USER_AGENT,WEB_VIEW_USER_AGENT_WINDOWS);
+        webViewUserAgent=sanitizeWebViewUserAgent(storedUserAgent);
+        if(!webViewUserAgent.equals(storedUserAgent))preferences.edit().putString(WEB_VIEW_USER_AGENT,webViewUserAgent).apply();
         defaultWebViewUserAgent=webViewUserAgent;
         String storedBrowserVersion = preferences.getString(WEB_VIEW_BROWSER_VERSION,
                 WEB_VIEW_BROWSER_VERSION_NATIVE);
@@ -1489,7 +1524,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 preferences.edit().putString(WEB_VIEW_USER_SCRIPTS, webViewUserScripts).apply();
             }
         } catch (JSONException invalidScripts) {
-            Log.w(TAG, "Discarding invalid saved web scripts", invalidScripts);
+            AppLog.w(TAG, "Discarding invalid saved web scripts", invalidScripts);
             webViewUserScripts = "[]";
             preferences.edit().putString(WEB_VIEW_USER_SCRIPTS, webViewUserScripts).apply();
         }
@@ -1594,7 +1629,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         deferStartupMaintenance("update-check", () -> autoUpdater.checkForUpdates());
         deferStartupMaintenance("plugin-update-check", () -> new Thread(() -> {
             try { CjsPluginRuntime.checkInstalledOnce(); }
-            catch (Exception error) { Log.w(TAG, "Startup plugin update failed; retaining local plugins", error); }
+            catch (Exception error) { AppLog.w(TAG, "Startup plugin update failed; retaining local plugins", error); }
         }, "cjs-startup-update").start());
         migrateFavoriteGroupIndex(preferences);
         migrateMergedCentralGroups(preferences);
@@ -1653,7 +1688,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 startChannel(currentChannelIndex);
             }
         } catch (Exception error) {
-            Log.e(TAG, "Unable to start player", error);
+            AppLog.e(TAG, "Unable to start player", error);
             showChannelBar(currentChannel().name,
                     "启动失败: " + error.getMessage());
         }
@@ -1699,7 +1734,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     boolean busy = cpu >= 80f && !"loadavg".equals(systemCpuMetricSource);
                     if (!busy || deadlineReached) {
                         lastStartupMaintenanceAt = now;
-                        Log.i(TAG, "Startup maintenance " + name + " deferred="
+                        AppLog.i(TAG, "Startup maintenance " + name + " deferred="
                                 + (now - queuedAt) + "ms stable=" + stable + " cpu=" + cpu);
                         task.run();
                         return;
@@ -1783,7 +1818,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             @Override
             public void onVideoSurfaceCreated(SurfaceHolder holder, Surface surface) {
                 if (target != videoView) return;
-                Log.i(TAG, "Video surface created size=" + videoView.getWidth()
+                AppLog.i(TAG, "Video surface created size=" + videoView.getWidth()
                         + "x" + videoView.getHeight() + " sdk=" + Build.VERSION.SDK_INT
                         + " output=SurfaceView");
 
@@ -1801,7 +1836,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 if (target != videoView || videoView.getVideoSurface() != surface) {
                     return;
                 }
-                Log.i(TAG, "Physical video surface destroyed sdk=" + Build.VERSION.SDK_INT);
+                AppLog.i(TAG, "Physical video surface destroyed sdk=" + Build.VERSION.SDK_INT);
                 if (hasActivePlayer() && Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                         && activePlayerChannel != null && activePlayerStreamUrl != null
                         && !(backgroundPlaybackEnabled&&!windowContentActive)) {
@@ -1966,8 +2001,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             public void onPageStarted(int requestId, String url) {
                 if (requestId == playRequestId) {
                     playbackDebugPending = false;
+                    webChannelInfo.cancel();
                     clearWebCloseConfirmation();
-                    if (webViewMinimalMode && !webSourceView.isInteractivePageFallback()) showLoading(currentChannel().name, "正在加载网页频道");
+                    if (!isQuickWebInteractive()) showLoading(currentChannel().name, "正在加载网页频道");
                     else dismissWebNavigationChannelBar();
                 }
             }
@@ -1978,11 +2014,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     return;
                 }
                 Channel channel = currentChannel();
+                scheduleVideoInfoRefresh();
                 playbackReadyRequestId = requestId;
                 // Page readiness is parsing progress, not a decoded media frame.
                 // Keep the channel clock alive for the sniffed stream and its segments.
                 logChannelSwitchStage(requestId, "web-page-ready");
-                if (!webSourceView.isChannelSwipeActive()
+                if(!isQuickWebInteractive()) {
+                    webChannelInfo.begin(requestId,SystemClock.elapsedRealtime());
+                    hideLoading();showChannelBar(channel.name,"网页已载入 · 等待播放信息");
+                }else if (!webSourceView.isChannelSwipeActive()
                         && (webLastFrame == null || !webLastFrame.active())) dismissWebNavigationChannelBar();
                 revealIncomingChannel(requestId);
                 persistPlayingChannel(channel, requestId);
@@ -2022,7 +2062,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         || LiteEngine.keepsOriginalMediaPipeline(webSourceView.currentPageUrl())
                         || WebTvPlaybackPolicy.webPlayerOnly(pageUrl)
                         || WebTvPlaybackPolicy.webPlayerOnly(webSourceView.currentPageUrl())) return;
-                Log.i(TAG, "Web source stream discovered channel=" + webSourceView.currentChannelTitle()
+                AppLog.i(TAG, "Web source stream discovered channel=" + webSourceView.currentChannelTitle()
                         + " url=" + streamUrl);
                 SniffedResource resource = new SniffedResource(requestId, streamUrl,
                         pageUrl, userAgent, cookies);
@@ -2280,7 +2320,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     Toast.LENGTH_LONG).show();
             webOriginalFallbackRequestId = playRequestId;
             webSourceView.showPlaybackFullscreen();
-            Log.i(TAG, "Sniffed playback rejected before opening player: " + reason);
+            AppLog.i(TAG, "Sniffed playback rejected before opening player: " + reason);
             return;
         }
         pendingSniffedResource = null;
@@ -2353,8 +2393,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         webSourceView.applyInteractiveBrowser(isQuickWebInteractive());
         webSourceView.applyAutoPlay(!isQuickWebInteractive() && webViewAutoPlay);
         webSourceView.applyMinimalMode(!isQuickWebInteractive() && webViewMinimalMode);
-        String pageUserAgent=isQuickWebInteractive() && WEB_VIEW_USER_AGENT_AUTO.equals(webViewUserAgent)
-                ? WEB_VIEW_USER_AGENT_NATIVE : webViewUserAgent;
+        webSourceView.applyPageCoverStyle(webViewPageCoverStyle);
+        webSourceView.applyPageCover(webViewPageCover);
+        String pageUserAgent=webViewUserAgent;
         webSourceView.applyConfiguration(webViewResolution,webViewLoadImages,
                 pageUserAgent,webViewBrowserVersion,webViewPageScale,
                 webViewAdBlock,webViewWebRtcEnabled,webViewUserScriptEnabled,webViewUserScripts);
@@ -2376,7 +2417,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         releasePlayer();
         cancelCustomSourceTimeout();
         videoView.setVisibility(View.INVISIBLE);
-        showLoading(channel.name, "轻量内核正在嗅探网页");
+        showLoading(channel.name, "轻量内核正在加载网页");
         liteWebFallback = () -> {
             if (requestId != playRequestId || isFinishing()) return;
             webOriginalFallbackRequestId = requestId;
@@ -2384,12 +2425,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             openWebSource(channel, configuredUrl, requestId, pageScript);
         };
         liteWebPlayback = new LiteWebPlayback(this, new LiteWebPlayback.Host() {
+            public String userAgent(String page,String fallback){
+                if("native".equals(webViewUserAgent))return "";
+                return "ipad".equals(webViewUserAgent)?DesktopWebProfile.ipadUserAgent(fallback,webViewBrowserVersion)
+                        :DesktopWebProfile.userAgent(webViewUserAgent,fallback,webViewBrowserVersion);
+            }
             public int networkThreadMultiplier() { return liteNetworkThreadMultiplier; }
             private boolean current() { return requestId == playRequestId && liteWebPlayback != null && !isFinishing(); }
             public void status(String text) { if(current())showLoading(channel.name,text); }
             public void render(View page) {
                 if(!current())return;
                 abortChannelSwitchAnimation();hideLoading();
+                if(webLastFrame!=null&&webLastFrame.isNativeSwipe())webLastFrame.clear();
                 page.setOnTouchListener((view, event) -> {
                     if (!webViewMinimalMode) return false;
                     handleMinimalBrowserTouch(event, view.getWidth(), view.getHeight());
@@ -2397,19 +2444,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 });
                 ((FrameLayout)root).addView(page,Math.max(0,((FrameLayout)root).indexOfChild(webSourceView)),new FrameLayout.LayoutParams(-1,-1));
                 showChannelBar(channel.name,"轻量网页已显示 · 继续嗅探资源");
+                raiseWebChannelControls();
             }
             public void failure(String text) {
                 if(!current())return;
-                Log.w(TAG, "Lite webpage failed: " + text);
-                if (liteWebFallback != null) { Runnable fallback=liteWebFallback; liteWebFallback=null; fallback.run(); return; }
-                liteWebPlayback.close();liteWebPlayback=null;
-                cancelCustomSourceTimeout();
-                clearPendingPlayer();
-                releasePlayer();
-                abortChannelSwitchAnimation();
-                recordLoadError(text);
-                hideLoading();showChannelBar(channel.name,text);
-                switchCustomSource(1, true, text, true);
+                AppLog.w(TAG, "Lite webpage failed: " + text);
+                if(neighborProbeEnabled&&currentChannel().sourceCount()>1){switchCustomSource(1,true,text,true);return;}
+                stopFailedLitePlayback(text);
             }
             public void stream(String url, boolean temporary) {
                 if(!current())return;
@@ -2532,6 +2573,23 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private void openManagement() {
         if(TvUiPlugin.current()!=null){openTvUiMenu();return;}
+        if(channelActionsDialog!=null&&channelActionsDialog.isShowing())return;
+        clearNumericChannelInput();closeChannelList();
+        backPrompt.removeCallbacks(hideBackPrompt);backPrompt.setVisibility(View.GONE);
+        lastBackPressedAt=0L;
+        channelActionsDialog=new android.app.AlertDialog.Builder(this)
+                .setTitle(currentChannel().name)
+                .setItems(new String[]{"网页管理","移除当前频道","恢复已移除频道","停止当前加载/播放"},(dialog,which)->{
+                    if(which==0)openClassicManagement();
+                    else if(which==1)confirmRemoveCurrentChannel();
+                    else if(which==2)changeRemovedChannels(null,null);
+                    else{stopCurrentChannelLoad();openChannelList(true);}
+                }).create();
+        channelActionsDialog.setOnDismissListener(dialog->channelActionsDialog=null);
+        channelActionsDialog.show();
+    }
+
+    private void openClassicManagement() {
         clearNumericChannelInput();
         if (!hasLocalNetworkAccess()) {
             requestLocalNetworkPermission(true, true);
@@ -2581,7 +2639,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 catch(JSONException error){Toast.makeText(MainActivity.this,"分组设置无效，请重试",Toast.LENGTH_SHORT).show();}
             }
             public Bundle state(){
-                Bundle b=new Bundle();Channel channel=currentChannel();b.putInt("sources",channel==null?0:channel.sourceCount());b.putInt("source",currentSourceIndex);
+                Bundle b=new Bundle();Channel channel=currentChannel();b.putInt("sources",channel==null?0:channel.sourceCount());b.putInt("source",currentSourceIndex);b.putString("channelName",channel==null?"":channel.name);
                 String[] sourceNames=new String[channel==null?0:channel.sourceCount()];for(int i=0;i<sourceNames.length;i++)sourceNames[i]=channel.sourceDisplayName(i);b.putStringArray("sourceNames",sourceNames);
                 b.putString("decode",decodeMode);b.putString("ratio",videoScaleMode);b.putInt("timeout",autoSwitchSourceSeconds);
                 b.putBoolean("rememberChannelSource",rememberChannelSource);b.putBoolean("rememberChannelDecode",rememberChannelDecode);
@@ -2617,6 +2675,66 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         Bundle menuState=model.initial();menuState.putInt("category",selectedCategory);
         tvUiMenu.show(root,"menu",menuState,model);
     }
+
+    private void stopCurrentChannelLoad() {
+        ++playRequestId;
+        cancelPendingRelativeSwitch();resetPlaybackRecoveryState();
+        cancelCustomSourceTimeout();cancelSniffedOpenTimeout();clearPendingPlayer();
+        closeWebSource();releasePlayer();abortChannelSwitchAnimation();hideLoading();
+    }
+
+    private void stopFailedLitePlayback(String reason) {
+        // An invalid URL must not escalate into an old system WebView. Its
+        // renderer can share the TV's UI thread, defeating every remote key.
+        closeWebSource();cancelCustomSourceTimeout();cancelSniffedOpenTimeout();
+        clearPendingPlayer();releasePlayer();abortChannelSwitchAnimation();
+        recordLoadError(reason);hideLoading();showChannelBar(currentChannel().name,reason);
+        if ((autoSwitchSource||neighborProbeEnabled) && switchCustomSource(1,true,reason)) return;
+        if (!tvUiMenu.visible() && managementPanel.getVisibility()!=View.VISIBLE
+                && (channelActionsDialog==null||!channelActionsDialog.isShowing())
+                && (channelRemovalDialog==null||!channelRemovalDialog.isShowing()))openChannelList(true);
+    }
+
+    private void confirmRemoveCurrentChannel() {
+        if(channelRemovalBusy)return;
+        if(quickChannel!=null||!remoteCatalogUrl.isEmpty()||multimediaSuspended){
+            Toast.makeText(this,"请从本机频道列表选择要移除的频道",Toast.LENGTH_LONG).show();return;
+        }
+        ChannelCatalog.Group group=currentGroup();Channel channel=currentChannel();
+        if(group.source==ChannelCatalog.SOURCE_FAVORITES){
+            ChannelCatalog.Group found=null;Channel original=null;
+            for(ChannelCatalog.Group candidate:ChannelCatalog.GROUPS){
+                if(candidate.source==ChannelCatalog.SOURCE_FAVORITES)continue;
+                for(Channel item:candidate.channels)if(favoriteKey(candidate,item).equals(channel.favoriteKey)){found=candidate;original=item;break;}
+                if(found!=null)break;
+            }
+            if(found==null){Toast.makeText(this,"原频道已变化，请刷新列表后重试",Toast.LENGTH_LONG).show();return;}
+            group=found;channel=original;
+        }
+        final String groupId=PlaylistManager.channelGroupId(group.title),name=channel.name;
+        channelRemovalDialog=new android.app.AlertDialog.Builder(this).setTitle("移除频道："+name)
+                .setMessage("从本机频道列表移除，更新频道源后仍保持移除。可在菜单的“移除频道”中恢复。")
+                .setNegativeButton("取消",(dialog,which)->{})
+                .setPositiveButton("移除",(dialog,which)->changeRemovedChannels(groupId,name)).create();
+        channelRemovalDialog.setOnDismissListener(dialog->channelRemovalDialog=null);
+        channelRemovalDialog.show();channelRemovalDialog.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).requestFocus();
+    }
+
+    private void changeRemovedChannels(final String groupId,final String name) {
+        if(channelRemovalBusy)return;
+        if(!remoteCatalogUrl.isEmpty()){Toast.makeText(this,"远程频道请在发送端管理",Toast.LENGTH_LONG).show();return;}
+        channelRemovalBusy=true;catalogLoadGeneration.incrementAndGet();
+        if(groupId!=null)stopCurrentChannelLoad();
+        Toast.makeText(this,groupId==null?"正在恢复移除的频道…":"正在移除频道…",Toast.LENGTH_SHORT).show();
+        new Thread(()->{
+            try{
+                ChannelCatalog.Group[] groups=groupId==null?playlistManager.restoreRemovedChannels():playlistManager.removeChannel(groupId,name);
+                if(!isFinishing())applyPlaylistGroupVisibility(groups);
+                runOnUiThread(()->{if(!isFinishing())Toast.makeText(this,groupId==null?"已恢复移除的频道":"已移除："+name,Toast.LENGTH_LONG).show();});
+            }catch(Exception error){runOnUiThread(()->{if(!isFinishing())Toast.makeText(this,error.getMessage(),Toast.LENGTH_LONG).show();});}
+            finally{runOnUiThread(()->channelRemovalBusy=false);}
+        },"channel-removal").start();
+    }
     private void showTvUiBrowserMenu(int category){
         TvUiBrowserMenu model=new TvUiBrowserMenu(new TvUiBrowserMenu.Host(){
             public Bundle state(){
@@ -2630,10 +2748,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             public void settings(Bundle patch){
                 final JSONObject request=new JSONObject();
-                try{for(String key:patch.keySet())request.put(key,patch.get(key));}
-                catch(JSONException error){Toast.makeText(MainActivity.this,"网页配置无效",Toast.LENGTH_SHORT).show();return;}
+                try{for(String key:patch.keySet())request.put(key,patch.get(key));
+                    String domain=webPreferenceMemoryKey();
+                    if(domain==null)throw new JSONException("请先打开需要设置的网页频道");
+                    request.put("webPreferenceScope","domain").put("webPreferenceDomain",domain);
+                }
+                catch(JSONException error){Toast.makeText(MainActivity.this,error.getMessage(),Toast.LENGTH_SHORT).show();return;}
                 TvUiPlugin.execute(()->{
-                    try{handleWebSettings(request);runOnUiThread(()->{if(!isFinishing())tvUiMenu.refresh();});}
+                    try{handleWebSettings(request);runOnUiThread(()->{
+                        if(isFinishing())return;
+                        tvUiMenu.refresh();
+                        Toast.makeText(MainActivity.this,"网页配置已保存",Toast.LENGTH_SHORT).show();
+                    });}
                     catch(Exception error){runOnUiThread(()->{if(!isFinishing())Toast.makeText(MainActivity.this,"设置失败："+error.getMessage(),Toast.LENGTH_LONG).show();});}
                 });
             }
@@ -3090,7 +3216,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             refreshManagementAddress();
         } catch (IOException error) {
-            Log.e(TAG, "Unable to start management server", error);
+            AppLog.e(TAG, "Unable to start management server", error);
             managementUrl.setText("局域网管理服务启动失败：端口 "
                     + LocalControlServer.PREFERRED_PORT + "-"
                     + LocalControlServer.MAX_PORT + " 均不可用");
@@ -3427,6 +3553,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("groupPasswordRequired",groupPasswordRequired)
                     .put("personalBackground",personalBackground.state());
         }
+        if(full||"channels".equals(view))settings.put("neighborProbeEnabled",neighborProbeEnabled).put("channelProbe",channelHealth==null?new JSONObject():channelHealth.status());
         if (full || "advanced".equals(view)) {
             settings.put("reverseKeys", reverseUpDown)
                     .put("fullscreenStartup",FullscreenPolicy.isEnabled(this))
@@ -3465,7 +3592,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("liveDelayMode", liveDelayMode);
         }
         if (full || "browser".equals(view) || "script".equals(view)) {
-            settings.put("webSourceEngine", webSourceEngine)
+            JSONObject browserDefaults=WebDomainSettings.defaults(getSharedPreferences(PREFERENCES,MODE_PRIVATE),
+                    defaultWebSourceEngine,defaultWebViewUserAgent);
+            settings.put("webSourceEngine", defaultWebSourceEngine).put("effectiveWebSourceEngine",webSourceEngine)
                     .put("liteNetworkThreadMultiplier",liteNetworkThreadMultiplier)
                     .put("liteNetworkThreadCounts",new JSONObject()
                             .put("0",LiteEngine.networkThreadCount(0)).put("2",LiteEngine.networkThreadCount(2))
@@ -3473,17 +3602,17 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("liteBrowserSupported", LiteWebPlayback.supported())
                     .put("configuredWebSourceEngine", defaultWebSourceEngine)
                     .put("defaultWebSourceEngine",BuildConfig.LITE_BROWSER_DEFAULT&&Build.VERSION.SDK_INT<21&&LiteWebPlayback.supported()?"lite":"system")
-                    .put("webViewResolution", webViewResolution)
-                    .put("webViewPageScale", Math.round(webViewPageScale * 100f) / 100.0d)
-                    .put("webViewMinimalMode", webViewMinimalMode)
-                    .put("webViewLoadImages", webViewLoadImages)
-                    .put("webViewAutoPlaySniffed", webViewAutoPlaySniffed)
-                    .put("webViewAutoPlay", webViewAutoPlay)
-                    .put("webViewAutomaticUserAgentSupported", true)
-                    .put("webViewUserAgent", webViewUserAgent)
-                    .put("webViewBrowserVersion", webViewBrowserVersion)
+                    .put("webViewResolution", browserDefaults.get("webViewResolution"))
+                    .put("webViewPageScale", Math.round(browserDefaults.optDouble("webViewPageScale",1) * 100) / 100.0d)
+                    .put("webViewMinimalMode", browserDefaults.get("webViewMinimalMode"))
+                    .put("webViewLoadImages", browserDefaults.get("webViewLoadImages"))
+                    .put("webViewAutoPlaySniffed", browserDefaults.get("webViewAutoPlaySniffed"))
+                    .put("webViewAutoPlay", browserDefaults.get("webViewAutoPlay"))
+                    .put("webViewAutomaticUserAgentSupported", false)
+                    .put("webViewUserAgent", defaultWebViewUserAgent).put("effectiveWebViewUserAgent",webViewUserAgent)
+                    .put("webViewBrowserVersion", browserDefaults.get("webViewBrowserVersion"))
                     .put("webViewAdBlock", webViewAdBlock)
-                    .put("webViewPageCover", webViewPageCover).put("webViewPageCoverStyle",webViewPageCoverStyle)
+                    .put("webViewPageCover", browserDefaults.get("webViewPageCover")).put("webViewPageCoverStyle",browserDefaults.get("webViewPageCoverStyle"))
                     .put("webViewAdBlockRuleCount", WebAdBlocker.ruleCount())
                     .put("webViewAdBlockUpdating", WebAdBlocker.isUpdating())
                     .put("webViewAdBlockLastUpdatedAt", WebAdBlocker.lastUpdatedAt())
@@ -3962,7 +4091,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     liveBufferAdjusting = IjkStreamMetrics.liveBufferAdjusting(ijk);
                 }
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to read media controller state", error);
+                AppLog.w(TAG, "Unable to read media controller state", error);
             }
         }
         result.put("available", activePlayer != null)
@@ -4098,7 +4227,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                 }
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to enumerate media tracks", error);
+                AppLog.w(TAG, "Unable to enumerate media tracks", error);
             }
         }
         HlsMediaTracks.Manifest manifest = mediaTrackManifest;
@@ -4457,7 +4586,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 remoteVideoQueueDelayMs = remoteVideoSendDelayMs = -1L;
                 request.put("networkDelayMs", -1L).put("encodeDelayMs", -1L)
                         .put("videoQueueDelayMs", -1L).put("videoSendDelayMs", -1L);
-                Log.i(TAG, "Receiver route changed to " + hostUrl);
+                AppLog.i(TAG, "Receiver route changed to " + hostUrl);
             }
             if (hostUrl.length() == 0 || sessionId.length() == 0
                     || !changingRoute && !sessionId.equals(activeSession)) {
@@ -4933,7 +5062,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         hideLoading();
         loadCompleteCatalogInBackground();
         Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-        Log.w(TAG, message);
+        AppLog.w(TAG, message);
     }
 
     private void resetReceiverTelemetry() {
@@ -5096,8 +5225,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         return flyMouseEnabled;
     }
 
+    void raiseWebChannelControls() {
+        if(!(root instanceof ViewGroup))return;
+        ViewGroup parent=(ViewGroup)root;
+        int above=webSourceView==null?-1:parent.indexOfChild(webSourceView);
+        if(webLastFrame!=null&&webLastFrame.active())above=Math.max(above,parent.indexOfChild(webLastFrame.animationView()));
+        View[] controls={channelBar,channelListPanel};
+        for(View control:controls)if(control!=null&&control.getVisibility()==View.VISIBLE&&control.getParent()==parent){
+            // The pointer may remain above native controls. Do not reorder both
+            // on every mouse move when they already cover the webpage.
+            if(parent.indexOfChild(control)<=above)control.bringToFront();
+            above=Math.max(above,parent.indexOfChild(control));
+        }
+    }
     private void ensureFlyMouseOnTop() {
         if (webLastFrame != null) webLastFrame.raise();
+        raiseWebChannelControls();
         if ((isFlyMouseInteractionEnabled() || receiverCursorActive) && flyMouseCursor != null) {
             // bringToFront requests layout even when this child is already last.
             // Pointer motion must not relayout the WebView on every sample.
@@ -5120,6 +5263,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private String handleWebSettings(JSONObject request) throws Exception {
+        if("domain".equals(request.optString("webPreferenceScope")))return handleWebDomainSettings(request);
         if (request.has("fullscreenStartup")) {
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(FullscreenPolicy.PREFERENCE, request.getBoolean("fullscreenStartup")).apply();
@@ -5223,7 +5367,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             autoStart = request.optBoolean("autoStart", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(AUTO_START, autoStart).apply();
-            Log.i(TAG, "Boot auto start=" + autoStart);
+            AppLog.i(TAG, "Boot auto start=" + autoStart);
         }
         if (request.has("playerEngine")) {
             String requested = request.getString("playerEngine");
@@ -5423,6 +5567,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             });
         }
+        if(request.has("neighborProbeEnabled")){
+            neighborProbeEnabled=request.getBoolean("neighborProbeEnabled");
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putBoolean("neighbor_probe_enabled",neighborProbeEnabled).apply();
+            if(!neighborProbeEnabled&&channelHealth!=null)channelHealth.pause();
+        }
+        if(request.optBoolean("probeAllChannels",false)&&channelHealth!=null)channelHealth.all(ChannelCatalog.GROUPS);
         if (request.has("liteNetworkThreadMultiplier")) {
             double raw=request.getDouble("liteNetworkThreadMultiplier");
             if(raw!=0&&raw!=2&&raw!=4&&raw!=8)throw new JSONException("不支持的轻量网络线程倍率");
@@ -5446,11 +5596,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             String engine=request.optString("webSourceEngine","system");
             if(!"system".equals(engine)&&!"lite".equals(engine))throw new JSONException("不支持的网页内核");
             if("lite".equals(engine)&&!LiteWebPlayback.supported())throw new JSONException("此安装包未包含轻量内核；轻量内核需 ARM32 浏览器版（ntv_bro.apk）");
-            webSourceEngine=engine;
-            String memoryKey=webPreferenceMemoryKey();
-            if(rememberChannelWebEngine&&memoryKey!=null)playbackMemory.rememberEngine(memoryKey,engine);
-            else {defaultWebSourceEngine=engine;
-                getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putString("web_source_engine",engine).apply();}
+            if("domain".equals(request.optString("webPreferenceScope"))){
+                String domain=request.optString("webPreferenceDomain","");
+                if(!domain.startsWith("web-domain\u001f")||domain.length()<=11)throw new JSONException("网页域名无效");
+                playbackMemory.rememberEngine(domain,engine);
+            }else{
+                defaultWebSourceEngine=engine;
+                getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putString("web_source_engine",engine).apply();
+            }
+            restoreWebChannelPreferences(currentGroup(),currentChannel());
         }
         if (request.has("webViewResolution")) {
             String rawMode = request.optString(
@@ -5503,17 +5657,20 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
         if (request.has("webViewUserAgent")) {
             String rawUserAgent = request.optString(
-                    "webViewUserAgent", WEB_VIEW_USER_AGENT_AUTO);
+                    "webViewUserAgent", WEB_VIEW_USER_AGENT_WINDOWS);
             String requestedUserAgent = sanitizeWebViewUserAgent(rawUserAgent);
             if (!requestedUserAgent.equals(rawUserAgent)) {
                 throw new JSONException("不支持的浏览器标识");
             }
-            webViewUserAgent = requestedUserAgent;
-            String memoryKey=webPreferenceMemoryKey();
-            if(rememberChannelUserAgent&&memoryKey!=null)playbackMemory.rememberUserAgent(memoryKey,requestedUserAgent);
-            else {defaultWebViewUserAgent=requestedUserAgent;
-                getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
-                        .putString(WEB_VIEW_USER_AGENT, webViewUserAgent).apply();}
+            if("domain".equals(request.optString("webPreferenceScope"))){
+                String domain=request.optString("webPreferenceDomain","");
+                if(!domain.startsWith("web-domain\u001f")||domain.length()<=11)throw new JSONException("网页域名无效");
+                playbackMemory.rememberUserAgent(domain,requestedUserAgent);
+            }else{
+                defaultWebViewUserAgent=requestedUserAgent;
+                getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putString(WEB_VIEW_USER_AGENT,requestedUserAgent).apply();
+            }
+            restoreWebChannelPreferences(currentGroup(),currentChannel());
             applyWebViewSettings = true;
         }
         if (request.has("webViewBrowserVersion")) {
@@ -5687,13 +5844,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .putInt(AUTO_SWITCH_SOURCE_SECONDS, seconds)
                     .putBoolean(AUTO_SWITCH_SOURCE, autoSwitchSource).apply();
             runOnUiThread(() -> scheduleCustomSourceTimeout(currentChannel(), playRequestId));
-            Log.i(TAG, "Automatic source switching seconds=" + seconds);
+            AppLog.i(TAG, "Automatic source switching seconds=" + seconds);
         }
         if (request.has("autoUpdateChannelList")) {
             autoUpdateChannelList = request.optBoolean("autoUpdateChannelList", false);
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(AUTO_UPDATE_CHANNEL_LIST, autoUpdateChannelList).apply();
-            Log.i(TAG, "Automatic channel list update=" + autoUpdateChannelList);
+            AppLog.i(TAG, "Automatic channel list update=" + autoUpdateChannelList);
         }
         if (request.has("liveDelayMode")) {
             String rawMode = request.optString("liveDelayMode", LIVE_DELAY_STABLE);
@@ -5743,7 +5900,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         abortChannelSwitchAnimation();
                         hideLoading();
                         closeChannelList();
-                        Log.i(TAG, "Receiver claim: stopped previous playback and web page");
+                        AppLog.i(TAG, "Receiver claim: stopped previous playback and web page");
                         closeManagementPanel();
                         ManagementActivity.closeAll();
                     }
@@ -6091,7 +6248,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         && (!browserChannelActive || receiverRestoreApplied
                         || takeoverSelectionApplied) && (selectionChanged
                         || (restartActiveCustom && wasCustom))) {
-                    Log.i(TAG, "Restarting active channel after catalog replacement: "
+                    AppLog.i(TAG, "Restarting active channel after catalog replacement: "
                             + currentChannel().name + " source=" + (currentSourceIndex + 1)
                             + "/" + Math.max(1, currentChannel().sourceCount()));
                     switchChannel(currentChannelIndex, currentSourceIndex);
@@ -6130,13 +6287,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         try {
                             groups = remoteCatalogClient.loadCatalog(remoteUrl);
                             remoteCatalogLoaded = true;
-                            Log.i(TAG, "Loaded remote channel catalog from " + remoteUrl);
+                            AppLog.i(TAG, "Loaded remote channel catalog from " + remoteUrl);
                         } catch (IOException error) {
-                            Log.w(TAG, "Remote channel catalog unavailable; using local cache",
+                            AppLog.w(TAG, "Remote channel catalog unavailable; using local cache",
                                     error);
                             groups = playlistManager.loadCached();
                         } catch (JSONException error) {
-                            Log.w(TAG, "Remote channel catalog response is invalid; using cache",
+                            AppLog.w(TAG, "Remote channel catalog response is invalid; using cache",
                                     error);
                             groups = playlistManager.loadCached();
                         }
@@ -6146,16 +6303,16 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         if (isFinishing() || loadGeneration != catalogLoadGeneration.get()
                                 || !remoteUrl.equals(remoteCatalogUrl)) return;
                         applyPlaylistGroups(groups, false, false);
-                        Log.i(TAG, "Cached channel catalog applied before automatic refresh");
+                        AppLog.i(TAG, "Cached channel catalog applied before automatic refresh");
                         try {
                             groups = playlistManager.updateSources(
                                     playlistManager.getSourcesJson()).groups;
-                            Log.i(TAG, "Channel list refreshed automatically on cold start");
+                            AppLog.i(TAG, "Channel list refreshed automatically on cold start");
                         } catch (IOException error) {
-                            Log.w(TAG, "Automatic channel list refresh failed; using cache", error);
+                            AppLog.w(TAG, "Automatic channel list refresh failed; using cache", error);
                             return;
                         } catch (JSONException error) {
-                            Log.w(TAG, "Automatic channel list source data is invalid; using cache",
+                            AppLog.w(TAG, "Automatic channel list source data is invalid; using cache",
                                     error);
                             return;
                         }
@@ -6175,14 +6332,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     for (ChannelCatalog.Group group : groups) {
                         channelCount += group.channels.length;
                     }
-                    Log.i(TAG, "Channel catalog ready in "
+                    AppLog.i(TAG, "Channel catalog ready in "
                             + (SystemClock.elapsedRealtime() - catalogStartedAt)
                             + " ms: " + groups.length + " groups, "
                             + channelCount + " channels");
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                 } catch (RuntimeException error) {
-                    Log.w(TAG, "Unable to load complete channel catalog", error);
+                    AppLog.w(TAG, "Unable to load complete channel catalog", error);
                 }
             }
         }, "channel-catalog-startup").start();
@@ -6306,7 +6463,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
         }
         if (matchedGroup < 0 || matchedChannel < 0) {
-            Log.w(TAG, "Unable to restore receiver channel after takeover: "
+            AppLog.w(TAG, "Unable to restore receiver channel after takeover: "
                     + wanted.name);
             return false;
         }
@@ -6315,7 +6472,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         browsingGroupIndex = matchedGroup;
         int sourceCount = Math.max(1, groups[matchedGroup].channels[matchedChannel].sourceCount());
         currentSourceIndex = snapshot.sourceIndex % sourceCount;
-        Log.i(TAG, "Restored receiver channel after takeover group="
+        AppLog.i(TAG, "Restored receiver channel after takeover group="
                 + groups[matchedGroup].title + " channel="
                 + groups[matchedGroup].channels[matchedChannel].name
                 + " source=" + currentSourceIndex);
@@ -6383,7 +6540,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             matchedChannel = selection.channelIndex;
         }
         if (matchedGroup < 0 || matchedChannel < 0) {
-            Log.w(TAG, "Controller channel is absent from receiver catalog group="
+            AppLog.w(TAG, "Controller channel is absent from receiver catalog group="
                     + selection.groupName + " channel=" + selection.channelName);
             return false;
         }
@@ -6394,7 +6551,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 groups[matchedGroup].channels[matchedChannel].sourceCount());
         currentSourceIndex = selection.sourceIndex % sourceCount;
         pendingTakeoverChannelSelection = null;
-        Log.i(TAG, "Receiver synchronized controller channel group="
+        AppLog.i(TAG, "Receiver synchronized controller channel group="
                 + groups[matchedGroup].title + " channel="
                 + groups[matchedGroup].channels[matchedChannel].name
                 + " source=" + currentSourceIndex);
@@ -6483,7 +6640,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     groupTitle, source, new Channel[] { channel }),
                     Math.max(0, value.optInt("sourceIndex", 0)));
         } catch (Exception error) {
-            Log.w(TAG, "Unable to read last channel snapshot", error);
+            AppLog.w(TAG, "Unable to read last channel snapshot", error);
             preferences.edit().remove(LAST_CHANNEL_SNAPSHOT).apply();
             return null;
         }
@@ -6536,7 +6693,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .putInt(LAST_CHANNEL_INDEX, currentChannelIndex)
                     .apply();
         } catch (JSONException error) {
-            Log.w(TAG, "Unable to save last channel snapshot", error);
+            AppLog.w(TAG, "Unable to save last channel snapshot", error);
         }
     }
 
@@ -6634,19 +6791,17 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if (next == null) break;
             group = next[0]; channel = next[1];
             if (unavailableWebChannels.contains(group + ":" + channel)) continue;
-            Log.w(TAG, "Web channel unavailable request=" + requestId + " reason=" + reason
+            AppLog.w(TAG, "Web channel unavailable request=" + requestId + " reason=" + reason
                     + "; next=" + group + ":" + channel);
             currentGroupIndex = group;
-            startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            // Recovery already runs on the owning player. Relaunching that
+            // Activity needlessly re-enters/reorders its task on MIUI.
             recoveringWebChannel = true;
             try { switchChannel(channel); } finally { recoveringWebChannel = false; }
             Toast.makeText(this, "网页不可用，已切换到下一频道", Toast.LENGTH_LONG).show();
             return;
         }
         showChannelBar(currentChannel().name, "网页不可用，请选择其他频道");
-        startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
         openChannelList(true);
     }
 
@@ -6670,20 +6825,55 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private String webPreferenceMemoryKey(){
         Channel channel=currentChannel();
         if(channel==null||!isWebViewSource(channel.sourceUrl(currentSourceIndex)))return null;
-        return webChannelMemoryKey(currentGroup(),channel);
+        return WebDomainSettings.key(channel.sourceUrl(currentSourceIndex));
+    }
+    private String handleWebDomainSettings(JSONObject request) throws JSONException {
+        final String domain=request.optString("webPreferenceDomain","");
+        WebDomainSettings.save(getSharedPreferences(PREFERENCES,MODE_PRIVATE),domain,request,LiteWebPlayback.supported());
+        // Keep the existing UA/engine memory readable by transition planning
+        // and by installations that used these per-domain choices already.
+        if(request.has("webViewUserAgent"))playbackMemory.rememberUserAgent(domain,request.getString("webViewUserAgent"));
+        if(request.has("webSourceEngine"))playbackMemory.rememberEngine(domain,request.getString("webSourceEngine"));
+        runOnUiThread(()->{
+            if(isFinishing()||!domain.equals(webPreferenceMemoryKey()))return;
+            restoreWebChannelPreferences(currentGroup(),currentChannel());
+            // Reopen the selected line so both engines receive every setting
+            // from the domain profile, including document-start UA and scripts.
+            if(quickChannel!=null){
+                openingQuickChannel=true;
+                try{startChannel(currentChannelIndex);}finally{openingQuickChannel=false;}
+            }else switchChannel(currentChannelIndex,currentSourceIndex);
+            tvUiMenu.refresh();
+        });
+        return new JSONObject().put("ok",true).put("message","网页配置已保存").toString();
     }
     private void restoreWebChannelPreferences(ChannelCatalog.Group group,Channel channel){
         if(channel==null||playbackMemory==null)return;
-        String key=webChannelMemoryKey(group,channel);
-        webViewUserAgent=rememberChannelUserAgent?playbackMemory.userAgent(key,defaultWebViewUserAgent):defaultWebViewUserAgent;
-        webSourceEngine=rememberChannelWebEngine?playbackMemory.engine(key,defaultWebSourceEngine,LiteWebPlayback.supported()):defaultWebSourceEngine;
-        if(!LiteWebPlayback.supported())webSourceEngine="system";
+        String source=channel.sourceUrl(currentSourceIndex);
+        String key=isWebViewSource(source)?WebDomainSettings.key(source):null;
+        SharedPreferences preferences=getSharedPreferences(PREFERENCES,MODE_PRIVATE);
+        JSONObject defaults=WebDomainSettings.defaults(preferences,
+                key==null?defaultWebSourceEngine:playbackMemory.engine(key,defaultWebSourceEngine,LiteWebPlayback.supported()),
+                key==null?defaultWebViewUserAgent:playbackMemory.userAgent(key,defaultWebViewUserAgent));
+        JSONObject settings=WebDomainSettings.effective(preferences,key,defaults,LiteWebPlayback.supported());
+        webViewUserAgent=settings.optString("webViewUserAgent",defaultWebViewUserAgent);
+        webSourceEngine=settings.optString("webSourceEngine",defaultWebSourceEngine);
+        webViewResolution=sanitizeWebViewResolution(settings.optString("webViewResolution","720p"));
+        webViewBrowserVersion=sanitizeWebViewBrowserVersion(settings.optString("webViewBrowserVersion","native"));
+        webViewPageScale=sanitizeWebViewPageScale((float)settings.optDouble("webViewPageScale",1));
+        webViewPageCover=settings.optBoolean("webViewPageCover");
+        webViewPageCoverStyle="black".equals(settings.optString("webViewPageCoverStyle"))?"black":"status";
+        webViewMinimalMode=settings.optBoolean("webViewMinimalMode");
+        webViewLoadImages=settings.optBoolean("webViewLoadImages",true);
+        webViewAutoPlaySniffed=settings.optBoolean("webViewAutoPlaySniffed",true);
+        webViewAutoPlay=settings.optBoolean("webViewAutoPlay",true);
     }
     private void switchChannel(int index) {
         ChannelCatalog.Group group=currentGroup();
         if(group.channels.length==0)return;
         Channel channel=group.channels[ChannelCatalog.wrapIndex(group.channels,index)];
         int source=rememberChannelSource?playbackMemory.source(playbackMemoryKey(group,channel),channel):0;
+        if(channelHealth!=null)source=channelHealth.source(channel,source);
         switchChannel(index,source);
     }
 
@@ -6811,7 +7001,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         channelStartupTiming.plugin(requestId, pendingPluginTimingMs);
         pendingPluginTimingTarget = null;
         pendingPluginTimingMs = 0;
-        Log.i(TAG, "Channel switch begin request=" + requestId
+        AppLog.i(TAG, "Channel switch begin request=" + requestId
                 + " sdk=" + Build.VERSION.SDK_INT
                 + " delayMode=" + liveDelayMode
                 + " channel=" + currentChannel().name);
@@ -6820,7 +7010,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private void logChannelSwitchStage(int requestId, String stage) {
         if (requestId != channelSwitchTimingRequestId || channelSwitchTimingStartedAt <= 0L) return;
         channelStartupTiming.stage(requestId, stage, SystemClock.elapsedRealtime());
-        Log.i(TAG, "Channel switch stage=" + stage + " request=" + requestId
+        AppLog.i(TAG, "Channel switch stage=" + stage + " request=" + requestId
                 + " elapsedMs=" + (SystemClock.elapsedRealtime() - channelSwitchTimingStartedAt));
     }
 
@@ -6836,7 +7026,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (requestId != playRequestId || requestId != channelSwitchTimingRequestId
                 || channelSwitchTimingStartedAt <= 0L || channelStartupTiming.finished(requestId)) return;
         logChannelSwitchStage(requestId, "load-ready");
-        Log.i(TAG, "Channel startup timing request=" + requestId + " "
+        AppLog.i(TAG, "Channel startup timing request=" + requestId + " "
                 + channelStartupTiming.format(requestId));
         if (debugInfoEnabled()) refreshVideoInfo();
     }
@@ -6861,6 +7051,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private void startChannel(int index, EpgManager.Program archive, String archiveUrl,
             boolean freshYangshipin) {
+        if(channelHealth!=null)channelHealth.pause();healthStableAt=0;healthPosition=-1;healthNeighborRequest=-1;
         if (!openingQuickChannel && !requireGroupPassword(currentGroupIndex,
                 index, true, () -> startChannel(index, archive, archiveUrl, freshYangshipin))) return;
         if (archive == null && holdNativeFrameForWebTarget(index,
@@ -7027,7 +7218,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         resetProxyForChannelSwitch();
                         logChannelSwitchStage(requestId, "proxy-ready");
                     } catch (IOException error) {
-                        Log.e(TAG, "Unable to reset proxy for channel switch", error);
+                        AppLog.e(TAG, "Unable to reset proxy for channel switch", error);
                         abortChannelSwitchAnimation();
                         hideLoading();
                         showChannelBar(channel.name, "切换失败: " + error.getMessage());
@@ -7101,7 +7292,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                 playbackDebugPending = false;
                                 completeChannelLoadTiming(requestId);
                                 dismissWebNavigationChannelBar();
-                                Log.i(TAG, "Remote webpage switched with retained decoder: " + channel.name);
+                                AppLog.i(TAG, "Remote webpage switched with retained decoder: " + channel.name);
                             } else {
                                 // A new encoder or a non-cast source needs the complete
                                 // proxy/player reset path. Clear the reuse token first.
@@ -7118,7 +7309,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             remoteResolveThread = null;
                             hideLoading();
                             showChannelBar(channel.name, "网页切换失败：" + error.getMessage());
-                            Log.w(TAG, "Retained cast navigation failed", error);
+                            AppLog.w(TAG, "Retained cast navigation failed", error);
                         }
                     });
                 }
@@ -7229,7 +7420,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 Throwable failure = null;
                 final long installStartedAt = SystemClock.elapsedRealtime();
                 final String component = siteId.length() == 0 ? "catalog" : siteId;
-                Log.i(TAG, "CJS install begin component=" + component);
+                AppLog.i(TAG, "CJS install begin component=" + component);
                 try {
                     if (CjsSource.isSource(siteId)) {
                         CjsPluginRuntime.prepareSource(siteId);
@@ -7242,11 +7433,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                 } catch (Throwable error) {
                     failure = error;
-                    Log.e(TAG, "Unable to install CJS plugin", error);
+                    AppLog.e(TAG, "Unable to install CJS plugin", error);
                 }
                 final String version = installedVersion;
                 final Throwable error = failure;
-                Log.i(TAG, "CJS install complete component=" + component
+                AppLog.i(TAG, "CJS install complete component=" + component
                         + " elapsedMs=" + (SystemClock.elapsedRealtime() - installStartedAt)
                         + " success=" + (failure == null));
                 runOnUiThread(new Runnable() {
@@ -7309,7 +7500,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                     "兼容插件安装失败" + (reason == null ? "" : "：" + reason));
                             return;
                         }
-                        Log.i(TAG, "CJS plugin activated version=" + version);
+                        AppLog.i(TAG, "CJS plugin activated version=" + version);
                         pendingPluginTimingMs = Math.max(0, SystemClock.elapsedRealtime() - pendingPluginTimingStart);
                         startChannel(currentChannelIndex);
                     }
@@ -7380,7 +7571,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         }
                     });
                 } catch (final Exception error) {
-                    Log.w(TAG, "Unable to read clicked userscript " + url, error);
+                    AppLog.w(TAG, "Unable to read clicked userscript " + url, error);
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             if (generation != userScriptInstallGeneration || isFinishing()
@@ -7707,7 +7898,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (returnFromFailedSniffedPlayback(label)) return;
         String message = detail == null ? "" : detail.toLowerCase(java.util.Locale.US);
         boolean disconnected = isDeviceNetworkDisconnected();
-        if (!disconnected && currentChannel().sourceCount() > 1) {
+        // A backup may be local/LAN even when legacy ConnectivityManager reports
+        // no active Internet network. Try each configured line once either way.
+        if (currentChannel().sourceCount() > 1) {
             switchCustomSource(1, true, label, true);
             return;
         }
@@ -7774,7 +7967,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
             return true;
         }
-        if (automatic && !autoSwitchSource && !confirmedUnavailable) {
+        if (automatic && !autoSwitchSource && !confirmedUnavailable && !neighborProbeEnabled) {
             abortChannelSwitchAnimation();
             hideLoading();
             showChannelBar(channel.name, reason + "，请按左右方向键切换线路");
@@ -7998,7 +8191,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 || systemLowRam
                 || "mt6580".equalsIgnoreCase(Build.HARDWARE)
                 || (memoryClassMb > 0 && memoryClassMb <= 64);
-        Log.i(TAG, "Resource profile low=" + lowResourceDevice
+        AppLog.i(TAG, "Resource profile low=" + lowResourceDevice
                 + " memoryClassMb=" + memoryClassMb
                 + " largeMemoryClassMb=" + largeMemoryClassMb
                 + " heapLimitMb=" + (Runtime.getRuntime().maxMemory() / (1024L * 1024L)));
@@ -8103,7 +8296,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         ijk.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "last-high-water-mark-ms", level == 0 ? 3000 : 5000);
                         ijk.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "min-frames", level == 0 ? 360 : level == 1 ? 480 : 720);
                     }
-                    Log.i(TAG, "Automatic live buffering level=" + level + " processingRatio=" + ratio);
+                    AppLog.i(TAG, "Automatic live buffering level=" + level + " processingRatio=" + ratio);
                 });
             });
         }
@@ -8194,7 +8387,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     HlsProxyServer.configureCmgRuntimeClock(
                             cmgUpdateBaseTimeMs > 0L ? cmgUpdateBaseTimeMs : cmgInitTimeMs,
                             warmup.clockOffsetMs);
-                    Log.i(TAG, "Configured CMG runtime from Yangshipin tag="
+                    AppLog.i(TAG, "Configured CMG runtime from Yangshipin tag="
                             + cmgTag + " initialTag=" + cmgInitialUpdateTag
                             + " updateTag=" + cmgUpdateTag + " ok=" + configured
                             + " warmup=" + warmup.count + "/" + cmgUpdateWarmupCount
@@ -8214,16 +8407,16 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 if (resolvedRequestId == freshYangshipinRequestId
                         && refreshYangshipinPlayback(resolvedRequestId, reason)) return;
                 if (resolverChannel.url != null) {
-                    Log.w(TAG, "Falling back to VDN for " + playbackChannel.name
+                    AppLog.w(TAG, "Falling back to VDN for " + playbackChannel.name
                             + ": " + reason);
                     resolveFallbackUrl(playbackChannel, requestId);
                 } else if (currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM
                         && resolverChannel != playbackChannel) {
-                    Log.w(TAG, "Embedded YSP resolve failed for " + playbackChannel.name
+                    AppLog.w(TAG, "Embedded YSP resolve failed for " + playbackChannel.name
                             + ": " + reason);
                     handleUnavailableSource("央视频解析失败", reason);
                 } else {
-                    Log.w(TAG, "YSP resolve failed for " + playbackChannel.name
+                    AppLog.w(TAG, "YSP resolve failed for " + playbackChannel.name
                             + ": " + reason);
                     abortChannelSwitchAnimation();
                     hideLoading();
@@ -8240,7 +8433,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         try {
             return (int) Long.parseLong(text, 16);
         } catch (NumberFormatException error) {
-            Log.w(TAG, "Invalid CMG update tag: " + text);
+            AppLog.w(TAG, "Invalid CMG update tag: " + text);
             return 0;
         }
     }
@@ -8260,7 +8453,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (initTimeMs > 0L) {
             int matchedOffset = initializeCmgAtOfficialInitTag(initTimeMs, targetInitTag);
             clockOffsetMs = matchedOffset;
-            Log.i(TAG, "CMG native traced InitPlayer time=" + initTimeMs
+            AppLog.i(TAG, "CMG native traced InitPlayer time=" + initTimeMs
                     + " offset=" + matchedOffset
                     + " initResult=" + String.format(Locale.US, "%08x",
                     NativeCmgDecryptor.getPlayerInitResultForProbe()));
@@ -8268,7 +8461,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (nativeTrace != null && nativeTrace.length() > 0) {
             int replayTag = NativeCmgDecryptor.replayOfficialTraceForProbe(
                     nativeTrace, trace, baseTimeMs, clockOffsetMs);
-            Log.i(TAG, "CMG native official trace replay tag="
+            AppLog.i(TAG, "CMG native official trace replay tag="
                     + String.format(Locale.US, "%08x", replayTag)
                     + " target=" + String.format(Locale.US, "%08x", targetUpdateTag)
                     + " traceLen=" + nativeTrace.length());
@@ -8290,14 +8483,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 int officialTag = parseHexUpdateTag(officialTagText);
                 if (firstMismatch < 0 && officialTag != 0 && lastTag != officialTag) {
                     firstMismatch = index;
-                    Log.i(TAG, "CMG traced warmup first tag mismatch index=" + index
+                    AppLog.i(TAG, "CMG traced warmup first tag mismatch index=" + index
                             + " nativeTag=" + String.format(Locale.US, "%08x", lastTag)
                             + " officialTag=" + officialTagText
                             + " deltaMs=" + deltaMs);
                 }
             }
             NativeCmgDecryptor.clearClockForProbe();
-            Log.i(TAG, "CMG native traced UpdatePlayer warmup count=" + tracedCount
+            AppLog.i(TAG, "CMG native traced UpdatePlayer warmup count=" + tracedCount
                     + "/" + count + " lastTag=" + String.format(Locale.US, "%08x", lastTag)
                     + " firstMismatch=" + firstMismatch
                     + " baseTimeMs=" + baseTimeMs);
@@ -8309,7 +8502,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         NativeCmgDecryptor.clearClockForProbe();
         if (count > 0) {
-            Log.i(TAG, "CMG native UpdatePlayer warmup count=" + count
+            AppLog.i(TAG, "CMG native UpdatePlayer warmup count=" + count
                     + " lastTag=" + String.format(Locale.US, "%08x", lastTag));
         }
         return new CmgWarmupResult(count, clockOffsetMs);
@@ -8351,7 +8544,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 bestResult = result;
             }
             if (targetInitTag != 0 && result == targetInitTag) {
-                Log.i(TAG, "CMG native InitPlayer matched official tag="
+                AppLog.i(TAG, "CMG native InitPlayer matched official tag="
                         + String.format(Locale.US, "%08x", targetInitTag)
                         + " offsetMs=" + offset);
                 return offset;
@@ -8361,7 +8554,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         NativeCmgDecryptor.resetRuntimeForProbe();
         NativeCmgDecryptor.setClockForProbe(initTimeMs);
         NativeCmgDecryptor.initializeRuntimeForProbe();
-        Log.w(TAG, "CMG native InitPlayer did not match official tag target="
+        AppLog.w(TAG, "CMG native InitPlayer did not match official tag target="
                 + String.format(Locale.US, "%08x", targetInitTag)
                 + " first=" + String.format(Locale.US, "%08x", bestResult)
                 + " searchedOffsetMs=" + bestOffset);
@@ -8538,7 +8731,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         htmlMimeOverride = result.htmlMimeOverride;
                     } catch (final IOException error) {
                         // Android omits the throwable stack when a cause is UnknownHostException.
-                        Log.w(TAG, "Unable to resolve dynamic source " + streamUrl + ": " + error, error);
+                        AppLog.w(TAG, "Unable to resolve dynamic source " + streamUrl + ": " + error, error);
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
@@ -8627,7 +8820,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     });
                 } catch (final Exception error) {
                     if (Thread.currentThread().isInterrupted()) return;
-                    Log.w(TAG, "Unable to resolve remote channel " + channel.name, error);
+                    AppLog.w(TAG, "Unable to resolve remote channel " + channel.name, error);
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -8742,7 +8935,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         if (failedRequestId == freshYangshipinRequestId
                                 && refreshYangshipinPlayback(failedRequestId, reason)) return;
                         if(retryWarmedSource(failedRequestId))return;
-                        Log.w(TAG, "CJS site resolve failed for " + pageUrl + ": " + reason);
+                        AppLog.w(TAG, "CJS site resolve failed for " + pageUrl + ": " + reason);
                         handleUnavailableSource("站点插件解析失败", reason);
                     }
                 };
@@ -8788,7 +8981,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             try {
                 startPlayer(channel, streamUrl, false, true);
             } catch (IOException | RuntimeException error) {
-                Log.w(TAG, "Unable to receive RTSP cast", error);
+                AppLog.w(TAG, "Unable to receive RTSP cast", error);
             }
             return;
         }
@@ -8804,7 +8997,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             // do not fetch/classify the same playlist before opening the player.
             if (sourceMetadataProbeNeeded() && useAndroidHlsPlayer(Build.VERSION.SDK_INT, streamUrl))
                 proxy.enableSourceVideoProbe();
-            Log.i(TAG, "HLS player opened without preflight: " + streamUrl);
+            AppLog.i(TAG, "HLS player opened without preflight: " + streamUrl);
             startResolvedPlayerNow(channel, streamUrl, false);
             return;
         }
@@ -8846,7 +9039,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     String nativeHls = !direct && shouldTryDirectHttpHls(url)
                             ? candidate.selectDirectHttpHlsUrl(ready) : null;
                     if (nativeHls != null && isResolvedHlsSource(nativeHls)) {
-                        Log.i(TAG,"Clear HTTP HLS handed directly to IJK: " + nativeHls);
+                        AppLog.i(TAG,"Clear HTTP HLS handed directly to IJK: " + nativeHls);
                         startResolvedPlayerNow(channel,nativeHls,true);
                     } else startResolvedPlayerNow(channel,url,direct);
                 });
@@ -8857,7 +9050,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     if(retryWarmedSource(request))return;
                     if(!catchupValidationError.isEmpty())return;
                     handleUnavailableSource("清单加载失败",error.toString());
-                    Log.w(TAG,"HLS manifest preparation failed: "+channel.name,error);
+                    AppLog.w(TAG,"HLS manifest preparation failed: "+channel.name,error);
                 });
             }
         },"channel-manifest");
@@ -8894,7 +9087,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         try {
             startPlayer(channel, streamUrl, forceSoftwareDecode, directHttpMedia);
         } catch (IOException | IllegalArgumentException | IllegalStateException error) {
-            Log.e(TAG, "Unable to play " + channel.name, error);
+            AppLog.e(TAG, "Unable to play " + channel.name, error);
             if(retryWarmedSource(playRequestId))return;
             if (returnFromFailedSniffedPlayback("资源连接失败")) return;
             if (currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM) {
@@ -9042,13 +9235,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         systemCodecFallbackRequestId = requestId;
         systemCodecFallbackUrl = streamUrl;
         autoSoftwareDecode = false;
-        Log.w(TAG, "MediaCodec unavailable; using system player reason=" + reason
+        AppLog.w(TAG, "MediaCodec unavailable; using system player reason=" + reason
                 + " request=" + requestId + " sdk=" + Build.VERSION.SDK_INT);
         updateLoadingStatus("硬解不可用，正在切换系统播放器");
         try {
             startAndroidMediaPlayer(channel, streamUrl, false, true, resumeMs);
         } catch (IOException | RuntimeException error) {
-            Log.w(TAG, "System codec fallback failed", error);
+            AppLog.w(TAG, "System codec fallback failed", error);
             recordLoadError("系统播放器无法播放此媒体，请切换线路或手动选择解码方式");
             hideLoading();
             showChannelBar(channel.name, "系统播放器也无法播放，请切换线路或调整解码方式");
@@ -9205,7 +9398,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             channelBar.postDelayed(this, 5000L);
                             return;
                         }
-                        Log.w(TAG, "System HLS first frame timed out after " + elapsed
+                        AppLog.w(TAG, "System HLS first frame timed out after " + elapsed
                                 + "ms channel=" + channel.name);
                         recoverStalledPlayback(sourceRequestId, nextPlayer,
                                 "system HLS startup stalled");
@@ -9270,7 +9463,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             seekFeedback.failed("播放加载失败（"+what+"/"+extra+"），请重试或切换线路");
             lastSystemPlaybackError = SystemPlaybackError.message(what, extra);
             recordLoadError(lastSystemPlaybackError);
-            Log.w(TAG, "Android MediaPlayer " + (hls ? "HLS" : "MP3")
+            AppLog.w(TAG, "Android MediaPlayer " + (hls ? "HLS" : "MP3")
                     + " error=" + what + "/" + extra
                     + " channel=" + channel.name
                     + (hls && proxy != null ? " variant=" + proxy.selectedVariantDescription()
@@ -9313,7 +9506,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         ? proxy.systemPlayerMp3Url(streamUrl) : proxy.mediaUrl(streamUrl));
             showChannelBar(channel.name, "系统播放器播放中");
             prepareSystemPlayerAfterRelease(nextPlayer, sourceRequestId);
-            Log.i(TAG, "Android MediaPlayer " + (hls ? "HLS" : systemVideo ? "MP4" : "MP3")
+            AppLog.i(TAG, "Android MediaPlayer " + (hls ? "HLS" : systemVideo ? "MP4" : "MP3")
                     + (useSystemDolbyVisionPlayer() ? " Dolby Vision passthrough codecs=" + proxy.selectedVideoCodecs() : "")
                     + " sdk=" + Build.VERSION.SDK_INT
                     + " channel=" + channel.name);
@@ -9322,7 +9515,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if (!hls && !PLAYER_ENGINE_SYSTEM.equals(playerEngine)
                     && !useSystemCodecFallback(channel, streamUrl, forceSoftwareDecode)) {
                 androidMp3FallbackRequestId = sourceRequestId;
-                Log.w(TAG, "Android MP3 player unavailable; retrying with IJK", error);
+                AppLog.w(TAG, "Android MP3 player unavailable; retrying with IJK", error);
                 PlaybackErrorReporting.caught(sourceRequestId,"SystemPlayer","OpenException",error);
                 startIjkPlayer(channel, streamUrl, forceSoftwareDecode,
                         streamUrl.equals(directHttpMediaUrl));
@@ -9344,7 +9537,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if(player!=expected||request!=playRequestId)return;
         if(!DECODE_MODE_HARDWARE.equals(decodeMode)&&missingCodecSoftwareRetryRequestId!=request){
             missingCodecSoftwareRetryRequestId=request;
-            Log.w(TAG,"HEVC hardware unavailable; one software attempt request="+request);
+            AppLog.w(TAG,"HEVC hardware unavailable; one software attempt request="+request);
             updateLoadingStatus("设备无 H.265 硬解，正在尝试软件解码");
             try{startIjkPlayer(channel,url,true,url.equals(directHttpMediaUrl));}
             catch(IOException|RuntimeException error){
@@ -9357,14 +9550,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private void failPlayerStartup(int request, IMediaPlayer expected, String message, String detail) {
         if(request!=playRequestId||player!=expected||isFinishing())return;
-        Log.w(TAG,"Player startup failed request="+request+" message="+message+" detail="+detail);
+        AppLog.w(TAG,"Player startup failed request="+request+" message="+message+" detail="+detail);
         recordLoadError(message);
         abortChannelSwitchAnimation();
         releasePlayer(true);
         hideLoading();
         showChannelBar(currentChannel().name,message);
         Toast.makeText(this,message,Toast.LENGTH_LONG).show();
-        if(autoSwitchSourceSeconds>0&&currentChannel().sourceCount()>1)
+        if((autoSwitchSourceSeconds>0||neighborProbeEnabled)&&currentChannel().sourceCount()>1)
             switchCustomSource(1,true,message,true);
     }
 
@@ -9449,7 +9642,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (!videoView.isSurfaceReady()) {
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
             updateLoadingStatus("等待视频输出界面");
-            Log.i(TAG, "Deferring player until Surface is ready channel=" + channel.name);
+            AppLog.i(TAG, "Deferring player until Surface is ready channel=" + channel.name);
             return;
         }
         clearPendingPlayer();
@@ -9463,7 +9656,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         resetVideoLayout();
         final IjkMediaPlayer nextPlayer;
         try {
-            IjkMediaPlayer.loadLibrariesOnce(null);
+            AppLog.loadIjkLibraries();
             nextPlayer = new IjkMediaPlayer();
         } catch (LinkageError error) {
             // Wrong ABI, damaged ELF or missing JNI symbols must use the same
@@ -9556,7 +9749,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         ? "fcc-rv32" : "fcc-_es2");
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,"ntv-hdr-mode",
                 HdrMode.nativeValue(hdrMode));
-        Log.i(TAG,"HDR mode=" + hdrMode + " softwareDecode=" + softwareDecode);
+        AppLog.i(TAG,"HDR mode=" + hdrMode + " softwareDecode=" + softwareDecode);
         activeSoftwareDecode = softwareDecode;
         activePlayerChannel = channel;
         rememberActivePlayerSelection();
@@ -9592,7 +9785,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             }
                             if (!HARDWARE_DECODER_AUTO.equals(hardwareDecoder)
                                     && "video/avc".equalsIgnoreCase(mimeType)) {
-                                Log.i(TAG, "Forcing MediaCodec=" + hardwareDecoder
+                                AppLog.i(TAG, "Forcing MediaCodec=" + hardwareDecoder
                                         + " mime=" + mimeType + " profile=" + profile
                                         + " level=" + level);
                                 return hardwareDecoder;
@@ -9605,7 +9798,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                 channelBar.post(()->retryMissingVideoCodec(nextPlayer,channel,streamUrl,sourceRequestId));
                                 return null;
                             }
-                            Log.i(TAG, "Default MediaCodec=" + selected + " mime=" + mimeType
+                            AppLog.i(TAG, "Default MediaCodec=" + selected + " mime=" + mimeType
                                     + " profile=" + profile + " level=" + level);
                             if (selected == null && canFallbackToSystemCodec(channel, streamUrl, softwareDecode)) {
                                 channelBar.post(() -> fallbackToSystemCodec(nextPlayer, channel,
@@ -9742,7 +9935,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             // every receiver version. Missing protocol fields default to TCP.
             String effectiveRtspTransport = realtimeCastSource
                     ? receiverCastTransport : rtspTransport;
-            if (realtimeCastSource) Log.i(TAG, "Cast RTSP transport=" + effectiveRtspTransport);
+            if (realtimeCastSource) AppLog.i(TAG, "Cast RTSP transport=" + effectiveRtspTransport);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,
                     "rtsp_transport", effectiveRtspTransport);
         }
@@ -9750,9 +9943,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
          * can retain an empty localhost DNS-cache entry from the closed proxy,
          * making the first connection to the new port fail spuriously. */
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_clear", 1);
-        // The old native cache keys only by host but retains the old socket port.
-        // Every channel proxy uses a new loopback port; DNS is already handled upstream.
-        if (proxy != null) nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_timeout", 0);
+        // The old cache retains a socket port. A zero TTL also skips its clear
+        // branch, leaving old entries visible to nested HLS opens. A 1ms TTL
+        // executes the clear and prevents reuse across ephemeral proxy ports.
+        if (proxy != null) nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_timeout", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
         boolean genericThirdPartySource = customSource && !cctvSource && !yangshipinSource
                 && !realtimeCastSource && !remoteCatalogPlayback;
@@ -9935,7 +10129,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         if (player == nextPlayer && sourceRequestId == playRequestId && audioOnlyPlayback)
                             audioArtwork.setCover(art);
                     });
-                    Log.i(TAG, "Audio channel ready: " + artworkTitle);
+                    AppLog.i(TAG, "Audio channel ready: " + artworkTitle);
                 }
 
                 mediaTrackManifest = proxy == null ? null : proxy.mediaTracks(streamUrl);
@@ -10018,7 +10212,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     revealIncomingChannel(sourceRequestId);
                     persistPlayingChannel(channel, sourceRequestId);
                     refreshChannelPlaybackStatus();
-                    Log.i(TAG, "First video frame rendered decoder="
+                    AppLog.i(TAG, "First video frame rendered decoder="
                             + (softwareDecode ? "software" : "hardware")
                             + " channel=" + channel.name);
                     scheduleVideoInfoRefresh();
@@ -10090,7 +10284,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                 : playbackChannelStatus(mediaPlayer, softwareDecode));
                     }
                     if (elapsed >= 250L) {
-                        Log.i(TAG, "Buffering recovered channel=" + channel.name
+                        AppLog.i(TAG, "Buffering recovered channel=" + channel.name
                                 + " elapsedMs=" + elapsed);
                     }
                 }
@@ -10195,7 +10389,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         // An explicit HLS URL may return HTML or a script response.
                         // Retry classification once for this request before failing the source.
                         directHlsFallbackRequestId = sourceRequestId;
-                        Log.w(TAG,"HLS open failed; retrying source classification: " + what + "/" + extra);
+                        AppLog.w(TAG,"HLS open failed; retrying source classification: " + what + "/" + extra);
                         releasePlayer(true);
                         showLoading(channel.name,"正在恢复播放");
                         afterPlayerRelease(sourceRequestId,()->{
@@ -10245,7 +10439,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         final int requestId = playRequestId;
                         final IMediaPlayer failedPlayer = mediaPlayer;
                         final int retry = ++playerStartRetryCount;
-                        Log.w(TAG, "Player start failed; retrying local proxy request "
+                        AppLog.w(TAG, "Player start failed; retrying local proxy request "
                                 + retry + "/2 error=" + what + "/" + extra);
                         channelBar.postDelayed(new Runnable() {
                             @Override
@@ -10256,7 +10450,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                 try {
                                     startPlayer(channel, streamUrl);
                                 } catch (IOException error) {
-                                    Log.e(TAG, "Unable to retry " + channel.name, error);
+                                    AppLog.e(TAG, "Unable to retry " + channel.name, error);
                                 }
                             }
                         }, 500L);
@@ -10286,7 +10480,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     directLiveHls || genericLiveHls ? HlsProxyServer.DEFAULT_USER_AGENT : "nTv/" + BuildConfig.VERSION_NAME);
         }
         if (directHttpMedia) {
-            Log.i(TAG, "Opening resolved media " + (directDataSource ? "directly: " : "through streaming proxy: ") + streamUrl);
+            AppLog.i(TAG, "Opening resolved media " + (directDataSource ? "directly: " : "through streaming proxy: ") + streamUrl);
         }
         if (directDataSource && (streamUrl.startsWith("http://") || streamUrl.startsWith("https://"))
                 && !TextUtils.isEmpty(webStreamHeaders)) {
@@ -10317,11 +10511,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     return;
                 }
                 if (pendingIjkPrepareAfterRelease == this) pendingIjkPrepareAfterRelease = null;
-                if (pending.getCount() != 0) Log.w(TAG,"Player release wait timed out request=" + requestId);
+                if (pending.getCount() != 0) AppLog.w(TAG,"Player release wait timed out request=" + requestId);
                 try { armPlayerStartupWatchdog(nextPlayer,requestId);nextPlayer.prepareAsync(); }
                 catch (RuntimeException error) {
                     PlaybackErrorReporting.caught(requestId,"IJK","PrepareException",error);
-                    Log.w(TAG,"Unable to prepare replacement player",error);
+                    AppLog.w(TAG,"Unable to prepare replacement player",error);
                     recoverStalledPlayback(requestId,nextPlayer,"player prepare failed");
                 }
             }
@@ -10348,7 +10542,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     nextPlayer.prepareAsync();
                 } catch(RuntimeException error) {
                     PlaybackErrorReporting.caught(requestId,"SystemPlayer","PrepareException",error);
-                    Log.w(TAG,"Unable to prepare system player after release",error);
+                    AppLog.w(TAG,"Unable to prepare system player after release",error);
                     lastSystemPlaybackError="系统播放器准备失败，请重试或切换解码模式";
                     releasePlayer(true);hideLoading();
                     showChannelBar(currentChannel().name,lastSystemPlaybackError);
@@ -10499,9 +10693,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             }
             hardwareVideoDecoderAvailable = hasHardwareVideo;
-            if (!hasHardwareVideo) Log.w(TAG, "MediaCodecList exposes no hardware video decoder; system player fallback enabled");
+            if (!hasHardwareVideo) AppLog.w(TAG, "MediaCodecList exposes no hardware video decoder; system player fallback enabled");
         } catch (Throwable error) {
-            Log.w(TAG, "Unable to enumerate AVC hardware decoders", error);
+            AppLog.w(TAG, "Unable to enumerate AVC hardware decoders", error);
         }
         cachedHardwareDecoderNames = decoders;
         return decoders;
@@ -10523,10 +10717,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             String message = "当前设备不支持 " + readableCodec(video.mCodecName, null)
                     + " 10bit 硬解，软解播放可能卡顿";
             Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-            Log.i(TAG, "Ten-bit hardware unavailable: " + video.mCodecName
+            AppLog.i(TAG, "Ten-bit hardware unavailable: " + video.mCodecName
                     + " profile=" + video.mCodecProfile + " request=" + requestId);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to inspect 10-bit playback support", error);
+            AppLog.w(TAG, "Unable to inspect 10-bit playback support", error);
         }
     }
 
@@ -10616,7 +10810,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             multicastPlaybackLock.setReferenceCounted(false);
             multicastPlaybackLock.acquire();
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to enable Wi-Fi multicast reception", error);
+            AppLog.w(TAG, "Unable to enable Wi-Fi multicast reception", error);
             releaseMulticastPlayback();
         }
     }
@@ -10626,7 +10820,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         try {
             if (multicastPlaybackLock.isHeld()) multicastPlaybackLock.release();
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to release Wi-Fi multicast reception", error);
+            AppLog.w(TAG, "Unable to release Wi-Fi multicast reception", error);
         }
         multicastPlaybackLock = null;
     }
@@ -10956,7 +11150,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 mediaPlayer.deselectTrack(selected);
             }
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to deselect media track type=" + type, error);
+            AppLog.w(TAG, "Unable to deselect media track type=" + type, error);
         }
     }
 
@@ -11039,7 +11233,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 if(match>bestMatch){selected=i;bestMatch=match;}
             }
             try { selectHlsSubtitle(mediaPlayer,HlsMediaTracks.SUBTITLE_BASE+selected); }
-            catch(IOException error){Log.w(TAG,"Unable to start HLS subtitle",error);}
+            catch(IOException error){AppLog.w(TAG,"Unable to start HLS subtitle",error);}
         } else restoreRememberedTrack(mediaPlayer, channel, false);
     }
 
@@ -11075,7 +11269,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     // Restoring a preference must not replace the user's global language choice.
                     mediaPlayer.selectTrack(index);
                 } catch (RuntimeException error) {
-                    Log.w(TAG, "Unable to restore remembered media track", error);
+                    AppLog.w(TAG, "Unable to restore remembered media track", error);
                 }
                 return;
             }
@@ -11162,14 +11356,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     // VOD position and the chosen tracks from the first decoded frame.
                     try {
                         long resume = changed.getDuration() > 0 ? Math.max(0L, current) : 0;
-                        Log.w(TAG, "Recovering stalled media track switch at " + resume);
+                        AppLog.w(TAG, "Recovering stalled media track switch at " + resume);
                         showLoading(channel.name, "正在恢复轨道播放");
                         startIjkPlayer(channel, url, software, direct, tracks, resume);
                         trackResumePlayer = player instanceof IjkMediaPlayer ? (IjkMediaPlayer) player : null;
                         trackResumePosition = 0L;
                         trackResumePlaying = true;
                     } catch (IOException error) {
-                        Log.w(TAG, "Unable to recover media track switch", error);
+                        AppLog.w(TAG, "Unable to recover media track switch", error);
                         updateLoadingStatus("轨道恢复失败，请切换其他音轨或线路");
                     }
                     return;
@@ -11365,7 +11559,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         updateChannelPanelWidth();
         updateChannelBarWidth();
         configureVideoClockForViewport(viewportWidth, viewportHeight);
-        Log.i(TAG, "Native UI scale mode=" + uiScaleMode + " factor=" + nextScale
+        AppLog.i(TAG, "Native UI scale mode=" + uiScaleMode + " factor=" + nextScale
                 + " viewport=" + viewportWidth + "x" + viewportHeight
                 + " densityDpi=" + metrics.densityDpi
                 + " diagonal=" + detectedDisplayInches);
@@ -11522,7 +11716,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         configureDebugInfoForViewport(viewportWidth, viewportHeight);
         clockViewportWidth = viewportWidth;
         clockViewportHeight = viewportHeight;
-        Log.i(TAG, "Video clock layout viewport=" + viewportWidth + "x" + viewportHeight
+        AppLog.i(TAG, "Video clock layout viewport=" + viewportWidth + "x" + viewportHeight
                 + " textPx=" + Math.round(textSizePx)
                 + " size=" + params.width + "x" + params.height
                 + " margins=" + params.rightMargin + "," + params.topMargin);
@@ -11701,7 +11895,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     return;
                 }
                 if (softwareDecode) {
-                    Log.w(TAG, "Software decoder produced no visible frame channel="
+                    AppLog.w(TAG, "Software decoder produced no visible frame channel="
                             + channel.name);
                     showChannelBar(channel.name, "兼容软解仍未检测到画面");
                     return;
@@ -11718,7 +11912,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         || lowResourceDevice;
                 if (legacyCodec && legacyHardwareRetryRequestId != requestId) {
                     legacyHardwareRetryRequestId = requestId;
-                    Log.w(TAG, "No rendered frame; recreating legacy hardware decoder with "
+                    AppLog.w(TAG, "No rendered frame; recreating legacy hardware decoder with "
                             + "ready Surface device=" + Build.MANUFACTURER + "/" + Build.MODEL
                             + " sdk=" + Build.VERSION.SDK_INT + " outputFps="
                             + watchedPlayer.getVideoOutputFramesPerSecond());
@@ -11726,7 +11920,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     try {
                         startPlayer(channel, streamUrl, false);
                     } catch (IOException error) {
-                        Log.e(TAG, "Unable to restart legacy hardware decoder", error);
+                        AppLog.e(TAG, "Unable to restart legacy hardware decoder", error);
                         hideLoading();
                         showChannelBar(channel.name, "兼容硬解重试失败: " + error.getMessage());
                     }
@@ -11734,20 +11928,20 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
                 if (!DECODE_MODE_AUTO.equals(decodeMode)
                         || Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT) {
-                    Log.w(TAG, "Hardware decoder produced no visible frame; automatic fallback "
+                    AppLog.w(TAG, "Hardware decoder produced no visible frame; automatic fallback "
                             + "disabled mode=" + decodeMode + " channel=" + channel.name);
                     showChannelBar(channel.name, "硬解未检测到画面，可在管理页选择兼容软解");
                     return;
                 }
                 autoSoftwareDecode = true;
-                Log.w(TAG, "Hardware decoder produced no visible frame; falling back to "
+                AppLog.w(TAG, "Hardware decoder produced no visible frame; falling back to "
                         + "software decoder device=" + Build.MANUFACTURER + "/" + Build.MODEL
                         + " sdk=" + Build.VERSION.SDK_INT + " channel=" + channel.name);
                 showLoading(channel.name, "硬解未检测到画面，正在切换兼容软解");
                 try {
                     startPlayer(channel, streamUrl, true);
                 } catch (IOException error) {
-                    Log.e(TAG, "Unable to start software decoder fallback", error);
+                    AppLog.e(TAG, "Unable to start software decoder fallback", error);
                     hideLoading();
                     showChannelBar(channel.name, "兼容软解启动失败: " + error.getMessage());
                 }
@@ -11782,7 +11976,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             final Channel castChannel = activePlayerChannel;
             final String castUrl = activePlayerStreamUrl;
             final boolean software = activeSoftwareDecode;
-            Log.w(TAG, "Recovering interrupted cast reason=" + reason
+            AppLog.w(TAG, "Recovering interrupted cast reason=" + reason
                     + " sdk=" + Build.VERSION.SDK_INT);
             showLoading(currentChannel().name, "投屏连接中断，正在重连");
             channelBar.postDelayed(new Runnable() {
@@ -11790,7 +11984,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     if (castRequest != playRequestId || player != castPlayer) return;
                     try { startPlayer(castChannel, castUrl, software); }
                     catch (IOException error) {
-                        Log.w(TAG, "Unable to reconnect cast", error);
+                        AppLog.w(TAG, "Unable to reconnect cast", error);
                         stallRecoveryRequestId = -1;
                         startChannel(currentChannelIndex);
                     }
@@ -11805,7 +11999,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 && !retryableLegacyHlsError(reason)) {
             // A generic framework error can mean ION/OMX exhaustion. Creating
             // another decoder before the old one exits compounds that failure.
-            Log.w(TAG, "Stopping failed legacy HLS player without automatic retry"
+            AppLog.w(TAG, "Stopping failed legacy HLS player without automatic retry"
                     + " channel=" + currentChannel().name + " reason=" + reason);
             abortChannelSwitchAnimation();
             releasePlayer(true);
@@ -11828,7 +12022,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     || decoderFailure && watchedPlayer instanceof IjkMediaPlayer
                     && DECODE_MODE_AUTO.equals(decodeMode) && Build.VERSION.SDK_INT > 19
                     && playbackRecoveryAttempts >= 2;
-            Log.w(TAG, "Recovering stalled playback attempt="
+            AppLog.w(TAG, "Recovering stalled playback attempt="
                     + playbackRecoveryAttempts + "/" + recoveryLimit
                     + " reason=" + reason);
             String recoveryMessage = playbackRecoveryMessage(videoOutputStopped,
@@ -11852,7 +12046,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             restartPlayerPreservingPosition(delayedChannel, delayedUrl,
                                     delayedSoftwareDecode);
                         } catch (IOException error) {
-                            Log.w(TAG, "Unable to restart stalled system player", error);
+                            AppLog.w(TAG, "Unable to restart stalled system player", error);
                             startChannel(currentChannelIndex);
                         }
                     }, delayMs);
@@ -11862,7 +12056,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     restartPlayerPreservingPosition(retryChannel, retryUrl, retrySoftwareDecode);
                     return;
                 } catch (IOException error) {
-                    Log.w(TAG, "Unable to restart stalled stream", error);
+                    AppLog.w(TAG, "Unable to restart stalled stream", error);
                 }
             }
             startChannel(currentChannelIndex);
@@ -11889,7 +12083,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             currentSourceIndex = (currentSourceIndex + 1) % sourceCount;
             triedCustomSources = 1;
             syncPlaybackRecoveryTarget();
-            Log.w(TAG, "Playback recovery exhausted; using backup source "
+            AppLog.w(TAG, "Playback recovery exhausted; using backup source "
                     + (currentSourceIndex + 1) + "/" + sourceCount);
             startChannel(currentChannelIndex);
             showChannelBar(channel.name, "当前线路无法恢复，切换至线路 "
@@ -11901,7 +12095,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             abortChannelSwitchAnimation();
             hideLoading();
             String detail = proxy == null ? "unknown" : proxy.selectedVariantDescription();
-            Log.w(TAG, "Legacy HLS playback abandoned channel=" + channel.name
+            AppLog.w(TAG, "Legacy HLS playback abandoned channel=" + channel.name
                     + " selected=" + detail + " reason=" + reason);
             releasePlayer(true);
             showChannelBar(channel.name, isDeviceNetworkDisconnected()
@@ -11916,7 +12110,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     ? "网络连接尚未恢复，请稍后重试" : "播放暂时无法恢复，请稍后重试");
             return;
         }
-        Log.w(TAG, "Playback recovery exhausted; moving to next channel group="
+        AppLog.w(TAG, "Playback recovery exhausted; moving to next channel group="
                 + next[0] + " channel=" + next[1]);
         currentGroupIndex = next[0];
         switchChannel(next[1]);
@@ -11951,7 +12145,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         stallRecoveryRequestId = requestId;
         cancelCustomSourceTimeout();
         if (playbackRecoveryAttempts >= PLAYBACK_RECOVERY_MAX_ATTEMPTS) {
-            Log.w(TAG, "Live HTTP source refresh exhausted reason=" + reason);
+            AppLog.w(TAG, "Live HTTP source refresh exhausted reason=" + reason);
             clearPendingPlayer();
             releasePlayer(true);
             abortChannelSwitchAnimation();
@@ -11961,7 +12155,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         playbackRecoveryAttempts++;
         lastPlaybackRecoveryAt = SystemClock.elapsedRealtime();
-        Log.w(TAG, "Refreshing live HTTP source attempt=" + playbackRecoveryAttempts
+        AppLog.w(TAG, "Refreshing live HTTP source attempt=" + playbackRecoveryAttempts
                 + "/" + PLAYBACK_RECOVERY_MAX_ATTEMPTS + " reason=" + reason);
         showLoading(currentChannel().name, "直播中断，正在重新获取线路（"
                 + playbackRecoveryAttempts + "/" + PLAYBACK_RECOVERY_MAX_ATTEMPTS + "）");
@@ -11993,7 +12187,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 position = previous.getCurrentPosition();
             } catch (RuntimeException error) {
                 // A framework player can reject clock queries after onError.
-                Log.w(TAG, "Unable to retain failed player's position", error);
+                AppLog.w(TAG, "Unable to retain failed player's position", error);
             }
         }
         long resume = duration > 0L
@@ -12007,7 +12201,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     previous instanceof IjkMediaPlayer ? retainedTracks : null, resume);
         }
         if (resume > 0L && player != null && player != previous) {
-            Log.i(TAG, "Resuming reconnected VOD positionMs=" + resume);
+            AppLog.i(TAG, "Resuming reconnected VOD positionMs=" + resume);
         }
     }
 
@@ -12025,7 +12219,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         yangshipinRefreshScheduledRequest = requestId;
         stallRecoveryRequestId = requestId;
         if (playbackRecoveryAttempts >= YANGSHIPIN_REFRESH_MAX_ATTEMPTS) {
-            Log.w(TAG, "Yangshipin fresh resolve exhausted reason=" + reason);
+            AppLog.w(TAG, "Yangshipin fresh resolve exhausted reason=" + reason);
             clearPendingPlayer();
             releasePlayer(true);
             abortChannelSwitchAnimation();
@@ -12035,7 +12229,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         playbackRecoveryAttempts++;
         lastPlaybackRecoveryAt = SystemClock.elapsedRealtime();
-        Log.w(TAG, "Refreshing Yangshipin source attempt=" + playbackRecoveryAttempts
+        AppLog.w(TAG, "Refreshing Yangshipin source attempt=" + playbackRecoveryAttempts
                 + "/" + YANGSHIPIN_REFRESH_MAX_ATTEMPTS + " reason=" + reason);
         showLoading(channel.name, "正在重新获取央视频线路（" + playbackRecoveryAttempts
                 + "/" + YANGSHIPIN_REFRESH_MAX_ATTEMPTS + "）");
@@ -12133,7 +12327,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
         } catch (RuntimeException error) {
             crashRecoveryBound = false;
-            Log.w(TAG, "Unable to arm crash recovery watchdog", error);
+            AppLog.w(TAG, "Unable to arm crash recovery watchdog", error);
         }
     }
 
@@ -12150,14 +12344,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 startService(new Intent(this, CrashRecoveryService.class)
                         .setAction(CrashRecoveryService.ACTION_DISARM));
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to disarm crash recovery watchdog", error);
+                AppLog.w(TAG, "Unable to disarm crash recovery watchdog", error);
             }
         }
         if (crashRecoveryBound && crashRecoveryConnection != null) {
             try {
                 unbindService(crashRecoveryConnection);
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to unbind crash recovery watchdog", error);
+                AppLog.w(TAG, "Unable to unbind crash recovery watchdog", error);
             }
         }
         crashRecoveryBound = false;
@@ -12176,7 +12370,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         int[] target = adjacentChannelLocation(baseGroupIndex, baseChannelIndex,
                 offset > 0 ? 1 : -1);
         if (target == null) {
-            Log.w(TAG, "Ignoring relative switch because the catalog is empty");
+            AppLog.w(TAG, "Ignoring relative switch because the catalog is empty");
             return;
         }
         pendingRelativeGroupIndex = target[0];
@@ -12192,7 +12386,17 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
      * Favorites are an alternate view of existing channels, so they are not inserted
      * between the last channel of one group and the first channel of the next group.
      */
-    private int[] adjacentChannelLocation(int groupIndex, int channelIndex, int direction) {
+    private int[] adjacentChannelLocation(int groupIndex,int channelIndex,int direction){
+        int total=0;for(ChannelCatalog.Group group:ChannelCatalog.GROUPS)total+=group.channels.length;
+        int g=groupIndex,i=channelIndex;
+        for(int n=0;n<total;n++){
+            int[] next=rawAdjacentChannelLocation(g,i,direction);if(next==null)return null;
+            g=next[0];i=next[1];if(g==groupIndex&&i==channelIndex)return null;
+            if(channelHealth==null||!channelHealth.bad(ChannelCatalog.GROUPS[g].channels[i]))return next;
+        }
+        return null;
+    }
+    private int[] rawAdjacentChannelLocation(int groupIndex, int channelIndex, int direction) {
         ChannelCatalog.Group[] groups = ChannelCatalog.GROUPS;
         if (groups.length == 0) {
             return null;
@@ -12238,7 +12442,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void enterNumericChannel(int digit) {
-        if (numericChannelInput.length() >= 3) {
+        if (numericChannelInput.length() >= NUMERIC_CHANNEL_MAX_DIGITS) {
             clearNumericChannelInput();
         }
         numericChannelInput += String.valueOf(digit);
@@ -12247,11 +12451,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         numericChannelOverlay.setVisibility(View.VISIBLE);
         numericChannelOverlay.bringToFront();
         ensureFlyMouseOnTop();
-        if (numericChannelInput.length() >= 3) {
-            commitNumericChannel();
-        } else {
-            channelBar.postDelayed(commitNumericChannel, NUMERIC_CHANNEL_TIMEOUT_MS);
-        }
+        // Keep the final digit visible and leave time to enter a four-digit number.
+        channelBar.postDelayed(commitNumericChannel, NUMERIC_CHANNEL_TIMEOUT_MS);
     }
 
     private void commitNumericChannel() {
@@ -12404,10 +12605,21 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // Native YSP/CCTV authorization URLs keep their native playback pipeline.
         if (!isWebViewSource(configured) || extractYangshipinPid(configured) != null
                 || extractCctvWebChannel(configured) != null) return false;
+        // Lite returns to the native Surface. Its outgoing frame must slide too,
+        // rather than freezing above the native animation while the SDK loads.
+        // Resolve the TARGET domain; the outgoing engine can be different.
+        final boolean nativeLiteSwipe=channelSwitchAnimating && (channelSwitchDirectionX != 0f || channelSwitchDirectionY != 0f)
+                && LiteWebPlayback.supported()
+                && "lite".equals(playbackMemory.engine(WebDomainSettings.key(configured),defaultWebSourceEngine,true))
+                && !WebTvPlaybackPolicy.requiresWebView(configured.substring("webview://".length()),
+                        webViewAutoPlay,webViewAutoPlaySniffed);
         final int outgoingRequest = playRequestId;
+        final float swipeX=channelSwitchDirectionX,swipeY=channelSwitchDirectionY;
         ensureWebLastFrame();
         webLastFrame.captureSurface(outgoing.getSurfaceView(), () -> {
             if (isFinishing() || outgoingRequest != playRequestId || currentGroup() != targetGroup) return;
+            if(nativeLiteSwipe)webLastFrame.animateNativeSwipe(outgoing.getTranslationX(),outgoing.getTranslationY(),
+                    swipeX,swipeY,GESTURE_SWITCH_EASING);
             resumingNativeWebFrame = true;
             try { resume.run(); }
             finally { resumingNativeWebFrame = false; }
@@ -12427,7 +12639,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             }
         } catch (JSONException error) {
-            Log.w(TAG, "Unable to read favorite channels", error);
+            AppLog.w(TAG, "Unable to read favorite channels", error);
         }
     }
 
@@ -13713,7 +13925,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         channelBar.setAlpha(1f);
         channelBar.setTranslationY(0f);
         channelBar.setVisibility(View.VISIBLE);
-
+        raiseWebChannelControls();
     }
 
     private void updateChannelCardEpg(String displayedChannel) {
@@ -13900,6 +14112,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void dismissWebNavigationChannelBar() {
+        webChannelInfo.cancel();
         channelCardDeferredForArtwork = false;
         hideLoading();
         channelBar.removeCallbacks(hideChannelBar);
@@ -14041,7 +14254,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     try {
                         oldPlayer.release();
                     } catch (RuntimeException error) {
-                        Log.w(TAG, "Unable to release old player", error);
+                        AppLog.w(TAG, "Unable to release old player", error);
                         PlaybackErrorReporting.releaseException(oldPlayer instanceof IjkMediaPlayer?"IJK":"SystemPlayer",error);
                     } finally {
                         releaseComplete.countDown();
@@ -14050,7 +14263,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                     long finished = SystemClock.elapsedRealtime();
                     channelStartupTiming.stage(releaseRequestId, "release-end", finished);
-                    Log.i(TAG, "Background player release request=" + releaseRequestId
+                    AppLog.i(TAG, "Background player release request=" + releaseRequestId
                             + " queueMs=" + (started - releaseQueuedAt)
                             + " runMs=" + (finished - started)
                             + " elapsedMs=" + (finished - releaseQueuedAt));
@@ -14061,7 +14274,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     if (releaseComplete.getCount() == 0L || isFinishing()) return;
                     Thread worker = releaseThread.get();
                     StackTraceElement[] stack = worker == null ? new StackTraceElement[0] : worker.getStackTrace();
-                    Log.w(TAG, "System player release waiting request=" + releaseRequestId
+                    AppLog.w(TAG, "System player release waiting request=" + releaseRequestId
                             + " elapsedMs=" + (SystemClock.elapsedRealtime() - releaseQueuedAt)
                             + " frame=" + (stack.length == 0 ? "queued" : stack[0])
                             + " " + (releasingProxy == null ? "no-proxy" : releasingProxy.releaseWorkSummary()));
@@ -14093,7 +14306,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                                 || releaseGeneration != legacyPlayerReleaseGeneration) return;
                         // Starting another decoder before this release completes can
                         // exhaust the device's video buffers and freeze Android 4.0.
-                        Log.w(TAG, "Legacy system player release still pending after 8s");
+                        AppLog.w(TAG, "Legacy system player release still pending after 8s");
                         if ((pendingChannelSetupAfterRelease != null
                                 || pendingPlayerChannel != null) && !isFinishing()) {
                             hideLoading();
@@ -14103,7 +14316,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                 }, 8000L);
             } else PLAYER_RELEASE_WORKER.execute(release);
-            Log.i(TAG, "Player detach request=" + releaseRequestId + " tookMs="
+            AppLog.i(TAG, "Player detach request=" + releaseRequestId + " tookMs="
                     + (SystemClock.elapsedRealtime() - releaseStartedAt));
         }
         activePlayerChannel = null;
@@ -14144,7 +14357,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 startAndroidMediaPlayer(channel,streamUrl,forceSoftwareDecode,foregroundResumeSystemVideo);
             else startPlayer(channel, streamUrl, forceSoftwareDecode);
         } catch (IOException error) {
-            Log.e(TAG, "Unable to resume player after Surface creation", error);
+            AppLog.e(TAG, "Unable to resume player after Surface creation", error);
             if (returnFromFailedSniffedPlayback("资源连接失败")) return;
             abortChannelSwitchAnimation();
             hideLoading();
@@ -14185,7 +14398,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             videoView.setVideoSize(videoWidth, videoHeight, videoSarNum, videoSarDen);
         }
         refreshVideoInfo();
-        Log.i(TAG, "Video source=" + videoWidth + "x" + videoHeight
+        AppLog.i(TAG, "Video source=" + videoWidth + "x" + videoHeight
                 + " sar=" + videoSarNum + "/" + videoSarDen);
     }
 
@@ -14212,7 +14425,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 try { targetPlayer.seekTo(next); }
                 catch (RuntimeException error) {
                     playbackSeekState.reset();seekFeedback.failed("进度跳转失败，请重试或切换线路");
-                    Log.w(TAG, "Unable to apply queued seek", error);
+                    AppLog.w(TAG, "Unable to apply queued seek", error);
                     Toast.makeText(this, "进度跳转失败，请重试", Toast.LENGTH_SHORT).show();
                 }
             }
@@ -14230,7 +14443,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         long submit = playbackSeekState.request(target, SystemClock.elapsedRealtime());
         if (submit >= 0L) {
             try { player.seekTo(submit); if (replay) player.start(); }
-            catch (RuntimeException error) {playbackSeekState.reset();seekFeedback.failed("进度跳转失败，请重试或切换线路");Log.w(TAG,"Seek request failed",error);PlaybackErrorReporting.caught(playRequestId,player instanceof IjkMediaPlayer?"IJK":"SystemPlayer","SeekException",error);}
+            catch (RuntimeException error) {playbackSeekState.reset();seekFeedback.failed("进度跳转失败，请重试或切换线路");AppLog.w(TAG,"Seek request failed",error);PlaybackErrorReporting.caught(playRequestId,player instanceof IjkMediaPlayer?"IJK":"SystemPlayer","SeekException",error);}
         }
     }
 
@@ -14388,7 +14601,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     playbackRecoveryAttempts = 0;
                     playbackRecoverySourcesTried = 0;
                     lastPlaybackRecoveryAt = 0L;
-                    Log.i(TAG, "Playback recovery counter reset after healthy playback");
+                    AppLog.i(TAG, "Playback recovery counter reset after healthy playback");
                 }
             } else {
                 playbackHealthySince = 0L;
@@ -14414,6 +14627,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         refreshChannelPlaybackStatus();
         PlaybackDebugStats stats = collectPlaybackStreamStats(outputFps);
         latestPlaybackDebugStats = stats;
+        if(webChannelInfo.ready(playRequestId,SystemClock.elapsedRealtime(),
+                stats.width>0&&stats.height>0&&(stats.frameRate>0||stats.nominalFrameRate>0))){
+            showChannelCard();channelBar.removeCallbacks(hideChannelBar);
+            channelBar.postDelayed(hideChannelBar,webChannelInfo.remaining(playRequestId,SystemClock.elapsedRealtime()));
+        }
         updateChannelNetworkWarmup();
         updateChannelDecodeHints(stats);
         if (maybeSwitchInterlacedSoftwareDecode(stats)) return;
@@ -14514,7 +14732,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             String color = Build.VERSION.SDK_INT >= 17 && ijk != null
                     ? NativeHdrOutput.outputRoute(stats.videoDecoder == IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC)
                     : ijk == null ? "system" : "native";
-            Log.i(TAG, "High-resolution playback request=" + playRequestId
+            AppLog.i(TAG, "High-resolution playback request=" + playRequestId
                     + " size=" + stats.width + "x" + stats.height
                     + " codec=" + stats.videoCodec + " decoder=" + stats.videoDecoderName
                     + " sourceFps=" + stats.nominalFrameRate
@@ -14526,7 +14744,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     + " buffering=" + buffering + " playing=" + player.isPlaying()
                     + " color=" + color);
         } catch (RuntimeException error) {
-            Log.w(TAG, "High-resolution playback statistics unavailable", error);
+            AppLog.w(TAG, "High-resolution playback statistics unavailable", error);
         }
     }
 
@@ -14660,7 +14878,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         activeInterlacedPreferenceKey = key;
         interlacedHardwareFps = baseline;
         interlacedSoftwareAttemptRequest = playRequestId;
-        Log.i(TAG, "SQLite channel hint matched known 1080i decoder type; opening software directly");
+        AppLog.i(TAG, "SQLite channel hint matched known 1080i decoder type; opening software directly");
         return true;
     }
 
@@ -14677,11 +14895,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         channelDecodeHints.invalidate(decodeHintSource(channel,url));
         interlacedHardwareFps=0f;
         interlacedSoftwareAttemptRequest=playRequestId;
-        Log.i(TAG,"Current stream headers override stale SQLite decode hint");
+        AppLog.i(TAG,"Current stream headers override stale SQLite decode hint");
         try {
             restartPlayerPreservingPosition(channel,url,false);
         } catch(IOException error) {
-            Log.w(TAG,"Unable to restart after stale decode hint",error);
+            AppLog.w(TAG,"Unable to restart after stale decode hint",error);
             hideLoading();showChannelBar(channel.name,"播放信息已变化，请重试");
         }
         return true;
@@ -14788,11 +15006,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         interlacedHardwareFps = oldFps;
         interlacedSoftwareAttemptRequest = playRequestId;
         try {
-            Log.i(TAG, "VOD headers matched remembered 1080i type before playback");
+            AppLog.i(TAG, "VOD headers matched remembered 1080i type before playback");
             startIjkPlayer(channel, url, true, url.equals(directHttpMediaUrl));
             return true;
         } catch (IOException error) {
-            Log.w(TAG, "Unable to select remembered VOD software decoder", error);
+            AppLog.w(TAG, "Unable to select remembered VOD software decoder", error);
             hideLoading();
             showChannelBar(channel.name, "软件解码启动失败，请重试或调整解码模式");
             return true; // The old prepared player was released: never start it again.
@@ -14836,7 +15054,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             // Persist only after software has demonstrated stable field-rate output.
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putFloat(activeInterlacedPreferenceKey, interlacedHardwareFps).apply();
-            Log.i(TAG, "Remembering confirmed 1080i software decoder preference");
+            AppLog.i(TAG, "Remembering confirmed 1080i software decoder preference");
         }
         boolean remembered = rememberedHardwareFps > 0f;
         if (!remembered && !interlacedDecodeMonitor.sample(player, SystemClock.elapsedRealtime(), position,
@@ -14876,7 +15094,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             .remove(activeInterlacedPreferenceKey).apply();
                     interlacedHardwareFps = 0f;
                 }
-                Log.w(TAG, "1080i50 adaptive decode fps=" + stats.frameRate
+                AppLog.w(TAG, "1080i50 adaptive decode fps=" + stats.frameRate
                         + " decoder=" + stats.videoDecoderName + " software=" + useSoftware);
                 Toast.makeText(MainActivity.this, useSoftware ? remembered ? "此类视频已记录硬解兼容问题，正在使用软件解码"
                         : "1080i 硬解帧率不足，正在切换软件解码"
@@ -14890,7 +15108,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 } catch (IOException error) {
                     pendingHlsDecodeSequence = -1L;
                     pendingHlsDecodePlaylist = null;
-                    Log.e(TAG, "Unable to switch interlaced stream to software", error);
+                    AppLog.e(TAG, "Unable to switch interlaced stream to software", error);
                     hideLoading();
                     showChannelBar(channel.name, "软件解码启动失败，请重试或调整解码模式");
                 }
@@ -14898,7 +15116,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         };
         if (boundary != null) {
             pendingInterlacedSwitch = change;
-            Log.i(TAG, "Scheduling decoder change at next HLS sequence=" + nextSequence
+            AppLog.i(TAG, "Scheduling decoder change at next HLS sequence=" + nextSequence
                     + " remainingMs=" + boundary[1]);
             root.postDelayed(change, boundary[1]);
         } else change.run();
@@ -14907,6 +15125,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private PlaybackDebugStats collectPlaybackStreamStats(float measuredOutputFps) {
         PlaybackDebugStats stats = new PlaybackDebugStats();
+        if(webSourceView!=null&&webSourceView.isPageVisible()){
+            JSONObject media=webSourceView.currentWebMediaState();
+            stats.width=media.optInt("videoWidth");stats.height=media.optInt("videoHeight");
+            stats.frameRate=webChannelInfo.frameRate(playRequestId,
+                    media.optString("documentToken")+"/"+media.optString("token"),SystemClock.elapsedRealtime(),
+                    media.optLong("videoFrames",-1),media.optBoolean("playing")&&!media.optBoolean("mediaPaused",true));
+            stats.videoDecoderName="WebView";return stats;
+        }
         if (!hasCurrentPlaybackStats()) return stats;
         final IMediaPlayer statsPlayer = player;
         final int statsRequest = playRequestId;
@@ -14956,7 +15182,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
                 stats.deinterlace = IjkStreamMetrics.deinterlaceStatus(ijkPlayer, stats.videoDescription);
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to read active video decoder", error);
+                AppLog.w(TAG, "Unable to read active video decoder", error);
             }
             // Output cadence is independently available on upstream native builds,
             // even when the optional source-frame-rate property is absent.
@@ -15147,7 +15373,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             // The API is public but most devices expose it only to device-owner or
             // privileged applications. Do not retry a denied binder call every second.
             hardwareCpuUnavailable = true;
-            Log.i(TAG, "System HardwareProperties CPU unavailable: "
+            AppLog.i(TAG, "System HardwareProperties CPU unavailable: "
                     + error.getClass().getSimpleName());
             return -1f;
         }
@@ -15293,7 +15519,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         systemCpuMetricLabel = label;
         if (!source.equals(systemCpuMetricSource)) {
             systemCpuMetricSource = source;
-            Log.i(TAG, "System CPU metric source=" + source);
+            AppLog.i(TAG, "System CPU metric source=" + source);
         }
     }
 
@@ -15339,7 +15565,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 applyCachedIjkMetadata(stats, parsed);
             }
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to read IJK stream metadata", error);
+            AppLog.w(TAG, "Unable to read IJK stream metadata", error);
         }
     }
 
@@ -15429,7 +15655,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 if (audio > 0L) stats.audioBitrate = audio;
             }
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to estimate IJK stream bitrates", error);
+            AppLog.w(TAG, "Unable to estimate IJK stream bitrates", error);
         }
     }
 
@@ -15689,7 +15915,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             mutedByAudioFocus = result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         } catch (RuntimeException error) {
             mutedByAudioFocus = true;
-            Log.w(TAG, "Audio service unavailable while requesting focus", error);
+            AppLog.w(TAG, "Audio service unavailable while requesting focus", error);
         }
         refreshCallAudioMute();
     }
@@ -15743,7 +15969,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         try {
             playbackAudioManager.abandonAudioFocus(playbackAudioFocusListener);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Audio service unavailable while abandoning focus", error);
+            AppLog.w(TAG, "Audio service unavailable while abandoning focus", error);
         }
     }
 
@@ -15756,7 +15982,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         try {
             activePlayer.setVolume(volume, volume);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to update playback mute state", error);
+            AppLog.w(TAG, "Unable to update playback mute state", error);
         }
     }
 
@@ -15847,7 +16073,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private void setRemoteInputMode(boolean remote) {
         if (remoteInputMode != remote) {
             remoteInputMode = remote;
-            Log.i(TAG, "Input mode changed to " + (remote ? "remote" : "touch"));
+            AppLog.i(TAG, "Input mode changed to " + (remote ? "remote" : "touch"));
         }
     }
 
@@ -16301,7 +16527,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     };
 
     private void beginChannelSwipe(float x, float y) {
-        Log.i(TAG, "Channel swipe animation begin fromRequest=" + playRequestId);
+        AppLog.i(TAG, "Channel swipe animation begin fromRequest=" + playRequestId);
         channelBar.removeCallbacks(finishGestureRebound);
         gestureReboundAnimating = false;
         channelSwitchAnimating = true;
@@ -16589,7 +16815,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return true;
         }
         if (event.getAction() == KeyEvent.ACTION_DOWN && rawKeyCode != keyCode) {
-            Log.d(TAG, "Normalized remote key " + rawKeyCode + " to " + keyCode);
+            AppLog.d(TAG, "Normalized remote key " + rawKeyCode + " to " + keyCode);
         }
         if (event.getAction() == KeyEvent.ACTION_DOWN && isHandledRemoteKey(keyCode)) {
             setRemoteInputMode(true);
@@ -16802,7 +17028,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         remoteCatalogClient.pointer(hostUrl, command);
                     }
                 } catch (Exception error) {
-                    Log.w(TAG, "Unable to forward receiver remote key", error);
+                    AppLog.w(TAG, "Unable to forward receiver remote key", error);
                 }
             }
         }, "receiver-key-forward").start();
@@ -16956,7 +17182,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         final int requestId = playRequestId;
         final int attempt = ++playbackRecoveryAttempts;
         lastPlaybackRecoveryAt = SystemClock.elapsedRealtime();
-        Log.w(TAG, "Refreshing legacy Guangdong webpage attempt=" + attempt + "/2 reason=" + reason);
+        AppLog.w(TAG, "Refreshing legacy Guangdong webpage attempt=" + attempt + "/2 reason=" + reason);
         cancelSniffedOpenTimeout();
         cancelCustomSourceTimeout();
         closeWebSource();
@@ -16986,9 +17212,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private boolean returnFromFailedSniffedPlayback(String reason) {
         if (liteWebFallback != null) {
             if (retryLegacyGdtvPlayback(reason)) return true;
-            Log.w(TAG, "Lite playback returning to webpage: " + reason);
-            Runnable fallback=liteWebFallback; liteWebFallback=null;
-            fallback.run(); return true;
+            stopFailedLitePlayback(reason);return true;
         }
         if (!playingDiscoveredWebStream || playingSniffedResource == null) return false;
         boolean notifyFailure = !playingSniffedAutomatic;
@@ -17003,7 +17227,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             webOriginalFallbackRequestId = playRequestId;
             webSourceView.showPlaybackFullscreen();
             if (notifyFailure) Toast.makeText(this, reason + "，已返回网页，可在网页中播放或重新选择资源", Toast.LENGTH_LONG).show();
-            Log.i(TAG, "Sniffed playback failed; restored retained page: " + reason);
+            AppLog.i(TAG, "Sniffed playback failed; restored retained page: " + reason);
         } else {
             // A page already drained after successful playback must not be silently reloaded.
             clearPendingPlayer();
@@ -17162,7 +17386,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             });
         }
-        Log.i(TAG, "Multi-window mode changed active=" + inMultiWindowMode);
+        AppLog.i(TAG, "Multi-window mode changed active=" + inMultiWindowMode);
     }
 
     @Override
@@ -17175,7 +17399,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override public void finish() {
         // Record an explicit exit separately from a crash or low-memory kill.
-        Log.i(TAG, "Activity finish requested", new Throwable("Activity exit origin"));
+        AppLog.i(TAG, "Activity finish requested", new Throwable("Activity exit origin"));
         super.finish();
     }
 
@@ -17197,7 +17421,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override
     protected void onDestroy() {
+        if(channelHealth!=null)channelHealth.close();
         PlaybackErrorReporting.close();
+        if(channelActionsDialog!=null){channelActionsDialog.setOnDismissListener(null);channelActionsDialog.dismiss();channelActionsDialog=null;}
+        if(channelRemovalDialog!=null){channelRemovalDialog.setOnDismissListener(null);channelRemovalDialog.dismiss();channelRemovalDialog=null;}
         if (webLastFrame != null) { webLastFrame.close(); webLastFrame = null; }
         if(personalBackground!=null)personalBackground.close();
         groupPasswordSession.clear();

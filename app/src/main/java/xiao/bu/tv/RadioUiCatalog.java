@@ -70,7 +70,7 @@ final class RadioUiCatalog {
                 if(!c.getSharedPreferences("radio_ui",0).edit().putString("catalog",json).commit())throw new IOException("无法保存界面列表");
                 synchronized(RadioUiCatalog.class){entries=Collections.unmodifiableList(merge(local,remote));}
                 failure="";
-            }catch(Exception e){android.util.Log.w("RadioUi","Catalog refresh failed",e);failure="在线列表暂不可用，继续使用本地选项";}
+            }catch(Exception e){xiao.bu.tv.AppLog.w("RadioUi","Catalog refresh failed",e);failure="在线列表暂不可用，继续使用本地选项";}
             finally{c.getSharedPreferences("radio_ui",0).edit().putLong("catalog_checked_at",System.currentTimeMillis()).apply();refreshing=false;}
         });
     }
