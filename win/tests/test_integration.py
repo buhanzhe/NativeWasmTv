@@ -75,7 +75,7 @@ def main():
         assert '/selected.m3u8?token=a,b' in requested,'Original signed source URL changed'
         process.stdin.write('\n');process.stdin.flush();process.wait(timeout=12)
         assert process.returncode==0,'Session cleanup failed'
-        info={'passed':True,'target':'windows-wine' if a.windows else 'linux','checks':['native QuickJS/litehtml JNI loaded','wasm3 executed original WASM module','UJS selected original channel','real hls.js MSE output','FFmpeg decoded selected green frame','signed URL retained','owner thread cleanup'],'requested':requested}
+        info={'passed':True,'target':('windows-native' if os.name=='nt' else 'windows-wine') if a.windows else 'linux','checks':['native QuickJS/litehtml JNI loaded','wasm3 executed original WASM module','UJS selected original channel','real hls.js MSE output','FFmpeg decoded selected green frame','signed URL retained','owner thread cleanup'],'requested':requested}
         (out/'verification.json').write_text(json.dumps(info,indent=2));print(json.dumps(info))
     finally:
         if process.poll() is None:process.kill();process.wait()

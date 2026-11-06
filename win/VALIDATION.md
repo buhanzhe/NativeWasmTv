@@ -1,5 +1,28 @@
 # Windows 0.1 验证记录
 
+## 2026-11-06 原生 Windows 构建
+
+在原生 Windows x64 合并应用 `cfc333e9` 和内核 `f1dc38f` 后编译。
+保留了工作区原有未提交修改；内核包含本机已有的桌面播放修复。
+包内 `build-info.json` 记录源提交、工作区修改状态、差异摘要及全部交付文件 SHA-256。
+Java 运行时来自 JetBrains Runtime 17.0.14；播放器使用本机 Gyan GPL 静态构建
+`2026-10-04-git-a35c879992-full_build`，保留 FFmpeg 原始许可证。
+
+本轮通过：
+
+- MinGW GCC/G++ 编译实际 Windows x64 DLL 和原生 EXE。
+- 原生 JNI、QuickJS、litehtml、wasm3、UJS、hls.js/MSE 链路及 FFmpeg 绿色视频帧解码。
+- 包内运行时执行播放列表契约、快速切台和过期进程退出隔离检查。
+- 默认启动离线加载 828 个频道、36 个分组，逐项核对原始 URL/UJS 和快照哈希。
+- 真实 Swing 窗口切换列表、FFplay 实际绿色画面、停止后解码器退出。
+- Inno Setup 安装到带空格的测试目录，逐文件核对安装结果 SHA-256。
+- 安装后的原生 EXE 启动包内 Java 并显示主窗口，正常关闭和静默卸载均通过。
+
+本轮未重跑公网十频道实播；下方历史公网网络阻断记录不代表当前网络状态。
+测试日志和截图位于 `win/out/test-*`，构建日志位于 `win/out/build.log`。
+
+## 早期交叉编译记录
+
 本次在 Linux 构建机交叉编译 MinGW-w64 x64 目标，并用 Wine 10 运行实际
 Windows JVM、Windows DLL、Windows FFplay 和 EXE。尚未在原生 Windows 电脑验收。
 

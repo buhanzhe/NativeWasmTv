@@ -1,0 +1,2 @@
+# Keep the exact upstream playlist bytes for source SHA-256 verification.
+win/playlists/webview.txt text eol=lf

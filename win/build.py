@@ -27,6 +27,13 @@ def revision(path):
         return None
 
 
+def source_state(path):
+    """Disclose local changes instead of identifying a dirty build by HEAD alone."""
+    status = subprocess.check_output(['git', '-C', str(path), 'status', '--porcelain'], stderr=subprocess.DEVNULL)
+    diff = subprocess.check_output(['git', '-C', str(path), 'diff', 'HEAD', '--binary'], stderr=subprocess.DEVNULL)
+    return {'dirty': bool(status.strip()), 'tracked_diff_sha256': hashlib.sha256(diff).hexdigest()}
+
+
 def pe_x64(path):
     with path.open('rb') as f:
         if f.read(2) != b'MZ':
@@ -45,6 +52,7 @@ def main():
     p.add_argument('--player', type=Path, required=True)
     p.add_argument('--jdk', type=Path, required=True, help='Target JDK 17 (Windows JDK for Windows packages)')
     p.add_argument('--launcher-cc', default=os.environ.get('CC','gcc'))
+    p.add_argument('--iscc', type=Path, help='Optional Inno Setup compiler to create the EXE installer')
     p.add_argument('--no-runtime', action='store_true', help='Development Linux smoke-test layout only')
     a = p.parse_args()
     if a.no_runtime and a.target != 'linux':
@@ -98,16 +106,21 @@ def main():
     private = ROOT/'browser-core'
     for source,name in [('native/quickjs/vendor/LICENSE','QuickJS.txt'),('native/litebrowser/vendor/LICENSE','litehtml.txt'),('native/litebrowser/wasm3/LICENSE','wasm3.txt'),('litebrowser/desktop/test/assets/hls-1.5.18.LICENSE','hls.js.txt')]:
         shutil.copy2(private/source,licenses/name)
-    (licenses/'README.txt').write_text('NativeWasmTv: GPL-3.0-only.\nFFplay/FFmpeg: GPL build; source/build information: https://github.com/BtbN/FFmpeg-Builds\nQuickJS, litehtml, wasm3, hls.js: see adjacent original notices.\nOkHttp and Okio: Apache-2.0; original notices retained inside app/lib JARs.\norg.json: https://github.com/stleary/JSON-java/tree/20180813\nTemurin runtime: GPL-2.0 with Classpath Exception; see runtime/legal.\nPrivate browser core remains a separately authorized dependency; see its source repository and third-party notices.\n',encoding='utf-8')
+    (licenses/'README.txt').write_text('NativeWasmTv: GPL-3.0-only.\nFFplay/FFmpeg: GPL build; upstream: https://ffmpeg.org/ ; Windows builds: https://www.gyan.dev/ffmpeg/builds/ and https://github.com/BtbN/FFmpeg-Builds\nQuickJS, litehtml, wasm3, hls.js: see adjacent original notices.\nOkHttp and Okio: Apache-2.0; original notices retained inside app/lib JARs.\norg.json: https://github.com/stleary/JSON-java/tree/20180813\nJava runtime: see runtime/legal for vendor license notices.\nPrivate browser core remains a separately authorized dependency; see its source repository and third-party notices.\n',encoding='utf-8')
+    player_license = a.player.resolve().parent.parent/'LICENSE'
+    if player_license.is_file():
+        shutil.copy2(player_license, licenses/'FFmpeg-LICENSE.txt')
     core_info = json.loads((core/'build-info.json').read_text())
     files = {str(x.relative_to(bundle)).replace('\\','/'):hashlib.sha256(x.read_bytes()).hexdigest() for x in sorted(bundle.rglob('*')) if x.is_file()}
-    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.1','application_commit':revision(ROOT),'core_commit':revision(private),'built_in_playlist':playlist_info,'core':core_info,'files':files},indent=2)+'\n')
+    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.1','application_commit':revision(ROOT),'core_commit':revision(private),'application_source_state':source_state(ROOT),'core_source_state':source_state(private),'built_in_playlist':playlist_info,'core':core_info,'files':files},indent=2)+'\n')
     if a.target=='windows':
         archive = output/'NativeWasmTv-win-x64-v0.1.1.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
             for file in sorted(bundle.rglob('*')):
                 if file.is_file(): z.write(file,str(file.relative_to(output)))
         print(json.dumps({'bundle':str(bundle),'archive':str(archive),'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}))
+        if a.iscc:
+            run([a.iscc.resolve(), HERE/'installer.iss'])
     else: print(json.dumps({'bundle':str(bundle)}))
 
 

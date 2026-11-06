@@ -9,6 +9,9 @@ Windows 10/11 x64 的最小桌面版，采用简单的新界面。支持本地 M
 完整解压压缩包后，双击 `NativeWasmTv.exe` 或 `启动网页电视.cmd`。
 包内自带 Java 运行时，无需安装 Android SDK、Java、WSL 或浏览器。
 
+也可运行 `NativeWasmTv-win-x64-v0.1.1-Setup.exe`，安装到当前用户目录，
+无需管理员权限。安装程序提供开始菜单入口、可选桌面快捷方式及卸载功能。
+
 默认加载随包内置的 [webSourceM3U8/webview.txt](https://github.com/buhanzhe/webSourceM3U8/blob/main/webview.txt)，
 当前快照包含 828 个频道、36 个分组。打开程序即可看到完整列表，不依赖联网下载列表；
 频道本身仍需联网播放。来源提交和原始文件 SHA-256 保存在 `playlists/webview.source.json`。
@@ -52,6 +55,8 @@ python win/build.py --core-output browser-core/litebrowser/windows/out/windows `
 ```
 
 输出 `win/out/windows/NativeWasmTv-win-x64-v0.1.1.zip`。
+如需同时生成 exe 安装包，在打包命令后添加 `--iscc C:/tools/InnoSetup/ISCC.exe`，
+使用 Inno Setup 6.3 或更新版本；也可在 ZIP 构建完成后运行 `ISCC win/installer.iss`。
 Linux 可通过 `--jdk` 指向 Windows JDK、`--cc/--cxx` 指向 MinGW 交叉编译器，
 使用同版本宿主 JDK 的 `javac`/`jlink` 交叉打包；内核说明见私有工程对应目录。
 应用打包脚本可用 `--launcher-cc x86_64-w64-mingw32-gcc` 指定启动器编译器。
