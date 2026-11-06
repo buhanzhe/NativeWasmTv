@@ -20,6 +20,13 @@ def run(cmd):
     subprocess.run([str(x) for x in cmd], check=True)
 
 
+def revision(path):
+    try:
+        return subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],stderr=subprocess.DEVNULL,text=True).strip()
+    except (OSError,subprocess.CalledProcessError):
+        return None
+
+
 def pe_x64(path):
     with path.open('rb') as f:
         if f.read(2) != b'MZ':
@@ -61,6 +68,7 @@ def main():
     shutil.copy2(a.player,player/('ffplay.exe' if a.target=='windows' else 'ffplay'))
     shutil.copytree(HERE/'playlists',bundle/'playlists')
     shutil.copy2(HERE/'README.md',bundle/'README.md')
+    shutil.copy2(HERE/'VALIDATION.md',bundle/'VALIDATION.md')
     classes = output/'classes'
     if classes.exists(): shutil.rmtree(classes)
     classes.mkdir()
@@ -89,7 +97,7 @@ def main():
     (licenses/'README.txt').write_text('NativeWasmTv: GPL-3.0-only.\nFFplay/FFmpeg: GPL build; source/build information: https://github.com/BtbN/FFmpeg-Builds\nQuickJS, litehtml, wasm3, hls.js: see adjacent original notices.\nOkHttp and Okio: Apache-2.0; original notices retained inside app/lib JARs.\norg.json: https://github.com/stleary/JSON-java/tree/20180813\nTemurin runtime: GPL-2.0 with Classpath Exception; see runtime/legal.\nPrivate browser core remains a separately authorized dependency; see its source repository and third-party notices.\n',encoding='utf-8')
     core_info = json.loads((core/'build-info.json').read_text())
     files = {str(x.relative_to(bundle)).replace('\\','/'):hashlib.sha256(x.read_bytes()).hexdigest() for x in sorted(bundle.rglob('*')) if x.is_file()}
-    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.0','core':core_info,'files':files},indent=2)+'\n')
+    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.0','application_commit':revision(ROOT),'core_commit':revision(private),'core':core_info,'files':files},indent=2)+'\n')
     if a.target=='windows':
         archive = output/'NativeWasmTv-win-x64-v0.1.0.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
