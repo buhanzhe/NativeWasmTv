@@ -23,16 +23,18 @@ public class Check {
  check(m.source("A",new Channel("two","one"))==0,"source identity survives playlist reorder");
  check(m.source("A",new Channel("one"))==0,"removed source falls back to valid first line");
  m.rememberDecode("A","corrupt");check(m.decode("A","auto").equals("auto"),"invalid stored decoder falls back");
- check(m.userAgent("A","auto").equals("auto")&&m.engine("A","system",true).equals("system"),"web defaults");
+ check(m.userAgent("A","auto").equals("windows")&&m.engine("A","system",true).equals("system"),"legacy default becomes Windows");
  m.rememberUserAgent("A","ipad");m.rememberEngine("A","lite");
  m.rememberUserAgent("B","windows");m.rememberEngine("B","system");
  m=new ChannelPlaybackMemory(p);
  check(m.userAgent("A","auto").equals("ipad")&&m.engine("A","system",true).equals("lite"),"web choices survive recreation");
  check(m.userAgent("B","auto").equals("windows")&&m.engine("B","lite",true).equals("system"),"different channel web choices stay isolated");
  check(m.engine("A","lite",false).equals("system"),"standard APK cannot restore remembered Lite");
- for(String mode:new String[]{"auto","windows","macos","ipad","native"}){m.rememberUserAgent("A",mode);check(m.userAgent("A","windows").equals(mode),"all UA modes including auto are remembered");}
+ for(String mode:new String[]{"windows","macos","ipad","native"}){m.rememberUserAgent("A",mode);check(m.userAgent("A","windows").equals(mode),"explicit UA modes are remembered");}
+ m.rememberUserAgent("A","auto");int migration=p.writes;check(m.userAgent("A","ipad").equals("windows")&&p.writes==migration+1,"legacy saved auto migrates to explicit Windows");
+ m.userAgent("A","ipad");check(p.writes==migration+1,"migration is written once");
  m.rememberUserAgent("A","corrupt");m.rememberEngine("A","corrupt");
- check(m.userAgent("A","auto").equals("auto")&&m.engine("A","system",true).equals("system"),"invalid web choices fall back");
+ check(m.userAgent("A","auto").equals("windows")&&m.engine("A","system",true).equals("system"),"invalid web choices fall back");
  int writes=p.writes;for(int i=0;i<500;i++){m.source("A",a);m.decode("B","hardware");m.userAgent("A","auto");m.engine("A","system",true);}check(writes==p.writes,"reads never write preferences");
  System.out.println("PASS channel memory: defaults, isolation, source identity/removal, decoder restore, persistence and read-only lookup");}
 }'''}

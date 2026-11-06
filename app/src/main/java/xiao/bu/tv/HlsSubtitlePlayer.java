@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -174,7 +174,7 @@ final class HlsSubtitlePlayer {
                                     busy = false;
                                     retryAt = SystemClock.elapsedRealtime() + 2000;
                                     if (!errorReported) { errorReported = true; output.error(); }
-                                    Log.w("nTvSubtitle", "Unable to load subtitles; will retry", error);
+                                    AppLog.w("nTvSubtitle", "Unable to load subtitles; will retry", error);
                                 }
                             }
                         );

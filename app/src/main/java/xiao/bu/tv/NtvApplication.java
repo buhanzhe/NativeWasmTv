@@ -33,6 +33,7 @@ public final class NtvApplication extends Application {
         super.onCreate();
         // Do not load a second crash SDK/ANR watchdog in :crash_watchdog.
         if (isMainProcess()) {
+            AppLog.initialize(this);
             registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
                 public void onActivityStarted(android.app.Activity activity) { startedActivities++; notifyVisibility(); }
                 public void onActivityStopped(android.app.Activity activity) { startedActivities=Math.max(0,startedActivities-1); notifyVisibility(); }

@@ -67,13 +67,14 @@
       </section>
       <section>
         <div class="section-head"><h2>应用日志</h2></div>
+        <p class="hint">自动保存应用与 IJK 播放日志，可查看或下载；文件自动轮换，保留最近记录。</p>
         <div class="actions"><button id="appLogsOpen" onclick="openAppLogs()">查看日志</button></div>
         <div id="appLogsPanel" style="display:none">
           <div class="actions app-log-toolbar">
             <select id="appLogFilter" onchange="refreshAppLogs()" aria-label="日志筛选">
               <option value="all">全部日志</option><option value="error">报错</option><option value="crash">崩溃</option>
             </select>
-            <button onclick="refreshAppLogs()">刷新</button><button onclick="saveAppLogs()">保存</button>
+            <button onclick="refreshAppLogs()">刷新</button><button onclick="saveAppLogs()">保存日志文件</button>
           </div>
           <textarea id="appLogText" readonly aria-label="应用日志" style="width:100%;height:320px;box-sizing:border-box;font:12px monospace;white-space:pre;background:transparent;color:inherit"></textarea>
           <p id="appLogNote" class="hint"></p>
@@ -83,7 +84,7 @@
     <div id="message" class="message"></div>
     <script src="/js/navigation.js?v=20261030-ui"></script>
     <script src="/js/common.js?v=20261030-ui"></script>
-    <script src="/js/pages/system.js?v=copy-ip1"></script>
+    <script src="/js/pages/system.js?v=app-log-files1"></script>
   <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>

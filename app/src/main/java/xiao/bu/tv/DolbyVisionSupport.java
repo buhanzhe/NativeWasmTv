@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,7 +46,7 @@ final class DolbyVisionSupport {
                         atmosDecoderSupported = Boolean.TRUE; return true;
                     }
             }
-        } catch (RuntimeException error) { Log.w("nTvDolby", "Cannot query Atmos decoder", error); }
+        } catch (RuntimeException error) { AppLog.w("nTvDolby", "Cannot query Atmos decoder", error); }
         atmosDecoderSupported = Boolean.FALSE;
         return false;
     }
@@ -64,7 +64,7 @@ final class DolbyVisionSupport {
                     try {
                         for (MediaCodecInfo.CodecProfileLevel support : codec.getCapabilitiesForType(type).profileLevels) {
                             if (support.profile == profile && support.level >= level) {
-                                Log.i("nTvDolby", "Dolby Vision decoder=" + codec.getName()
+                                AppLog.i("nTvDolby", "Dolby Vision decoder=" + codec.getName()
                                         + " profile=" + profile + " level=" + level);
                                 return codec.getName();
                             }
@@ -73,9 +73,9 @@ final class DolbyVisionSupport {
                 }
             }
         } catch (RuntimeException error) {
-            Log.w("nTvDolby", "Cannot query Dolby Vision decoder", error);
+            AppLog.w("nTvDolby", "Cannot query Dolby Vision decoder", error);
         }
-        Log.w("nTvDolby", "No Dolby Vision decoder for profile=" + profile + " level=" + level);
+        AppLog.w("nTvDolby", "No Dolby Vision decoder for profile=" + profile + " level=" + level);
         return null;
     }
 }

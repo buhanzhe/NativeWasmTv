@@ -6,6 +6,9 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '../app/src/main/assets/control');
 let passed = 0;
 
+// The probe controls share polling with catalogue import; pending writes must
+// survive old snapshots and repeated clicks must not restart a long full scan.
+
 function browser(page) {
   const elements = new Map(), requests = [], timers = new Map(), events = {};
   let timerId = 0, domWrites = 0;
@@ -60,7 +63,7 @@ function test(name, fn) { fn(); passed++; console.log('PASS ' + name); }
 
 test('system logs save the selected filter as a direct file download', () => {
   const html = fs.readFileSync(path.join(root, 'pages/system.html'), 'utf8');
-  assert.match(html, /onclick="saveAppLogs\(\)">保存<\/button>/);
+  assert.match(html, /onclick="saveAppLogs\(\)">保存(?:日志文件)?<\/button>/);
   assert.ok(!html.includes('copyAppLogs'));
   const b = browser('system'), c = b.context;
   for (const filter of ['all', 'error', 'crash']) {
@@ -82,19 +85,28 @@ test('browser settings save core options without exposing rule details', () => {
     webViewCacheBytes:0}});
   assert.equal(b.elements.get('webViewBrowserVersion').value,'128');
   assert.equal(b.elements.get('webViewAdBlock').checked,true);
-  assert.equal(b.elements.get('webViewPageCover').checked,false);
+  assert.equal(b.elements.get('webViewPageCoverStyle').value,'off');
   assert.ok(!html.includes('webViewAutoCloseSniffed'));
   assert.match(html,/<option value="155">155\.0\.8059\.40<\/option>/);
   assert.equal(b.elements.get('webViewWebRtcEnabled').checked,false);
   b.elements.get('webViewBrowserVersion').value='138';
   b.elements.get('webViewWebRtcEnabled').checked=true;
-  b.elements.get('webViewPageCover').checked=true;
+  b.elements.get('webViewPageCoverStyle').value='status';
   c.saveWebViewSettings();
   const save=b.requests.find(r=>r.url==='/api/settings');
   assert.equal(JSON.parse(save.body).webViewBrowserVersion,'138');
   assert.equal(JSON.parse(save.body).webViewWebRtcEnabled,true);
   assert.equal(JSON.parse(save.body).webViewPageCover,true);
-  assert.match(html,/aria-label="开启网页遮罩"/);
+  assert.match(html,/aria-label="网页遮罩"/);
+  assert.ok(!html.includes('id="webViewPageCover"'));
+  assert.equal(JSON.parse(save.body).webViewPageCoverStyle,'status');
+  for (const mode of ['black','off']) {
+    b.elements.get('webViewPageCoverStyle').value=mode;
+    c.saveWebViewSettings();
+    const payload=JSON.parse(b.requests[b.requests.length-1].body);
+    assert.equal(payload.webViewPageCover,mode!=='off');
+    assert.equal(payload.webViewPageCoverStyle,mode==='black'?'black':'status');
+  }
   assert.equal('webViewAutoCloseSniffed' in JSON.parse(save.body),false);
   assert.equal('webViewUserScript' in JSON.parse(save.body),false);
 });
@@ -713,8 +725,13 @@ test('RTP and UDP multicast survive TXT, M3U and legacy browser import', () => {
   const c = browser('channels').context;
   const source = {name:'河南联通',location:'https://example.com/unicom.txt'};
   const addresses = ['rtp://225.1.2.47:10276', 'RTP://225.1.2.54:11380',
-    'udp://@239.1.2.3:1234', 'udp://239.1.2.4:1234?localaddr=192.168.1.2'];
-  for (const urlApi of [URL, undefined]) {
+    'udp://@239.1.2.3:1234', 'udp://239.1.2.4:1234?localaddr=192.168.1.2',
+    'rtp://@[ff15::1234]:5004', 'rtp://192.168.1.1@239.1.2.3:1234'];
+  function HttpOnlyURL(value, base) {
+    if (/^(rtp|udp):/i.test(value)) throw new Error('Unsupported protocol');
+    return new URL(value, base);
+  }
+  for (const urlApi of [URL, undefined, HttpOnlyURL]) {
     c.URL = urlApi;
     const text = '央视,#genre#\n' + addresses.map((url, i) => '频道' + i + ',,' + url).join('\n');
     const parsed = c.parsePlaylistOnPhone(text, source);
@@ -723,11 +740,69 @@ test('RTP and UDP multicast survive TXT, M3U and legacy browser import', () => {
     assert.ok(parsed.entries.every(row => row.group === '央视'));
     const local = c.parsePlaylistOnPhone('#EXTM3U\n#EXTINF:-1,CCTV1\n' + addresses[0], {name:'本地',location:'file:///channels.m3u'});
     assert.equal(local.entries[0].url, addresses[0]);
-    assert.notEqual(c.playlistAddressProblem(addresses[0], true), '', 'A multicast channel is not a downloadable playlist location');
+    for (const address of addresses) {
+      assert.equal(c.playlistAddressProblem(address, true), '', 'A direct multicast source is accepted');
+      let playlist;
+      c.requestPlaylistText({name:'单频道',location:address}, (error, text) => { assert.ifError(error); playlist=text; });
+      const direct = c.parsePlaylistOnPhone(playlist, {location:address});
+      assert.equal(direct.entries.length, 1);
+      assert.equal(direct.entries[0].url, address);
+      assert.equal(direct.entries[0].name, '单频道');
+    }
   }
   c.URL = URL;
   assert.notEqual(c.playlistAddressProblem('rtp://:10276', false), '');
   assert.notEqual(c.playlistAddressProblem('rtp://225.1.2.47:70000', false), '');
+  assert.notEqual(c.playlistAddressProblem('udp://239.1.2.3:0', false), '');
+  assert.notEqual(c.playlistAddressProblem('rtp://999.1.2.3:1234', true), '');
+  assert.notEqual(c.playlistAddressProblem('rtp://', true), '');
+  c.epgUrls = [addresses[0]];
+  assert.throws(() => c.cleanEpgUrls(), /组播地址不能作为节目单地址/);
+});
+
+test('direct multicast sources merge and push as channels without HTTP playlist reads', () => {
+  const b = browser('channels'), c = b.context;
+  c.state = {settings:{structuredPlaylistImport:true}};
+  const urls = ['rtp://225.1.2.47:10276', 'udp://@239.1.2.3:1234'];
+  c.playlistSources = urls.map((location, i) => ({id:'multicast'+i, name:'组播'+i, location, enabled:true}));
+  c.mergeAndPushPlaylistSources();
+  const merges = b.requests.filter(r => r.url === '/api/playlist/merge');
+  assert.equal(merges.length, 1);
+  const payload = JSON.parse(merges[0].body);
+  assert.deepEqual(payload.sources.map(row => row.location), urls);
+  assert.deepEqual(payload.sourcePlaylists.map(row => row.channels[0].urls[0]), urls);
+  assert.equal(b.requests.filter(r => /playlist\/source|^(rtp|udp):/.test(r.url)).length, 0);
+});
+
+test('carrier RTSP SMIL URLs retain their empty query in TXT, M3U and direct-source imports', () => {
+  const b = browser('channels'), c = b.context;
+  const address = 'rtsp://10.254.216.130/PLTV/88888888/224/3221225621/10000100000000060000000000009742_0.smil?';
+  function HttpOnlyURL(value, base) {
+    if (/^rtsp:/i.test(value)) throw new Error('Unsupported protocol');
+    return new URL(value, base);
+  }
+  for (const urlApi of [URL, undefined, HttpOnlyURL]) {
+    c.URL = urlApi;
+    for (const text of ['CCTV-1,' + address, '#EXTM3U\n#EXTINF:-1,CCTV-1\n' + address]) {
+      const parsed = c.parsePlaylistOnPhone(text, {location:'file:///channels.txt'});
+      assert.equal(parsed.warningCount, 0);
+      assert.equal(parsed.entries[0].url, address);
+    }
+    assert.equal(c.playlistAddressProblem(address, true), '');
+    let playlist;
+    c.requestPlaylistText({name:'CCTV-1',location:address}, (error,text) => {assert.ifError(error);playlist=text;});
+    assert.equal(c.parsePlaylistOnPhone(playlist, {location:address}).entries[0].url, address);
+  }
+  c.state = {settings:{structuredPlaylistImport:true}};
+  c.playlistSources = [{id:'rtsp',name:'CCTV-1',location:address,enabled:true}];
+  c.mergeAndPushPlaylistSources();
+  const payload = JSON.parse(b.requests.find(r => r.url === '/api/playlist/merge').body);
+  assert.equal(payload.sourcePlaylists[0].channels[0].urls[0], address);
+  assert.equal(b.requests.filter(r => /playlist\/source|^rtsp:/.test(r.url)).length, 0);
+  for (const invalid of ['rtsp://','rtsp://:554/live','rtsp://10.0.0.1:70000/live','rtsp://10.0.0.1:0/live'])
+    assert.notEqual(c.playlistAddressProblem(invalid, true), '');
+  c.epgUrls = [address];
+  assert.throws(() => c.cleanEpgUrls(), /节目单地址/);
 });
 
 test('playlist validation skips broken rows and keeps their original line in the warning', () => {
@@ -1634,18 +1709,38 @@ test('old APIs cannot silently accept an unsupported fullscreen setting', () => 
  const count=b.requests.length;c.saveFullscreenStartup();assert.equal(b.requests.length,count);
 });
 
-test('web channel memory hides the engine toggle in standard APKs and saves UA independently',()=>{
+test('channel memory saves source and decode without changing domain browser overrides',()=>{
  const b=browser('personalization'),c=b.context,get=id=>c.document.getElementById(id);
  b.requests[0].respond({settings:{rememberChannelSource:true,rememberChannelDecode:true,rememberChannelUserAgent:true,liteBrowserSupported:false,personalBackground:{mode:'off'}}});
  assert.equal(get('webEngineMemoryRow').hidden,true);assert.equal(get('rememberChannelWebEngine').disabled,true);
  get('rememberChannelUserAgent').checked=false;c.saveMemory();
  const save=b.requests.at(-1),patch=JSON.parse(save.body);
- assert.equal(patch.rememberChannelUserAgent,false);assert.equal('rememberChannelWebEngine' in patch,false);
- save.respond({ok:true});assert.equal(get('rememberChannelUserAgent').checked,false);
+ assert.equal('rememberChannelUserAgent' in patch,false);assert.equal('rememberChannelWebEngine' in patch,false);
+ assert.equal(patch.rememberChannelSource,true);assert.equal(patch.rememberChannelDecode,true);
+ save.respond({ok:true});assert.equal(get('rememberChannelUserAgent').checked,true);
  c.state.settings.liteBrowserSupported=true;c.state.settings.rememberChannelWebEngine=true;c.renderPageState();
  assert.equal(get('webEngineMemoryRow').hidden,false);assert.equal(get('rememberChannelWebEngine').disabled,false);
  get('rememberChannelWebEngine').checked=false;c.saveMemory();
- assert.equal(JSON.parse(b.requests.at(-1).body).rememberChannelWebEngine,false);
+ assert.equal('rememberChannelWebEngine' in JSON.parse(b.requests.at(-1).body),false);
  b.requests.at(-1).respond({message:'failed'},500);
  assert.equal(get('rememberChannelWebEngine').checked,true);assert.equal(get('rememberChannelWebEngine').disabled,false);
+});
+
+
+test('neighbor probe switch preserves pending choice and full scan submits once',()=>{
+ const b=browser('channels'),c=b.context,get=id=>c.document.getElementById(id);
+ b.requests[0].respond({settings:{neighborProbeEnabled:true,channelProbe:{good:2,bad:1,unknown:3}}});
+ assert.equal(get('neighborProbeEnabled').checked,true);
+ assert.equal(get('channelProbeStatus').textContent,'失效 1 项');
+ get('neighborProbeEnabled').checked=false;c.saveNeighborProbe();const save=b.requests.at(-1);
+ assert.equal(JSON.parse(save.body).neighborProbeEnabled,false);assert.equal(get('neighborProbeEnabled').disabled,true);
+ c.renderPageState();assert.equal(get('neighborProbeEnabled').checked,false);
+ save.respond({ok:false,message:'offline'},500);assert.equal(get('neighborProbeEnabled').checked,true);assert.equal(get('neighborProbeEnabled').disabled,false);
+ const count=b.requests.length;c.probeAllChannels();const scan=b.requests.at(-1);c.probeAllChannels();
+ assert.equal(b.requests.length,count+1);assert.equal(JSON.parse(scan.body).probeAllChannels,true);
+ scan.respond({ok:true});c.state.settings.channelProbe={running:true,completed:4,total:8};c.renderPageState();
+ assert.equal(get('probeAllButton').disabled,true);assert.match(get('channelProbeStatus').textContent,/4 \/ 8/);
+ const active=b.requests.length;c.probeAllChannels();assert.equal(b.requests.length,active);
+ c.state.settings.channelProbe={running:false,good:7,bad:1};c.renderPageState();assert.equal(get('probeAllButton').disabled,false);
+ const html=fs.readFileSync(path.join(root,'pages/channels.html'),'utf8');assert.ok(html.indexOf('id="probeAllButton"')<html.indexOf('id="neighborProbeEnabled"'));
 });

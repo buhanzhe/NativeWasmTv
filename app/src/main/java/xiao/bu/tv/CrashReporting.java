@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.os.SystemClock;
 import java.util.ArrayDeque;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -37,20 +37,20 @@ final class CrashReporting {
             if(pending.size()==8)pending.removeFirst();pending.addLast(new PendingError(error,origin));
             if(!flushScheduled){flushScheduled=true;Deferred.worker.schedule(CrashReporting::flush,1,TimeUnit.SECONDS);}
         }
-        catch(RuntimeException|LinkageError failure){Log.w(TAG,"Unable to submit player error",failure);}
+        catch(RuntimeException|LinkageError failure){AppLog.w(TAG,"Unable to submit player error",failure);}
     }
     private static synchronized void flush(){
         flushScheduled=false;
         long now=SystemClock.elapsedRealtime();
         int expired=0;while(!pending.isEmpty()&&now-pending.peekFirst().created>=60000){pending.removeFirst();expired++;}
-        if(expired>0)Log.w(TAG,"Player reports expired while Bugly module initialization was unavailable: "+expired);
+        if(expired>0)AppLog.w(TAG,"Player reports expired while Bugly module initialization was unavailable: "+expired);
         try{
             if(Sdk.ready())while(!pending.isEmpty()){
                 PendingError event=pending.removeFirst();
                 Sdk.postPlayerError(event.error,event.origin);
             }
             else if(!pending.isEmpty()){flushScheduled=true;Deferred.worker.schedule(CrashReporting::flush,1,TimeUnit.SECONDS);}
-        }catch(RuntimeException|LinkageError failure){pending.clear();Log.w(TAG,"Unable to flush player errors",failure);}
+        }catch(RuntimeException|LinkageError failure){pending.clear();AppLog.w(TAG,"Unable to flush player errors",failure);}
     }
 
     static void putDiagnostic(Context context, String key, String value) {
@@ -58,7 +58,7 @@ final class CrashReporting {
         try {
             Sdk.putDiagnostic(context.getApplicationContext(), key, value);
         } catch (RuntimeException | LinkageError error) {
-            Log.w(TAG, "Unable to attach crash diagnostic", error);
+            AppLog.w(TAG, "Unable to attach crash diagnostic", error);
         }
     }
 
@@ -68,9 +68,9 @@ final class CrashReporting {
             // Separate class keeps the SDK out of the API 14 verification path.
             Sdk.start(context.getApplicationContext());
             started = true;
-            Log.i(TAG, "Bugly crash reporting initialization requested");
+            AppLog.i(TAG, "Bugly crash reporting initialization requested");
         } catch (RuntimeException | LinkageError error) {
-            Log.w(TAG, "Bugly initialization failed; playback remains available", error);
+            AppLog.w(TAG, "Bugly initialization failed; playback remains available", error);
         }
     }
 
@@ -86,7 +86,7 @@ final class CrashReporting {
                 BuglyLog.e("nTvPlayer","[nTvPlayer:"+report.id+"] "+report.details);
             }
             CrashReport.postCatchedException(error,origin);
-            Log.i(TAG,"Player error queued for Bugly Errors");
+            AppLog.i(TAG,"Player error queued for Bugly Errors");
         }
         static void putDiagnostic(Context context, String key, String value) {
             CrashReport.putUserData(context, key,

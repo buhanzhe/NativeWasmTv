@@ -28,7 +28,12 @@ final class ChannelPlaybackMemory {
         preferences.edit().putString(key(channel,"ua"),mode).apply();
     }
     String userAgent(String channel,String fallback) {
+        fallback=WebSiteProfile.userAgentMode(fallback,null);
         String value=preferences.getString(key(channel,"ua"),fallback);
+        if("auto".equals(value)){
+            preferences.edit().putString(key(channel,"ua"),"windows").apply();
+            return "windows";
+        }
         return WebSiteProfile.validUserAgentMode(value)?value:fallback;
     }
     void rememberEngine(String channel,String engine) {

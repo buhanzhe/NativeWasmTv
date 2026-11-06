@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.app.Activity;
 import android.text.TextUtils;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.JavascriptInterface;
 import android.widget.FrameLayout;
 
@@ -133,7 +133,7 @@ final class Ku9ScriptResolver {
                         }
                     });
                 } catch (final IOException error) {
-                    Log.w(TAG, "Unable to load Ku9 script " + sourceUrl, error);
+                    AppLog.w(TAG, "Unable to load Ku9 script " + sourceUrl, error);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -257,7 +257,7 @@ final class Ku9ScriptResolver {
                 }
             }
         } catch (SocketException error) {
-            Log.w(TAG, "Unable to inspect IPv6 network state", error);
+            AppLog.w(TAG, "Unable to inspect IPv6 network state", error);
         }
         return false;
     }
@@ -267,7 +267,7 @@ final class Ku9ScriptResolver {
             return;
         }
         if (request.initialCompleted) {
-            Log.w(TAG, reason + "; retaining the last live playlist");
+            AppLog.w(TAG, reason + "; retaining the last live playlist");
             handler.removeCallbacks(refreshPlaylist);
             handler.postDelayed(refreshPlaylist, MAX_PLAYLIST_REFRESH_MS);
             return;

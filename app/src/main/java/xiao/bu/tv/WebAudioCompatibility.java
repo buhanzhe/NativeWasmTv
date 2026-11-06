@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebView;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -24,7 +24,7 @@ final class WebAudioCompatibility {
             if (Build.VERSION.SDK_INT >= 19) view.evaluateJavascript(script, null);
             else view.loadUrl("javascript:" + script);
         } catch (Exception error) {
-            Log.w("WebAudioCompatibility", "Cannot apply web audio compatibility", error);
+            AppLog.w("WebAudioCompatibility", "Cannot apply web audio compatibility", error);
         }
     }
 }

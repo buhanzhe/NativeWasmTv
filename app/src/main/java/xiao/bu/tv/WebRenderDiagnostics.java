@@ -8,7 +8,7 @@ import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebView;
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -42,7 +42,7 @@ final class WebRenderDiagnostics {
                 memory += " proc=unavailable";
             }
             CrashReporting.putDiagnostic(context, "web_memory", memory);
-            Log.i("WebRenderDiagnostics", memory);
+            AppLog.i("WebRenderDiagnostics", memory);
             handler.postDelayed(this, 30000L);
         }
     };
@@ -69,7 +69,7 @@ final class WebRenderDiagnostics {
         if (!state.equals(lastState)) {
             lastState = state;
             CrashReporting.putDiagnostic(context, "web_render", state);
-            Log.i("WebRenderDiagnostics", state);
+            AppLog.i("WebRenderDiagnostics", state);
         }
         if (!running) {
             running = true;

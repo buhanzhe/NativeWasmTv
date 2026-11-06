@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.util.Xml;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -154,7 +154,7 @@ final class EpgManager {
                     programmes.add(new Program(cursor.getLong(1),cursor.getLong(2),cursor.getString(3),cursor.getString(4)));
                 }}finally{cursor.close();}
                 return new StoredGuide(restored,resolved,validated);
-            }catch(android.database.SQLException error){Log.w(TAG,"Unable to read SQLite EPG",error);return null;}
+            }catch(android.database.SQLException error){AppLog.w(TAG,"Unable to read SQLite EPG",error);return null;}
         }
     }
     private void saveDatabase(String source,String resolved,Guide snapshot,long validated){
@@ -200,7 +200,7 @@ final class EpgManager {
                 long validated=slot.file.lastModified();
                 saveDatabase(source,resolved,restored,validated);
                 return new StoredGuide(restored,resolved,validated);
-            }catch(Exception error){Log.w(TAG,"Unable to rebuild SQLite EPG from XML",error);return null;}
+            }catch(Exception error){AppLog.w(TAG,"Unable to rebuild SQLite EPG from XML",error);return null;}
         }
     }
 
@@ -393,7 +393,7 @@ final class EpgManager {
                                 if(restored==null)continue;
                                 String resolved=prefs.getString(slot.resolvedKey,sources.get(i));
                                 resolveLogos(restored,resolved);mergeGuide(disk,restored);diskSources.add(resolved);
-                            }catch(Exception ignored){Log.w(TAG,"Unable to restore cached EPG");}
+                            }catch(Exception ignored){AppLog.w(TAG,"Unable to restore cached EPG");}
                         }
                         boolean restored=false;
                         synchronized(EpgManager.this){
@@ -432,7 +432,7 @@ final class EpgManager {
                                         ? sourceError.getClass().getSimpleName()
                                         : sourceError.getMessage();
                             }
-                            Log.w(TAG, "Unable to load EPG source " + source, sourceError);
+                            AppLog.w(TAG, "Unable to load EPG source " + source, sourceError);
                         }
                     }
                     if (merged.programsByChannel.isEmpty()) {
@@ -451,7 +451,7 @@ final class EpgManager {
                             attemptedAt=android.os.SystemClock.elapsedRealtime();
                         }
                     }
-                    Log.w(TAG, "Unable to refresh EPG", error);
+                    AppLog.w(TAG, "Unable to refresh EPG", error);
                 } finally {
                     synchronized(EpgManager.this){
                         if(requestId==refreshGeneration)loading=false;
@@ -479,7 +479,7 @@ final class EpgManager {
                     if (isCacheFresh(slot.file)) return new LoadedGuide(cachedGuide, cachedUrl);
                 }
             } catch (Exception cacheError) {
-                if (!slot.file.delete()) Log.w(TAG, "Unable to remove invalid EPG cache");
+                if (!slot.file.delete()) AppLog.w(TAG, "Unable to remove invalid EPG cache");
                 cachedGuide = null;
             }
         }
@@ -491,7 +491,7 @@ final class EpgManager {
                 remote = downloadUsableGuide(sourceUrl, previous, slot.file, force, cachedGuide);
             } catch (Exception primaryError) {
                 if (!DEFAULT_URL.equals(sourceUrl)) throw primaryError;
-                Log.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
+                AppLog.w(TAG, "Primary EPG unavailable; trying fallback", primaryError);
                 remote = downloadUsableGuide(FALLBACK_URL, previous, slot.file, force, cachedGuide);
             }
             Download downloaded = remote.download;
@@ -505,13 +505,13 @@ final class EpgManager {
             Guide parsed = remote.guide;
             resolveLogos(parsed, downloaded.url);
             try{saveDatabase(sourceUrl,downloaded.url,parsed,System.currentTimeMillis());}
-            catch(android.database.SQLException cacheError){Log.w(TAG,"SQLite EPG write failed; using downloaded guide",cacheError);}
+            catch(android.database.SQLException cacheError){AppLog.w(TAG,"SQLite EPG write failed; using downloaded guide",cacheError);}
             try{writeCache(slot, downloaded.bytes, sourceUrl, downloaded.url,downloaded.metadata);}
-            catch(IOException cacheError){Log.w(TAG,"XML backup unavailable; SQLite EPG retained",cacheError);}
+            catch(IOException cacheError){AppLog.w(TAG,"XML backup unavailable; SQLite EPG retained",cacheError);}
             return new LoadedGuide(parsed, downloaded.url);
         } catch (Exception downloadError) {
             if (cachedGuide != null && !cachedGuide.programsByChannel.isEmpty()) {
-                Log.w(TAG, "Using stale EPG cache for " + sourceUrl, downloadError);
+                AppLog.w(TAG, "Using stale EPG cache for " + sourceUrl, downloadError);
                 return new LoadedGuide(cachedGuide, cachedUrl);
             }
             throw downloadError;
@@ -546,7 +546,7 @@ final class EpgManager {
         guide = next;
         loadedUrl = joinSources(sourceUrls);
         lastError = "";
-        Log.i(TAG, "EPG loaded source=" + loadedUrl
+        AppLog.i(TAG, "EPG loaded source=" + loadedUrl
                 + " aliases=" + next.channelByAlias.size()
                 + " channels=" + next.programsByChannel.size());
     }
@@ -718,7 +718,7 @@ final class EpgManager {
             editor.putString(slot.resolvedKey, resolvedUrl);
         }
         editor.apply();
-        Log.i(TAG, "EPG unchanged; reused validated cache");
+        AppLog.i(TAG, "EPG unchanged; reused validated cache");
     }
 
     private static final class Download {

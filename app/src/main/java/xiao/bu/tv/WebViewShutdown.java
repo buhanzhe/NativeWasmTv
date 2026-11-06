@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.JsResult;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
@@ -140,7 +140,7 @@ final class WebViewShutdown {
         finished = true;
         handler.removeCallbacks(navigate);
         handler.removeCallbacks(deadline);
-        if (timedOut) Log.w(TAG, "Renderer drain timed out; completing bounded cleanup");
+        if (timedOut) AppLog.w(TAG, "Renderer drain timed out; completing bounded cleanup");
         try { ready.run(); }
         finally { complete(!timedOut); }
     }

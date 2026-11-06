@@ -20,7 +20,7 @@ import android.view.WindowManager;
 import java.io.BufferedReader;
 import java.io.FileReader;
 
-/** API 14-25 WebKit runs inside the app process. Give it a disposable process/task. */
+/** API 14-23 WebKit runs inside the app process. Give it a disposable process/task. */
 public final class LegacyWebActivity extends Activity implements WebSourceView.Listener {
     private final Handler ui = new Handler();
     private final Messenger inbox = new Messenger(new Handler(message -> { command(message.getData()); return true; }));
@@ -108,7 +108,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
                 send(LegacyWebSession.HEARTBEAT, beat); lastSend = now;
             }
             if (failure.length() > 0) {
-                android.util.Log.w("LegacyWebGuard", "browser self-stop rssKb=" + rss + " limitKb=" + memoryLimitKb + " reason=" + failure);
+                xiao.bu.tv.AppLog.w("LegacyWebGuard", "browser self-stop rssKb=" + rss + " limitKb=" + memoryLimitKb + " reason=" + failure);
                 // Main handles the notification. Death notification is the fallback if IPC is lost.
                 SystemClock.sleep(250L); Process.killProcess(Process.myPid()); return;
             }

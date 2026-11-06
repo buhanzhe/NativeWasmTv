@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Old in-process WebKit needs the disposable browser host. -->
+    <bool name="legacy_web_activity_enabled">true</bool>
+</resources>

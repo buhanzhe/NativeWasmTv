@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.os.Process;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -51,7 +51,7 @@ final class CrashReporter {
             writer.flush();
             output.getFD().sync();
         } catch (Throwable writeError) {
-            Log.e(TAG, "Unable to persist Java crash", writeError);
+            AppLog.e(TAG, "Unable to persist Java crash", writeError);
         } finally {
             if (writer != null) {
                 writer.close();

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 7+ embeds web channels in the existing player Activity. -->
+    <bool name="legacy_web_activity_enabled">false</bool>
+</resources>

@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -632,7 +632,7 @@ final class PlaylistManager {
 
     private ChannelCatalog.Group[] persistAndFilterGroups(ChannelCatalog.Group[] groups) {
         if (!catalogStore.replace(groups, null)) {
-            Log.w(TAG, "Unable to persist startup channel catalog; using memory snapshot");
+            AppLog.w(TAG, "Unable to persist startup channel catalog; using memory snapshot");
         }
         return rememberAndFilterGroups(groups);
     }
@@ -648,6 +648,7 @@ final class PlaylistManager {
     private static String mergedGroupId(ChannelCatalog.Group group) {
         return "group:" + groupKey(group.title);
     }
+    static String channelGroupId(String title) { return "group:" + groupKey(title); }
 
     private ChannelCatalog.Group[] filterGroups(Set<String> disabled, JSONObject settings) {
         List<ChannelCatalog.Group> visible = new ArrayList<ChannelCatalog.Group>();
@@ -725,6 +726,7 @@ final class PlaylistManager {
     private static Channel[] configuredChannels(Channel[] channels, JSONObject setting, boolean includeHidden) {
         if (setting == null) return channels;
         Set<String> hidden = stringSet(setting.optJSONArray("hidden"));
+        hidden.addAll(stringSet(setting.optJSONArray("removed")));
         Map<String, Channel> remaining = new LinkedHashMap<String, Channel>();
         for (Channel channel : channels) remaining.put(channelSettingKey(channel), channel);
         List<Channel> ordered = new ArrayList<Channel>();
@@ -752,6 +754,7 @@ final class PlaylistManager {
         Channel[] raw = managementChannels(groupId);
         JSONObject setting = readChannelSettings().optJSONObject(groupId);
         Set<String> hidden = setting == null ? new HashSet<String>() : stringSet(setting.optJSONArray("hidden"));
+        if (setting != null) hidden.addAll(stringSet(setting.optJSONArray("removed")));
         JSONArray channels = new JSONArray();
         for (Channel channel : configuredChannels(raw, setting, true)) channels.put(new JSONObject()
                 .put("id", channelSettingKey(channel)).put("name", channel.name)
@@ -773,13 +776,52 @@ final class PlaylistManager {
         if (order == null || hidden == null || order.length() != available.size()
                 || stringSet(order).size() != available.size() || !available.containsAll(stringSet(order))
                 || !available.containsAll(stringSet(hidden))) throw new IOException("频道列表已变化，请重新展开分组后重试");
-        settings.put(groupId, new JSONObject().put("order", order).put("hidden", hidden));
+        Set<String> removed = stringSet(settings.optJSONObject(groupId) == null ? null
+                : settings.optJSONObject(groupId).optJSONArray("removed"));
+        removed.retainAll(stringSet(hidden));
+        Set<String> manuallyHidden = stringSet(hidden); manuallyHidden.removeAll(removed);
+        settings.put(groupId, new JSONObject().put("order", order)
+                .put("hidden", new JSONArray(manuallyHidden)).put("removed", new JSONArray(removed)));
         ChannelCatalog.Group[] visible = filterGroups(getDisabledGroups(), settings);
         if (availableGroups.length > 0 && visible.length == 0) throw new IOException("至少保留一个可见频道");
         if (!preferences.edit().putString(MERGED_CHANNEL_SETTINGS, settings.toString()).commit())
             throw new IOException("频道设置保存失败，请重试");
         visibleGroups = visible;
         return visible;
+    }
+
+    /** Local removal survives source refresh; does not edit a provider's file. */
+    synchronized ChannelCatalog.Group[] removeChannel(String groupId, String channelName)
+            throws IOException, JSONException {
+        Channel[] raw = managementChannels(groupId);
+        String key = channelName == null ? "" : channelName.toLowerCase(Locale.US);
+        boolean found = false;
+        for (Channel channel : raw) if (channelSettingKey(channel).equals(key)) found = true;
+        if (!found) throw new IOException("频道已变化，请重新选择后移除");
+        JSONObject settings = readChannelSettings(), setting = settings.optJSONObject(groupId);
+        if (setting == null) setting = new JSONObject();
+        Set<String> removed = stringSet(setting.optJSONArray("removed")); removed.add(key);
+        setting.put("removed", new JSONArray(removed)); settings.put(groupId, setting);
+        ChannelCatalog.Group[] visible = filterGroups(getDisabledGroups(), settings);
+        if (availableGroups.length > 0 && visible.length == 0) throw new IOException("至少保留一个可见频道");
+        if (!preferences.edit().putString(MERGED_CHANNEL_SETTINGS, settings.toString()).commit())
+            throw new IOException("移除记录保存失败，请重试");
+        visibleGroups = visible; return visible;
+    }
+
+    synchronized ChannelCatalog.Group[] restoreRemovedChannels() throws IOException, JSONException {
+        JSONObject settings = readChannelSettings(); boolean changed = false;
+        for (java.util.Iterator<String> keys = settings.keys(); keys.hasNext();) {
+            JSONObject setting = settings.optJSONObject(keys.next());
+            if (setting != null && setting.optJSONArray("removed") != null
+                    && setting.optJSONArray("removed").length() > 0) {
+                setting.remove("removed"); changed = true;
+            }
+        }
+        if (!changed) throw new IOException("没有可恢复的移除频道");
+        if (!preferences.edit().putString(MERGED_CHANNEL_SETTINGS, settings.toString()).commit())
+            throw new IOException("恢复记录保存失败，请重试");
+        visibleGroups = filterGroups(getDisabledGroups(), settings); return visibleGroups;
     }
 
     private Set<String> getCollapsedSources() {
@@ -969,7 +1011,7 @@ final class PlaylistManager {
             }
             if (!isSupportedLocation(location)) {
                 throw new JSONException("“" + (name.length() == 0 ? "频道源" : name)
-                        + "”仅支持 HTTP(S)、file://、content:// 或绝对路径");
+                        + "”需要频道列表地址、本地文件或完整的 RTP/UDP/RTSP 频道地址");
             }
             if (name.length() == 0) {
                 name = "频道源 " + (result.size() + 1);
@@ -1016,6 +1058,7 @@ final class PlaylistManager {
     }
 
     private byte[] readSourceForStartup(Source source) throws IOException {
+        if (MulticastPlaylist.matches(source.location)) return MulticastPlaylist.bytes(source.name, source.location);
         if (isLocalLocation(source.location)) {
             return readLocal(source.location);
         }
@@ -1027,6 +1070,8 @@ final class PlaylistManager {
     }
 
     private SourceRead readSource(Source source, long deadline) throws IOException {
+        if (MulticastPlaylist.matches(source.location))
+            return new SourceRead(MulticastPlaylist.bytes(source.name, source.location), false, null);
         if (isLocalLocation(source.location)) {
             return new SourceRead(readLocal(source.location), false, null);
         }
@@ -1120,7 +1165,7 @@ final class PlaylistManager {
                 && reusableCache && previous.shouldProbeMd5()
                 && playlistHeadMatches(url, sourceUrl, cookie, referer,
                         previous, cachedFile, deadline)) {
-            Log.i(TAG, "Channel source unchanged by size/MD5 " + sourceUrl);
+            AppLog.i(TAG, "Channel source unchanged by size/MD5 " + sourceUrl);
             return RemoteDownload.notModified();
         }
         HttpURLConnection connection = openPlaylistConnection(url, deadline);
@@ -1865,7 +1910,7 @@ final class PlaylistManager {
     private static boolean isSupportedLocation(String location) {
         String value = location.toLowerCase(Locale.US);
         return value.startsWith("http://") || value.startsWith("https://")
-                || isLocalLocation(value);
+                || isLocalLocation(value) || MulticastPlaylist.valid(location);
     }
 
     private static String sanitizeId(String id) {

@@ -19,7 +19,7 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.Surface;
 import android.view.Display;
 import android.view.View;
@@ -101,7 +101,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
             if (!display.isValid()) return null;
             return DisplayApi24.supportedHdrTypes(display);
         } catch (RuntimeException error) {
-            Log.w(TAG, "HDR display capability query failed; use SDR mapping", error);
+            AppLog.w(TAG, "HDR display capability query failed; use SDR mapping", error);
             return null;
         }
     }
@@ -137,10 +137,10 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         int[] hdrTypes = supportedHdrTypes();
         if (HdrDisplayPolicy.passthrough(mode, transfer, hdrTypes, Build.VERSION.SDK_INT)) {
             outputRoute = "HDR直出";
-            Log.i(TAG, "HDR hardware passthrough transfer=" + transfer);
+            AppLog.i(TAG, "HDR hardware passthrough transfer=" + transfer);
             return null;
         }
-        if (mode == 1 && !wideGamut) Log.i(TAG, "HDR display fallback: transfer=" + transfer
+        if (mode == 1 && !wideGamut) AppLog.i(TAG, "HDR display fallback: transfer=" + transfer
                 + " hdrTypes=" + java.util.Arrays.toString(hdrTypes)
                 + " sdk=" + Build.VERSION.SDK_INT + " -> SDR mapping");
         Context ctx = context;
@@ -151,7 +151,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 && HdrDisplayPolicy.decoderToneMapping(mode, Build.VERSION.SDK_INT)) {
             format.setInteger("color-transfer-request", 3);
             outputRoute = "解码器→SDR";
-            Log.i(TAG, "Request decoder HDR -> SDR transfer=" + transfer);
+            AppLog.i(TAG, "Request decoder HDR -> SDR transfer=" + transfer);
             return null;
         }
         float peak = peak(format,1000f);
@@ -163,8 +163,8 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 integer(format, "color-standard", sourceStandard),integer(format,"color-range",2),
                 integer(format,"ntv-source-depth","video/hevc".equals(format.getString("mime"))
                         && integer(format,"profile",0)==2?10:8));
-        if (wideGamut) Log.i(TAG, "BT.2020 -> BT.709 gamut conversion; source transfer=" + sourceTransfer);
-        Log.i(TAG, "GPU HDR output mode=" + mode + " transfer=" + transfer
+        if (wideGamut) AppLog.i(TAG, "BT.2020 -> BT.709 gamut conversion; source transfer=" + sourceTransfer);
+        AppLog.i(TAG, "GPU HDR output mode=" + mode + " transfer=" + transfer
                 + " display=" + (targetDisplay == null ? "unknown" : targetDisplay.getDisplayId()));
         active = bridge;
         outputRoute = forceBt709 ? "GPU BT.709" : "GPU→SDR";
@@ -194,7 +194,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 if(rejectedMapping.size()>=32)rejectedMapping.remove(rejectedMapping.keySet().iterator().next());
                 rejectedMapping.put(key,Boolean.TRUE);
             }
-            Log.w(TAG,"Codec SDR mapping rejected; retry hardware with GPU output",original);
+            AppLog.w(TAG,"Codec SDR mapping rejected; retry hardware with GPU output",original);
             format.setInteger("color-transfer-request",0);format.setInteger("ntv-force-gpu",1);
             try{
                 codec.reset();
@@ -246,7 +246,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
             release();
             throw new IllegalStateException("HDR GPU output initialization failed", failure);
         }
-        Log.i(TAG, (forceBt709 ? "GPU BT.709 override " : transfer < 6 ? "GPU BT.2020 -> BT.709 " : "GPU HDR -> SDR ")
+        AppLog.i(TAG, (forceBt709 ? "GPU BT.709 override " : transfer < 6 ? "GPU BT.2020 -> BT.709 " : "GPU HDR -> SDR ")
                 + width + "x" + height + " transfer=" + transfer + " peak=" + peak
                 + " sampling=" + (rawYuv ? "raw YUV" : "RGB compatibility"));
     }
@@ -277,7 +277,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
     }
 
     public void outputFormat(MediaFormat format) {
-        Log.i(TAG,"HDR decoder output " + format);
+        AppLog.i(TAG,"HDR decoder output " + format);
         updateOutputGeometry(format);
         int reportedTransfer = integer(format,"color-transfer",0);
         int reportedStandard = integer(format,"color-standard",0);
@@ -296,7 +296,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 + " range=" + integer(format,"color-range",0);
         if (incompleteSdr) {
             decoderColor += " (source fallback=" + configuredStandard + "/" + transfer + ")";
-            Log.w(TAG,"Incomplete SDR output tags; keep source HDR transfer=" + transfer
+            AppLog.w(TAG,"Incomplete SDR output tags; keep source HDR transfer=" + transfer
                     + " standard=" + configuredStandard);
         }
         float outputPeak = peak(format,peak);
@@ -317,7 +317,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
             } else if (outputTransfer == 3 || outputTransfer == 1) {
                 GLES20.glUniform1f(GLES20.glGetUniformLocation(program,"ntvTransfer"),
                         outputStandard == 6 ? outputTransfer : 0f);
-                Log.i(TAG,"Decoder SDR output; gamut conversion=" + (outputStandard == 6));
+                AppLog.i(TAG,"Decoder SDR output; gamut conversion=" + (outputStandard == 6));
             }
         });
     }
@@ -419,7 +419,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
         toneReference=tone;
         try{referenceProgram=buildProgram(tone,rawYuv,false);}catch(RuntimeException failure){
             if(!rawYuv)throw failure;
-            Log.w(TAG,"Raw YUV shader unavailable; use legacy RGB compatibility output",failure);
+            AppLog.w(TAG,"Raw YUV shader unavailable; use legacy RGB compatibility output",failure);
             rawYuv=false;referenceProgram=buildProgram(tone,false,false);
         }
         selectProgram(referenceProgram);
@@ -510,7 +510,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 try{next=buildProgram(toneReference,rawYuv,true);}
                 catch(RuntimeException error){
                     if(!toneLut.isVolume())throw error;
-                    Log.w(TAG,"3D LUT shader unavailable; keep 2D lookup",error);
+                    AppLog.w(TAG,"3D LUT shader unavailable; keep 2D lookup",error);
                     toneLut.disableVolume();lut=toneLut.update(trc,maximum);
                     next=buildProgram(toneReference,rawYuv,true);
                 }
@@ -521,7 +521,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
             GLES20.glBindTexture(toneLut.target(),lut);
         } catch (RuntimeException error) {
             lutFailed=true;use=false;toneLut.release();
-            Log.w(TAG,"HDR LUT unavailable; retain reference tone mapping",error);
+            AppLog.w(TAG,"HDR LUT unavailable; retain reference tone mapping",error);
         }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         int selected = use ? lutProgram : referenceProgram;
@@ -544,7 +544,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                                 : HdrDisplayPolicy.sdrShader(toneReference, (int) trc), rawYuv, false);
                     } catch (RuntimeException | OutOfMemoryError error) {
                         curve = false;
-                        if (!sdrCurveFailed) Log.w(TAG,"SDR curve unavailable; retain specialized formula",error);
+                        if (!sdrCurveFailed) AppLog.w(TAG,"SDR curve unavailable; retain specialized formula",error);
                         sdrCurveFailed = true;
                         if (sdrCurve != null) { sdrCurve.release(); sdrCurve = null; }
                         for (int i=0; i<16 && GLES20.glGetError()!=GLES20.GL_NO_ERROR; i++) {}
@@ -554,7 +554,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                     if (sdrProgram != 0) GLES20.glDeleteProgram(sdrProgram);
                     sdrProgram = next; sdrTransfer = (int) trc;
                 } catch (RuntimeException | OutOfMemoryError error) {
-                    Log.w(TAG, "Specialized SDR shader unavailable; retain reference", error);
+                    AppLog.w(TAG, "Specialized SDR shader unavailable; retain reference", error);
                 }
             }
             if (sdrProgram != 0 && sdrTransfer == (int) trc) {
@@ -659,7 +659,7 @@ public final class NativeHdrOutput implements SurfaceTexture.OnFrameAvailableLis
                 rateStart=now;rateFrames=renderedFrames;
             }
         } catch (RuntimeException error) {
-            failure = error; Log.e(TAG,"HDR output failed",error); release();
+            failure = error; AppLog.e(TAG,"HDR output failed",error); release();
         }
     }
 

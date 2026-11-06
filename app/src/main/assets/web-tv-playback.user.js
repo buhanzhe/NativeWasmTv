@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name nTv 内置网页电视播放助手
-// @version 1.0.13
+// @version 1.0.15
 // @description 自动铺满原播放器并尝试播放，继续供原生嗅探；保留原站请求和加密流程，及时释放已播放的直播缓冲。
 // @grant none
 // ==/UserScript==
@@ -31,7 +31,7 @@
 
 (function (w, d) {
   'use strict';
-  var version = '1.0.13', versionCode = 10013;
+  var version = '1.0.15', versionCode = 10015;
   // One owner for accessible nested frames. Two helpers styling the same
   // video would otherwise restore each other's fullscreen styles on exit.
   try {
@@ -54,9 +54,13 @@
   var controlsStyle = null, controlsPlayer = null, controlsMarker = null;
   var stage = 'sniffing', clicks = 0, lastGesture = 0, userPaused = false, scans = 0;
   var watchedDocs = [], watchedFrames = [];
-  var onlyWeb = /(^|\.)gdtv\.cn$/i.test(w.location.hostname), lastUrl = w.location.href;
+  var youtube = /(^|\.)(youtube\.com|youtube-nocookie\.com)$|^youtu\.be$/i.test(w.location.hostname);
+  var onlyWeb = youtube || /(^|\.)gdtv\.cn$/i.test(w.location.hostname), lastUrl = w.location.href;
   var playerSelector = '.bravo-player,#dhy_player,.video-js,.prism-player,.vcp-player,.cms-list-tv__player,.plyr,.mejs__container,.dplayer,.xgplayer,.jwplayer,.ckplayer,.tcplayer,.video-player,#videoPlayer,#player,#videoBox';
+  if (/(^|\.)huya\.com$/i.test(w.location.hostname)) playerSelector = '#liveRoomObj,' + playerSelector;
+  if (youtube) playerSelector = '#movie_player,.html5-video-player,ytm-player,#player-container-id,' + playerSelector;
   var playSelector = '.vjs-big-play-button,.prism-big-play-btn,.vcp-bigplay,.dplayer-play-icon,.xgplayer-start,.jw-display-icon-container,.txp_btn_play,.plyr__control--overlaid,.mejs__overlay-button,#video-action-play,.video-play-btn,.video-play-button,.play-btn,.play-button,[aria-label="播放"],[aria-label="播放视频"],[aria-label="Play"],[title="播放"],[title="Play"],[data-action="play"]';
+  if (youtube) playSelector = '.ytp-large-play-button,.ytp-play-button[aria-label^="Play"],.ytp-play-button[aria-label^="播放"],' + playSelector;
   function handoff() {
     try { return !!w.__ntvMediaPause || (w.parent !== w && !!w.parent.__ntvMediaPause); }
     catch (ignore) { return !!w.__ntvMediaPause; }
@@ -112,6 +116,14 @@
       el.__ntvHuyaAudioRestored = true;
     } catch (ignore) {}
   }
+  function auxiliaryHuyaVideo(el) {
+    if (!/(^|\.)huya\.com$/i.test(w.location.hostname)) return false;
+    // The desktop room can play a portrait advertisement beside its live
+    // video. Once present, Huya's stable live node owns fullscreen selection,
+    // even while its SDK temporarily hides/reparents it during a stream change.
+    var main = el.ownerDocument.getElementById('hy-video');
+    return !!(main && main.tagName === 'VIDEO' && main !== el);
+  }
   function clickPlay(doc) {
     if (!auto || userPaused) return;
     var list = doc.querySelectorAll(playSelector);
@@ -140,7 +152,9 @@
   }
   function style(el, name, value) {
     if (!el || !el.style) return;
-    changes.push([el, name, el.style.getPropertyValue(name), el.style.getPropertyPriority(name)]);
+    var saved = false;
+    for (var i = 0; i < changes.length; i++) if (changes[i][0] === el) { saved = true; break; }
+    if (!saved) changes.push([el, el.style.cssText]);
     el.style.setProperty(name, value, 'important');
   }
   function restore() {
@@ -152,14 +166,18 @@
     controlsStyle = controlsPlayer = controlsMarker = null;
     for (var i = changes.length - 1; i >= 0; i--) {
       var a = changes[i];
-      if (a[2]) a[0].style.setProperty(a[1], a[2], a[3]); else a[0].style.removeProperty(a[1]);
+      // Legacy WebKit cannot reliably remove !important shorthands such as
+      // margin/padding/border. Restore the captured declaration block in one go.
+      a[0].style.cssText = a[1];
     }
     changes = []; active = null;
   }
   function fill(el) {
     var rules = { position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
-      width: '100vw', height: '100vh', 'min-width': '100vw', 'min-height': '100vh',
-      'max-width': '100vw', 'max-height': '100vh', margin: '0', padding: '0', border: '0',
+      // Percentages on a fixed element fill the viewport, including WebKit
+      // versions predating vw/vh support (Android 4.0).
+      width: '100%', height: '100%', 'min-width': '100%', 'min-height': '100%',
+      'max-width': '100%', 'max-height': '100%', margin: '0', padding: '0', border: '0',
       transform: 'none', 'box-sizing': 'border-box', 'z-index': '2147483646', 'background-color': '#000' };
     for (var name in rules) if (Object.prototype.hasOwnProperty.call(rules, name)) style(el, name, rules[name]);
     for (var p = el.parentElement; p; p = p.parentElement) {
@@ -189,7 +207,7 @@
     // Some SDKs rewrite video.style on every resize/metadata callback. Keep
     // layout in a removable stylesheet so later SDK sizing cannot shrink it.
     controlsStyle.textContent = '[data-ntv-tv-fullscreen]{position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;'
-      + 'width:100vw!important;height:100vh!important;min-width:100vw!important;min-height:100vh!important;max-width:100vw!important;max-height:100vh!important;'
+      + 'width:100%!important;height:100%!important;min-width:100%!important;min-height:100%!important;max-width:100%!important;max-height:100%!important;'
       + 'margin:0!important;padding:0!important;border:0!important;transform:none!important;box-sizing:border-box!important;z-index:2147483646!important}'
       + '[data-ntv-tv-fullscreen] video{position:absolute!important;top:0!important;left:0!important;'
       + 'width:100%!important;height:100%!important;min-width:100%!important;min-height:100%!important;max-width:100%!important;max-height:100%!important;'
@@ -204,6 +222,14 @@
       + '[data-ntv-tv-fullscreen] video::-webkit-media-controls,'
       + 'video[data-ntv-tv-fullscreen]::-webkit-media-controls,'
       + '[data-ntv-tv-fullscreen] #video-Control{display:none!important}';
+    if (youtube) controlsStyle.textContent +=
+      '[data-ntv-tv-fullscreen] .html5-video-container{position:absolute!important;inset:0!important;top:0!important;left:0!important;width:100%!important;height:100%!important}'
+      + '[data-ntv-tv-fullscreen] .ytp-chrome-top,[data-ntv-tv-fullscreen] .ytp-chrome-bottom,'
+      + '[data-ntv-tv-fullscreen] .ytp-gradient-top,[data-ntv-tv-fullscreen] .ytp-gradient-bottom{opacity:0!important;pointer-events:none!important}'
+      + '[data-ntv-tv-fullscreen]:hover .ytp-chrome-top,[data-ntv-tv-fullscreen]:hover .ytp-chrome-bottom,'
+      + '[data-ntv-tv-fullscreen].paused-mode .ytp-chrome-top,[data-ntv-tv-fullscreen].paused-mode .ytp-chrome-bottom{opacity:1!important;pointer-events:auto!important}'
+      // Older WebViews reject an entire selector list containing :focus-within.
+      + '[data-ntv-tv-fullscreen]:focus-within .ytp-chrome-top,[data-ntv-tv-fullscreen]:focus-within .ytp-chrome-bottom{opacity:1!important;pointer-events:auto!important}';
     (player.ownerDocument.head || player.ownerDocument.documentElement).appendChild(controlsStyle);
     if (player !== media) {
       style(media, 'width', '100%'); style(media, 'height', '100%');
@@ -256,6 +282,12 @@
     if (lastUrl !== w.location.href) {
       restore(); lastUrl = w.location.href; started = Date.now(); attempts = []; suppressed = userPaused = false;
     }
+    // YouTube reuses its video as a mini-player after SPA navigation. Leave
+    // search/home/login pages accessible and never stretch that preview.
+    if (youtube && !(/^\/(watch|embed\/[^/]+\/?|live\/[^/]+\/?|shorts\/[^/]+\/?)$/.test(w.location.pathname)
+        || w.location.hostname === 'youtu.be' && /^\/[^/]+\/?$/.test(w.location.pathname))) {
+      if (active) restore(); stage = 'page'; return;
+    }
     if (active && !active.ownerDocument.documentElement.contains(active)) restore();
     if (Date.now() - started > 45000 && !active) { stage = 'waiting-user'; return; }
     var docs = [d], best = null, bestArea = 0, playing = false, embedded = null;
@@ -264,7 +296,7 @@
       var doc = docs[di], nodes = doc.querySelectorAll('video'), frames = doc.querySelectorAll('iframe');
       watch(doc);
       for (var i = 0; i < nodes.length && i < 24; i++) {
-        var el = nodes[i]; if (!visible(el)) continue;
+        var el = nodes[i]; if (auxiliaryHuyaVideo(el) || !visible(el)) continue;
         var rect = el.getBoundingClientRect(), area = rect.width * rect.height;
         if (area > bestArea) { best = el; bestArea = area; }
         if (!el.paused && !el.ended && el.readyState >= 2 && el.currentTime > 0) playing = true;
@@ -291,6 +323,7 @@
         var players = doc.querySelectorAll(playerSelector);
         for (var pi = 0; pi < players.length && pi < 16; pi++) {
           var waitingVideo = players[pi].querySelector('video');
+          if (waitingVideo && auxiliaryHuyaVideo(waitingVideo)) continue;
           var playerBox = players[pi].getBoundingClientRect();
           if (waitingVideo && visible(players[pi]) && playerBox.width >= 160 && playerBox.height >= 90) {
             embedded = waitingVideo; break;

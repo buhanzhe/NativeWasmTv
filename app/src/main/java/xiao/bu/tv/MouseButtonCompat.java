@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.MotionEvent;
 import java.lang.reflect.Method;
 
@@ -41,7 +41,7 @@ final class MouseButtonCompat {
             return true;
         } catch (Exception unavailable) {
             setter = null;
-            Log.w("nTvMouse", "Native mouse buttons unavailable; using touch button fallback");
+            AppLog.w("nTvMouse", "Native mouse buttons unavailable; using touch button fallback");
             return false;
         }
     }

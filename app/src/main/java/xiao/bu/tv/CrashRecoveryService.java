@@ -12,7 +12,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 public final class CrashRecoveryService extends Service {
     static final String ACTION_ARM = "xiao.bu.tv.action.ARM_CRASH_RECOVERY";
@@ -131,7 +131,7 @@ public final class CrashRecoveryService extends Service {
         preferences.edit().putLong(LAST_RECOVERY_AT, now)
                 .putInt(RECOVERY_COUNT, count).apply();
         if (count > MAX_RECOVERIES_PER_WINDOW) {
-            Log.e(TAG, "Crash recovery stopped to avoid a restart loop count=" + count);
+            AppLog.e(TAG, "Crash recovery stopped to avoid a restart loop count=" + count);
             armed = false;
             stopSelf();
             return;
@@ -152,13 +152,13 @@ public final class CrashRecoveryService extends Service {
             // background activity launches, so keep the alarm below as a fallback.
             pending.send();
         } catch (PendingIntent.CanceledException error) {
-            Log.w(TAG, "Immediate crash recovery launch was cancelled", error);
+            AppLog.w(TAG, "Immediate crash recovery launch was cancelled", error);
         }
         AlarmManager alarms = (AlarmManager) getSystemService(ALARM_SERVICE);
         if (alarms != null) {
             alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     SystemClock.elapsedRealtime() + 5000L, pending);
-            Log.w(TAG, "Scheduled app recovery after main process exit count=" + count);
+            AppLog.w(TAG, "Scheduled app recovery after main process exit count=" + count);
         }
         armed = false;
         stopSelf();

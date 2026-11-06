@@ -6,7 +6,7 @@ files={
 'android/content/Context.java':'package android.content;public class Context{public Context getApplicationContext(){return this;}}',
 'android/os/Build.java':'package android.os;public class Build{public static class VERSION{public static int SDK_INT=14;}}',
 'android/os/SystemClock.java':'package android.os;public class SystemClock{public static long now;public static long elapsedRealtime(){return now;}}',
-'android/util/Log.java':'package android.util;public class Log{public static int i(String t,String m){return 0;}public static int w(String t,String m){return 0;}public static int w(String t,String m,Throwable e){return 0;}}',
+'xiao/bu/tv/AppLog.java':'package xiao.bu.tv;public class AppLog{public static int i(String t,String m){return 0;}public static int w(String t,String m){return 0;}public static int w(String t,String m,Throwable e){return 0;}}',
 'xiao/bu/tv/BuildConfig.java':'package xiao.bu.tv;public class BuildConfig{public static String VERSION_NAME="1.8.1",FLAVOR="arm32",BUILD_TYPE="release";public static boolean DEBUG=false;}',
 'com/tencent/bugly/CrashModule.java':'package com.tencent.bugly;public class CrashModule{public static volatile boolean ready;private static final CrashModule value=new CrashModule();public static CrashModule getInstance(){return value;}public boolean hasInitialized(){return ready;}}',
 'com/tencent/bugly/crashreport/BuglyLog.java':'package com.tencent.bugly.crashreport;public class BuglyLog{public static String last;public static int cache;public static void setCache(int n){cache=n;}public static void e(String tag,String message){last=message;}}',

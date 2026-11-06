@@ -16,7 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
 import android.util.AttributeSet;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -196,7 +196,7 @@ public final class WebSourceView extends FrameLayout {
     private String viewportMode = "720p";
     private float pageScale = 1f;
     private float currentPageScale = 1f;
-    private String userAgentMode = "auto";
+    private String userAgentMode = "windows";
     private String userAgentPageUrl = "";
     private String browserVersionMode = "native";
     private volatile String activeUserAgent = WINDOWS_USER_AGENT;
@@ -222,6 +222,39 @@ public final class WebSourceView extends FrameLayout {
     private String pageCoverStyle="status";
     private boolean pageLoading;
     private String pageCoverError;
+    private boolean automaticPageCover = true;
+    private long coverPlaybackDeadline;
+    private final Runnable checkCoveredOriginalPlayer = new Runnable() {
+        @Override public void run() {
+            if (destroyed || !pageActive || !isPageVisible() || !pageCovered
+                    || !canRevealOriginalPlayer() || coverPlaybackDeadline == 0L
+                    || android.os.SystemClock.elapsedRealtime() >= coverPlaybackDeadline) {
+                stopCoveredOriginalPlayerCheck();
+                return;
+            }
+            // Independent of onPageFinished, HUD/controller polling and touch.
+            // Reuse the coalesced snapshot, without touching the provider player.
+            currentWebMediaState();
+            if (coverPlaybackDeadline != 0L) postDelayed(this, 500L);
+        }
+    };
+
+    private boolean canRevealOriginalPlayer() {
+        return automaticPageCover && autoPlayEnabled
+                && WebTvPlaybackPolicy.requiresWebView(pageUrl, true, true);
+    }
+
+    private void stopCoveredOriginalPlayerCheck() {
+        coverPlaybackDeadline = 0L;
+        removeCallbacks(checkCoveredOriginalPlayer);
+    }
+
+    private void startCoveredOriginalPlayerCheck() {
+        stopCoveredOriginalPlayerCheck();
+        if (legacy != null || !pageActive || !pageCovered || !canRevealOriginalPlayer()) return;
+        coverPlaybackDeadline = android.os.SystemClock.elapsedRealtime() + 30000L;
+        post(checkCoveredOriginalPlayer);
+    }
 
     void applyPageCoverStyle(String style) {
         pageCoverStyle="black".equals(style)?"black":"status";
@@ -240,15 +273,20 @@ public final class WebSourceView extends FrameLayout {
             legacy.send("pageCover", data);
             return;
         }
-        if (pageActive) setPageCovered(enabled);
+        if (pageActive) {
+            // A deliberate cover choice during playback is not a loading cover.
+            automaticPageCover = false;
+            stopCoveredOriginalPlayerCheck();
+            if (enabled && interactiveFallbackTask != null) removeCallbacks(interactiveFallbackTask);
+            setPageCovered(enabled);
+        }
     }
 
     private void setPageCovered(boolean covered) {
-        Log.d(TAG, "Web page cover enabled=" + covered);
+        AppLog.d(TAG, "Web page cover enabled=" + covered);
         pageCovered = covered;
+        if (!covered) stopCoveredOriginalPlayerCheck();
         if (covered) {
-            tabBar.dismissTransientPanels();
-            dismissSmartContextPopup();
             if (pageCover == null) {
                 pageCover = new WebPageCover(getContext(), v -> setPageCovered(false));
                 pageCover.setInterfaceScale(interfaceScale);
@@ -269,10 +307,10 @@ public final class WebSourceView extends FrameLayout {
         if (!pageCovered || pageCover == null) return;
         pageCover.update(pageUrl, pageLoading, pageCoverError);
         LayoutParams params = (LayoutParams) pageCover.getLayoutParams();
-        params.topMargin = fullscreenView == null && !"black".equals(pageCoverStyle) ? tabBarHeight : 0;
+        params.topMargin = fullscreenView == null && tabBar.getVisibility()==VISIBLE ? tabBarHeight : 0;
         pageCover.setLayoutParams(params);
         pageCover.bringToFront();
-        if (fullscreenView == null && !"black".equals(pageCoverStyle)) tabBar.bringToFront();
+        if (fullscreenView == null) tabBar.bringToFront();
     }
 
     private boolean hostResumed;
@@ -287,6 +325,10 @@ public final class WebSourceView extends FrameLayout {
     private long cachedBrowserCacheBytes;
     private long browserCacheMeasuredAt;
 
+    @Override public void bringToFront(){
+        super.bringToFront();
+        if(getContext() instanceof MainActivity)((MainActivity)getContext()).raiseWebChannelControls();
+    }
     public WebSourceView(Context context) {
         this(context, null);
     }
@@ -297,7 +339,8 @@ public final class WebSourceView extends FrameLayout {
         // Keep the disposable host for older systems. Android 7+ uses the
         // embedded browser so channel navigation reuses its WebView and native
         // playback menus stay in the same window above the playing page.
-        legacy = Build.VERSION.SDK_INT < 24 && !(context instanceof LegacyWebActivity)
+        legacy = getResources().getBoolean(R.bool.legacy_web_activity_enabled)
+                && !(context instanceof LegacyWebActivity)
                 ? new LegacyWebSession(this) : null;
         WebAdBlocker.initialize(context);
         setBackgroundColor(0xff000000);
@@ -856,7 +899,7 @@ public final class WebSourceView extends FrameLayout {
             try {
                 if (retained.saveState(state) != null) tab.state = state;
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to save background tab " + tab.id, error);
+                AppLog.w(TAG, "Unable to save background tab " + tab.id, error);
                 tab.state = null;
             }
         } else {
@@ -1062,7 +1105,7 @@ public final class WebSourceView extends FrameLayout {
         postDelayed(new Runnable() {
             @Override public void run() {
                 if (!isCurrentPageLoad(view, generation)) return;
-                Log.w(TAG, "Web loading timeout released overlay progress=" + view.getProgress()
+                AppLog.w(TAG, "Web loading timeout released overlay progress=" + view.getProgress()
                         + " url=" + view.getUrl());
                 completePageLoad(view, generation, "timeout");
             }
@@ -1116,7 +1159,7 @@ public final class WebSourceView extends FrameLayout {
         tabBar.updateActive(pageUrl, view.getTitle());
         updatePageCover();
         controllerPageTitle = safe(view.getTitle());
-        Log.i(TAG, "Web page usable reason=" + reason + " progress=" + view.getProgress()
+        AppLog.i(TAG, "Web page usable reason=" + reason + " progress=" + view.getProgress()
                 + " url=" + pageUrl);
         if (listener != null) listener.onPageReady(requestId, pageUrl, view.getTitle());
     }
@@ -1355,9 +1398,16 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private void resumeMinimalPlaybackInput(int id, JSONObject media) {
+        boolean originalPlayer = canRevealOriginalPlayer();
         if (destroyed || id != requestId || !pageActive || !isPageVisible()
-                || !minimalBrowserMode || (!interactivePageFallback && !pageCovered)
+                || (!minimalBrowserMode && !originalPlayer) || (pageCovered && !automaticPageCover)
+                || (!interactivePageFallback && !pageCovered)
                 || !hasPlayableWebMedia(media)) return;
+        // Audio progress alone cannot prove that Huya's video is ready. API19's
+        // Stagefright path can report a permanently-zero decoded-frame counter;
+        // HAVE_CURRENT_DATA + dimensions + media time is its readiness signal.
+        if (originalPlayer && (media.optInt("videoWidth") <= 0 || media.optInt("videoHeight") <= 0
+                || Build.VERSION.SDK_INT > 19 && media.optInt("videoFrames", -1) == 0)) return;
         interactivePageFallback = false;
         // A protected provider can start before the 15s fallback. Its real
         // playback must reveal the page too, without pausing the SDK/fullscreen helper.
@@ -1365,12 +1415,12 @@ public final class WebSourceView extends FrameLayout {
         setLoadingVisible(false);
         webMediaState = media;
         if (interactiveFallbackTask != null) removeCallbacks(interactiveFallbackTask);
-        setBrowserFullscreen(true);
+        if (minimalBrowserMode) setBrowserFullscreen(true);
     }
 
     private void showInteractiveFallback(int id) {
         if (destroyed || id != requestId || !pageActive || !isPageVisible()
-                || !minimalBrowserMode || interactivePageFallback) return;
+                || !minimalBrowserMode || interactivePageFallback || (pageCovered && !automaticPageCover)) return;
         interactivePageFallback = true;
         channelSwipe.cancel();
         setPageCovered(false);
@@ -1773,6 +1823,7 @@ public final class WebSourceView extends FrameLayout {
         releaseTabWebView(tab, false);
         openPage(newRequestId, url);
         setPageCovered(defaultPageCovered && !interactiveBrowserMode);
+        startCoveredOriginalPlayerCheck();
     }
 
     private void openPage(int newRequestId, String url) {
@@ -1781,6 +1832,8 @@ public final class WebSourceView extends FrameLayout {
 
     private void loadPage(int newRequestId, String url) {
         if (destroyed) return;
+        stopCoveredOriginalPlayerCheck();
+        automaticPageCover = true;
         url = WebSiteProfile.pageUrl(userAgentMode, url);
         userAgentPageUrl = url;
         tabBar.dismissTransientPanels();
@@ -1900,6 +1953,7 @@ public final class WebSourceView extends FrameLayout {
         if (enteringPage) setPageCovered(defaultPageCovered);
         else updatePageCover();
         scheduleInteractiveFallback(newRequestId);
+        startCoveredOriginalPlayerCheck();
     }
 
     private void navigateAddress(String value) {
@@ -2229,7 +2283,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private static String sanitizeUserAgentMode(String mode) {
-        if ("auto".equals(mode) || "macos".equals(mode) || "ipad".equals(mode) || "native".equals(mode)) {
+        if ("macos".equals(mode) || "ipad".equals(mode) || "native".equals(mode)) {
             return mode;
         }
         return "windows";
@@ -2387,7 +2441,7 @@ public final class WebSourceView extends FrameLayout {
     }
 
     void clearBrowserCache() {
-        clearBrowserCache(error->{if(error!=null)Log.w(TAG,"Browser cache clear failed: "+error);});
+        clearBrowserCache(error->{if(error!=null)AppLog.w(TAG,"Browser cache clear failed: "+error);});
     }
 
     void clearBrowserCache(MediaControlResult done) {
@@ -2422,7 +2476,7 @@ public final class WebSourceView extends FrameLayout {
                 cleaner.clearCache(true);
                 cleaner.clearFormData();
             } catch (RuntimeException error) {
-                Log.w(TAG, "Unable to initialize WebView cache cleaner", error);
+                AppLog.w(TAG, "Unable to initialize WebView cache cleaner", error);
                 done.complete(error.getMessage()==null?"无法启动网页清理组件":error.getMessage());return;
             } finally {
                 if (cleaner != null) cleaner.destroy();
@@ -3135,7 +3189,7 @@ public final class WebSourceView extends FrameLayout {
             // CookieManager stays on WebView's callback thread. The intercept
             // thread only consumes this snapshot, avoiding KitKat deadlocks.
             armHttpsFallback(target, CookieManager.getInstance().getCookie(target));
-            Log.i(TAG, "Retry legacy HTTPS document after WebView error: " + target);
+            AppLog.i(TAG, "Retry legacy HTTPS document after WebView error: " + target);
             view.stopLoading();
             view.post(() -> {
                 if (this == sourceClient && view == webView && pageActive) view.loadUrl(target);
@@ -3195,7 +3249,10 @@ public final class WebSourceView extends FrameLayout {
             tabBar.dismissTransientPanels();
             pageUrl = url;
             tabBar.updateActive(url, null);
-            if (WebTvPlaybackPolicy.webPlayerOnly(url)) setBrowserFullscreen(true);
+            // YouTube may show login/private-video pages without a player.
+            // Its helper enters fullscreen only after a visible video is available.
+            if (WebTvPlaybackPolicy.webPlayerOnly(url) && !WebTvPlaybackPolicy.youtubePlayer(url))
+                setBrowserFullscreen(true);
             if (pendingIcon != null && navigationDocument(url).equals(pendingIconDocument))
                 tabBar.updateActiveIcon(url, pendingIcon);
             pendingIcon = null;
@@ -3407,7 +3464,7 @@ public final class WebSourceView extends FrameLayout {
                 }
                 fallbackRetryActive = false;
             }
-            Log.w(TAG, "Web source failed code=" + errorCode + " url=" + failingUrl
+            AppLog.w(TAG, "Web source failed code=" + errorCode + " url=" + failingUrl
                     + " description=" + description);
             pageLoadTerminalGeneration = pageLoadGeneration;
             pageCoverError = errorCode == WebViewClient.ERROR_HOST_LOOKUP

@@ -54,7 +54,7 @@ public final class AudioArtworkView extends FrameLayout {
             removeAllViews();addView(incoming.view(),new LayoutParams(-1,-1));
             if(old!=null)old.dispose();
             setVisibility(visible?VISIBLE:GONE);
-        } catch(Throwable error){android.util.Log.w("RadioUi","Retaining current UI",error);}
+        } catch(Throwable error){xiao.bu.tv.AppLog.w("RadioUi","Retaining current UI",error);}
     }
     private void syncVisibility(){if(ui!=null)setVisibility(ui.view().getVisibility());}
     void show(String name,boolean value){show(name,value,null);}

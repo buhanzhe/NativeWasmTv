@@ -140,7 +140,7 @@ public final class ManagementActivity extends Activity {
             webView = WebViewAvailability.create(() -> new WebView(this));
         } catch (WebViewAvailability.UnavailableException error) {
             pendingRendererRecovery = false;
-            android.util.Log.e("ManagementActivity", "WebView provider unavailable", error);
+            xiao.bu.tv.AppLog.e("ManagementActivity", "WebView provider unavailable", error);
             android.widget.LinearLayout panel = new android.widget.LinearLayout(this);
             panel.setOrientation(android.widget.LinearLayout.VERTICAL);
             panel.setGravity(Gravity.CENTER);
@@ -381,7 +381,7 @@ public final class ManagementActivity extends Activity {
         } catch (RuntimeException error) {
             cancelFileChooser();
             notifyFileChooser("无法打开文件选择器，请检查系统文件管理器");
-            android.util.Log.w("ManagementActivity", "File chooser launch failed", error);
+            xiao.bu.tv.AppLog.w("ManagementActivity", "File chooser launch failed", error);
             Toast.makeText(this, "系统中没有可用的文件管理器",
                     Toast.LENGTH_LONG).show();
         }
@@ -432,7 +432,7 @@ public final class ManagementActivity extends Activity {
                     : data.getData() == null ? null : new Uri[] { data.getData() };
         }
         boolean delivered = values != null && values.length > 0 && values[0] != null;
-        android.util.Log.i("ManagementActivity", "File chooser result=" + resultCode
+        xiao.bu.tv.AppLog.i("ManagementActivity", "File chooser result=" + resultCode
                 + " hasFile=" + delivered + " callback="
                 + (filePathCallback != null || legacyFileCallback != null));
         notifyFileChooser(delivered ? "" : resultCode == RESULT_OK
@@ -445,7 +445,7 @@ public final class ManagementActivity extends Activity {
             if (modern != null) modern.onReceiveValue(delivered ? values : null);
             if (legacy != null) legacy.onReceiveValue(delivered ? values[0] : null);
         } catch (RuntimeException error) {
-            android.util.Log.w("ManagementActivity", "File chooser callback failed", error);
+            xiao.bu.tv.AppLog.w("ManagementActivity", "File chooser callback failed", error);
             notifyFileChooser("文件回传失败，请重新打开管理页面后重试");
         }
     }

@@ -22,7 +22,9 @@ final class JsonChannelPlaylist {
             String[] urls=new String[addresses.length()];
             for(int u=0;u<urls.length;u++) {
                 urls[u]=addresses.getString(u).trim();
-                if(urls[u].length()>16384||!STREAM.matcher(urls[u]).matches())throw new ControlRequestException(400,"频道 JSON 播放地址无效");
+                if(urls[u].length()>16384||!STREAM.matcher(urls[u]).matches()
+                        ||MulticastPlaylist.matches(urls[u])&&!MulticastPlaylist.valid(urls[u]))
+                    throw new ControlRequestException(400,"频道 JSON 播放地址无效");
             }
             String epg=row.optString("epgId",name);
             Channel channel=new Channel(PlaylistManager.channelNumber(name,epg,i),name,"json-"+i,urls,null,null,null,epg)

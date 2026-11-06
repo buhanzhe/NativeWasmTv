@@ -12,7 +12,7 @@ final class NativeVideoFrame {
             System.loadLibrary("ntvframe");
             ready = initialize();
         } catch (LinkageError error) {
-            android.util.Log.w("NativeVideoFrame", "Native frame decoder unavailable", error);
+            xiao.bu.tv.AppLog.w("NativeVideoFrame", "Native frame decoder unavailable", error);
         }
         AVAILABLE = ready;
     }

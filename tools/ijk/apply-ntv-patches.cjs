@@ -524,4 +524,5 @@ require('./apply-metadata-probe-patches.cjs')(root);
 require('./apply-live-buffer-patches.cjs')(root);
 require('./apply-software-render-patches.cjs')(root);
 require('./apply-buffer-resume-patches.cjs')(root);
+require('./apply-app-log-patches.cjs')(root);
 console.log('Applied nTv native playback overlays to ' + root);

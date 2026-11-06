@@ -17,7 +17,7 @@
         <div class="online"><span class="dot"></span><span id="browserStatus">电视在线</span></div>
       </div>
       <section class="config-hero">
-        <p>网页分辨率和缩放即时生效。</p>
+        <p>这里保存全局默认。右侧菜单的内核和 UA 按频道域名保存，优先于全局默认。网页分辨率和缩放即时生效。</p>
       </section>
       <section class="browser-section">
         <div class="section-head"><h2>显示与加载</h2></div>
@@ -40,15 +40,10 @@
           </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
-              <b>开启网页遮罩</b><span>初始关闭；只覆盖画面，网页、脚本和嗅探持续运行；点击“显示网页”或纯黑画面可临时查看</span>
+              <b>网页遮罩</b><span>只覆盖网页画面，脚本和嗅探持续运行；频道列表和弹窗保持在上方</span>
             </div>
-            <input id="webViewPageCover" class="source-toggle" aria-label="开启网页遮罩"
-              type="checkbox" onchange="saveWebViewSettings()" />
-          </div>
-          <div class="browser-setting-row">
-            <div class="browser-setting-copy"><b>遮罩样式</b><span>加载信息显示进度；纯黑只显示黑色画面，可点击或按确定、返回显示网页</span></div>
-            <select id="webViewPageCoverStyle" aria-label="遮罩样式" onchange="saveWebViewSettings()">
-              <option value="status">加载信息</option><option value="black">纯黑</option>
+            <select id="webViewPageCoverStyle" aria-label="网页遮罩" onchange="saveWebViewSettings()">
+              <option value="off">关闭</option><option value="status">显示信息</option><option value="black">纯黑</option>
             </select>
           </div>
           <div class="browser-setting-row">
@@ -92,7 +87,6 @@
               <b>浏览器标识</b><span>桌面模式隐藏常见手机字段，不代表匿名浏览；旧 WebView 保护能力有限</span>
             </div>
             <select id="webViewUserAgent" aria-label="浏览器标识" onchange="saveWebViewSettings()">
-              <option value="auto">自动适配（按站点）</option>
               <option value="windows">Windows</option>
               <option value="macos">macOS</option>
               <option value="ipad">iPad</option>

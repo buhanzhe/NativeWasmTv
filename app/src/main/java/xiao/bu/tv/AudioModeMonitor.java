@@ -3,7 +3,7 @@ package xiao.bu.tv;
 import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -45,7 +45,7 @@ final class AudioModeMonitor implements java.io.Closeable {
                         || mode == AudioManager.MODE_IN_COMMUNICATION;
             } catch (RuntimeException error) {
                 active = true; // Unknown service state must not unmute a call.
-                Log.w("AudioModeMonitor", "Unable to check audio service mode", error);
+                AppLog.w("AudioModeMonitor", "Unable to check audio service mode", error);
             }
             final boolean callActive = active;
             delivery.execute(() -> {

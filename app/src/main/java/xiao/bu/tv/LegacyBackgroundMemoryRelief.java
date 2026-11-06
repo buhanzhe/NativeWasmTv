@@ -7,7 +7,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.util.HashSet;
 import java.util.List;
@@ -62,11 +62,11 @@ final class LegacyBackgroundMemoryRelief {
                 manager.killBackgroundProcesses(packageName);
                 reclaimed++;
             }
-            Log.i(TAG, "Legacy video memory relief candidates=" + reclaimed
+            AppLog.i(TAG, "Legacy video memory relief candidates=" + reclaimed
                     + " availMb=" + (memory.availMem / (1024L * 1024L))
                     + " lowMemory=" + memory.lowMemory);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to reclaim legacy cached processes", error);
+            AppLog.w(TAG, "Unable to reclaim legacy cached processes", error);
         }
     }
 }

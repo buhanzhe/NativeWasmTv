@@ -9,7 +9,7 @@ import android.os.Build;
 import android.os.Process;
 import android.net.Uri;
 import android.util.Base64;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.content.Context;
 
 import java.io.BufferedInputStream;
@@ -103,7 +103,7 @@ final class HlsProxyServer implements Closeable {
         if (h5eStreamingSupported == null) {
             try { h5eStreamingSupported = NativeH5eDecryptor.supportsStreamingTransportStream(); }
             catch (LinkageError unavailable) { h5eStreamingSupported = false; }
-            Log.i(TAG, "H5E streaming supported=" + h5eStreamingSupported);
+            AppLog.i(TAG, "H5E streaming supported=" + h5eStreamingSupported);
         }
         return h5eStreamingSupported;
     }
@@ -119,7 +119,7 @@ final class HlsProxyServer implements Closeable {
     private final long createdAt = SystemClock.elapsedRealtime();
     private void startupMilestone(String stage, String url) {
         if (!running || startupMilestones.putIfAbsent(stage, Boolean.TRUE) != null) return;
-        Log.i(TAG, "Startup pipeline stage=" + stage + " port="
+        AppLog.i(TAG, "Startup pipeline stage=" + stage + " port="
                 + (serverSocket == null ? -1 : serverSocket.getLocalPort())
                 + " proxyElapsedMs=" + (SystemClock.elapsedRealtime() - createdAt)
                 + (url == null ? "" : " segment=" + segmentName(url)));
@@ -155,7 +155,7 @@ final class HlsProxyServer implements Closeable {
     private void logSegmentCost(String url, long downloadMs, long decryptMs, boolean encrypted) {
         Long duration = segmentDurations.get(url);
         if (duration == null || downloadMs < 0 || !running) return;
-        Log.i(TAG, "Segment cost segment=" + segmentName(url) + " durationMs=" + duration
+        AppLog.i(TAG, "Segment cost segment=" + segmentName(url) + " durationMs=" + duration
                 + " downloadMs=" + downloadMs + " decryptMs=" + decryptMs
                 + " encrypted=" + encrypted + " processingMs=" + (downloadMs + decryptMs));
         SegmentCostListener listener = segmentCostListener;
@@ -690,7 +690,7 @@ final class HlsProxyServer implements Closeable {
                 ? CCTV_LOW_RAM_DECRYPT_THREADS : CCTV_PARALLEL_DECRYPT_THREADS);
         cctvPrefetchWorkers = newCctvPrefetchExecutor(decryptThreads);
         genericPrefetchWorkers = Executors.newFixedThreadPool(3);
-        Log.i(TAG, "CCTV decrypt profile parallel=" + parallelCctvDecrypt
+        AppLog.i(TAG, "CCTV decrypt profile parallel=" + parallelCctvDecrypt
                 + " prefetchThreads=" + decryptThreads
                 + " statefulSession=" + parallelCctvDecrypt
                 + " liveEdgeHoldBack=" + cctvLiveEdgeHoldBackSegments
@@ -719,7 +719,7 @@ final class HlsProxyServer implements Closeable {
             }
         }, "hls-proxy-accept");
         acceptThread.start();
-        Log.i(TAG, "Proxy started port=" + serverSocket.getLocalPort());
+        AppLog.i(TAG, "Proxy started port=" + serverSocket.getLocalPort());
     }
 
     /** Media identified by its response MIME type may have no filename extension. */
@@ -811,7 +811,7 @@ final class HlsProxyServer implements Closeable {
                 String host = URI.create(originUrl).getHost();
                 if (host != null && http1FallbackHosts.size() < 32
                         && http1FallbackHosts.putIfAbsent(host, Boolean.TRUE) == null)
-                    Log.w(TAG, "HTTP/2 stream failed; retry host over HTTP/1.1: " + host);
+                    AppLog.w(TAG, "HTTP/2 stream failed; retry host over HTTP/1.1: " + host);
                 return;
             }
         }
@@ -965,7 +965,7 @@ final class HlsProxyServer implements Closeable {
             cmgFirstStateNalPending = initialUpdateTag != 0 && initialUpdateTag != stableUpdateTag;
             cmgSessionWarmed = false;
             cmgLiveVideoDecodeEnabled = false;
-            Log.i(TAG, "CMG proxy update tags initial="
+            AppLog.i(TAG, "CMG proxy update tags initial="
                     + String.format(Locale.US, "%08x", initialUpdateTag)
                     + " stable=" + String.format(Locale.US, "%08x", stableUpdateTag));
         }
@@ -994,7 +994,7 @@ final class HlsProxyServer implements Closeable {
             } else {
                 cmgClockOffsetMs = clockOffsetMs;
             }
-            Log.i(TAG, "CMG proxy runtime clock base=" + cmgClockBaseTimeMs
+            AppLog.i(TAG, "CMG proxy runtime clock base=" + cmgClockBaseTimeMs
                     + " offsetMs=" + cmgClockOffsetMs);
         }
     }
@@ -1014,7 +1014,7 @@ final class HlsProxyServer implements Closeable {
             cmgPlayerTag = "";
             cmgClockBaseTimeMs = 0L;
             cmgClockOffsetMs = 0;
-            Log.i(TAG, "CMG session reset for channel switch");
+            AppLog.i(TAG, "CMG session reset for channel switch");
         }
     }
 
@@ -1056,7 +1056,7 @@ final class HlsProxyServer implements Closeable {
         cjsTransformer = transformer == null ? null : transformer.trim();
         cjsTransformerArgs = arguments == null ? null : arguments.clone();
         cjsMediaHosts = mediaHosts == null ? null : mediaHosts.clone();
-        Log.i(TAG, "Configured CJS media transformer=" + cjsTransformer);
+        AppLog.i(TAG, "Configured CJS media transformer=" + cjsTransformer);
     }
 
     private void acceptLoop() {
@@ -1078,11 +1078,11 @@ final class HlsProxyServer implements Closeable {
                     // close() can stop the pool just after accept() returns.
                     try { socket.close(); } catch (IOException ignored) { }
                     synchronized(clientSockets){clientSockets.remove(socket);}
-                    if (running) Log.w(TAG, "Proxy worker rejected connection", closing);
+                    if (running) AppLog.w(TAG, "Proxy worker rejected connection", closing);
                 }
             } catch (IOException error) {
                 if (running) {
-                    Log.e(TAG, "Proxy accept failed", error);
+                    AppLog.e(TAG, "Proxy accept failed", error);
                 }
             }
         }
@@ -1184,7 +1184,7 @@ final class HlsProxyServer implements Closeable {
             if (!running || isPlayerDisconnect(error)) {
                 return;
             }
-            Log.e(TAG, "Proxy request failed", error);
+            AppLog.e(TAG, "Proxy request failed", error);
             playbackHttpError.record(httpAttempt, error);
             if (httpAttempt == playbackHttpError.token()) lastPlaybackFailure = error;
             // The player already received a 200/206 header and part of the media.
@@ -1291,7 +1291,7 @@ final class HlsProxyServer implements Closeable {
                         || !isRetryableUpstreamError(error, originUrl)) {
                     throw error;
                 }
-                Log.w(TAG, "Retrying upstream request attempt=" + (attempt + 1)
+                AppLog.w(TAG, "Retrying upstream request attempt=" + (attempt + 1)
                         + "/" + maxAttempts + " " + segmentName(originUrl)
                         + " after " + error.getClass().getSimpleName()
                         + (edgeNotReady ? " edge-not-ready" : ""));
@@ -1609,7 +1609,7 @@ final class HlsProxyServer implements Closeable {
                                 throw new IOException("Upstream cannot safely resume media range", readError);
                             }
                             upstream = connection.getInputStream();
-                            Log.i(TAG, "Resumed media range offset=" + offset
+                            AppLog.i(TAG, "Resumed media range offset=" + offset
                                     + " remaining=" + (contentLength - received)
                                     + " attempt=" + bodyRetries);
                             continue;
@@ -1886,7 +1886,7 @@ final class HlsProxyServer implements Closeable {
         }
         result.append(selected.info).append('\n')
                 .append(proxyUrl(HlsUri.resolve(base, selected.uri).toString())).append('\n');
-        Log.i(TAG, "Selected generic HLS variant quality=" + variantQualityMode
+        AppLog.i(TAG, "Selected generic HLS variant quality=" + variantQualityMode
                 + " choices=" + variants.size() + " bandwidth=" + selected.bandwidth
                 + " advertised=" + selected.width + "x" + selected.height
                 + " codecs=" + HlsMediaTracks.attributes(selected.info).get("CODECS"));
@@ -2089,7 +2089,7 @@ final class HlsProxyServer implements Closeable {
                         genericSegmentTasks.remove(url);
                     }
                 }
-                Log.w(TAG, "HLS startup prefetch failed " + segmentName(url),
+                AppLog.w(TAG, "HLS startup prefetch failed " + segmentName(url),
                         error.getCause());
             }
         }
@@ -2155,7 +2155,7 @@ final class HlsProxyServer implements Closeable {
             throw new IOException("CJS native transformer rejected transport stream");
         }
         logDecryptedSegmentCost(originUrl, SystemClock.elapsedRealtime() - started);
-        Log.i(TAG, "CJS media transformed " + segmentName(originUrl)
+        AppLog.i(TAG, "CJS media transformed " + segmentName(originUrl)
                 + " bytes=" + transformed.length + " elapsedMs="
                 + (SystemClock.elapsedRealtime() - started));
         return transformed;
@@ -2252,7 +2252,7 @@ final class HlsProxyServer implements Closeable {
                         && firstYangshipin.number > lastYangshipin.number + 1L;
                 boolean sequenceGap = firstCurrent.sequence > last.sequence + 1L;
                 if (segmentGap || sequenceGap) {
-                    Log.w(TAG, "Buffered media playlist reset after live gap "
+                    AppLog.w(TAG, "Buffered media playlist reset after live gap "
                             + segmentName(last.url) + " -> " + segmentName(firstCurrent.url));
                     history.clear();
                     synchronized (cctvStartupLock) {
@@ -2503,7 +2503,7 @@ final class HlsProxyServer implements Closeable {
             if (Boolean.TRUE.equals(cctvStartupReady.get(playlistUrl))) return false;
             cctvStartupReady.put(playlistUrl, true);
         }
-        Log.i(TAG, "CCTV startup gate ready queued="
+        AppLog.i(TAG, "CCTV startup gate ready queued="
                 + cctvStartupDownloadSegments
                 + " playable=" + cctvStartupDecryptSegments + " elapsedMs="
                 + (SystemClock.elapsedRealtime() - startedAt)
@@ -2825,7 +2825,7 @@ final class HlsProxyServer implements Closeable {
             }
         } catch (Exception error) {
             if (running) {
-                Log.d(TAG, "CCTV playlist prefetch poll skipped: " + error.getMessage());
+                AppLog.d(TAG, "CCTV playlist prefetch poll skipped: " + error.getMessage());
             }
         } finally {
             if (connection != null) {
@@ -3007,7 +3007,7 @@ final class HlsProxyServer implements Closeable {
                     long cpuAt = android.os.Debug.threadCpuTimeNanos();
                     byte[] result = parallelCctvDecrypt
                             ? decryptCctvSegment(body, originUrl, true) : body;
-                    Log.i(TAG, "CCTV pipeline segment=" + segmentName(originUrl)
+                    AppLog.i(TAG, "CCTV pipeline segment=" + segmentName(originUrl)
                             + " queueMs=" + (workerAt - queuedAt)
                             + " ioWaitMs=" + (decryptAt - workerAt)
                             + " decryptWallMs=" + (SystemClock.elapsedRealtime() - decryptAt)
@@ -3019,7 +3019,7 @@ final class HlsProxyServer implements Closeable {
                     }
                     return result;
                 } catch (Exception error) {
-                    Log.w(TAG, "CCTV segment prefetch exhausted " + segmentName(originUrl)
+                    AppLog.w(TAG, "CCTV segment prefetch exhausted " + segmentName(originUrl)
                             + ": " + error.getMessage());
                     throw error;
                 }
@@ -3089,7 +3089,7 @@ final class HlsProxyServer implements Closeable {
                 startupMilestone("first-clear-segment", originUrl);
                 synchronized (cctvSegmentCache) { cctvSegmentCache.put(originUrl, clear); }
                 logDecryptedSegmentCost(originUrl, nanos[0] / 1000000L);
-                Log.i(TAG, "H5E progressive segment=" + segmentName(originUrl)
+                AppLog.i(TAG, "H5E progressive segment=" + segmentName(originUrl)
                         + " wallMs=" + (SystemClock.elapsedRealtime() - started)
                         + " decryptMs=" + nanos[0] / 1000000L
                         + " pipeReadWaitMs=" + encrypted.readWaitMs());
@@ -3098,7 +3098,7 @@ final class HlsProxyServer implements Closeable {
                 return clear;
             } catch (Exception | LinkageError error) {
                 media.fail(error instanceof IOException ? (IOException) error : new IOException("H5E stream failed", error));
-                if (running) Log.w(TAG, "H5E progressive segment failed " + segmentName(originUrl), error);
+                if (running) AppLog.w(TAG, "H5E progressive segment failed " + segmentName(originUrl), error);
                 throw error;
             }
         }) {
@@ -3171,7 +3171,7 @@ final class HlsProxyServer implements Closeable {
                 startupMilestone("first-clear-segment", originUrl);
                 synchronized (cmgSegmentCache) { cmgSegmentCache.put(originUrl, clear); }
                 logDecryptedSegmentCost(originUrl, decryptNanos[0] / 1000000L);
-                Log.i(TAG, "CMG pipeline segment=" + segmentName(originUrl)
+                AppLog.i(TAG, "CMG pipeline segment=" + segmentName(originUrl)
                         + " wallMs=" + (SystemClock.elapsedRealtime() - started)
                         + " decryptMs=" + decryptNanos[0] / 1000000L
                         + " pipeReadWaitMs=" + encrypted.readWaitMs()
@@ -3184,7 +3184,7 @@ final class HlsProxyServer implements Closeable {
                 return clear;
             } catch (Exception error) {
                 media.fail(error instanceof IOException ? (IOException)error : new IOException("CMG stream failed", error));
-                if (running) Log.w(TAG, "CMG progressive segment failed " + segmentName(originUrl) + ": " + error.getMessage());
+                if (running) AppLog.w(TAG, "CMG progressive segment failed " + segmentName(originUrl) + ": " + error.getMessage());
                 throw error;
             }
         }) {
@@ -3289,7 +3289,7 @@ final class HlsProxyServer implements Closeable {
             /* A wasm trap invalidates only this worker's thread-local runtime.
              * Recreate it and retry the untouched TS once instead of exposing a
              * transient 502 to the player and forcing a full channel restart. */
-            Log.w(TAG, "Resetting H5E worker after rejected TS and retrying "
+            AppLog.w(TAG, "Resetting H5E worker after rejected TS and retrying "
                     + segmentName(originUrl));
             NativeH5eDecryptor.releaseThreadContext();
             decrypted = NativeH5eDecryptor.decryptTransportStream(body);
@@ -3319,7 +3319,7 @@ final class HlsProxyServer implements Closeable {
                     throw new IOException("Incomplete MPEG-TS body bytes=" + body.length);
                 }
                 if (attempt > 1) {
-                    Log.i(TAG, "CCTV segment recovered on attempt " + attempt + "/"
+                    AppLog.i(TAG, "CCTV segment recovered on attempt " + attempt + "/"
                             + attempts + " " + segmentName(originUrl));
                 }
                 segmentDownloadTimes.put(originUrl, SystemClock.elapsedRealtime() - downloadStarted);
@@ -3333,7 +3333,7 @@ final class HlsProxyServer implements Closeable {
                 if (attempt >= attempts || !running) {
                     break;
                 }
-                Log.w(TAG, "CCTV segment attempt " + attempt + "/" + attempts
+                AppLog.w(TAG, "CCTV segment attempt " + attempt + "/" + attempts
                         + " failed " + segmentName(originUrl) + ": " + error.getMessage());
                 SystemClock.sleep((long) retryDelayMs * attempt);
             }
@@ -3470,7 +3470,7 @@ final class HlsProxyServer implements Closeable {
         }
         Variant variant = selected.variant;
         rememberSelectedVariant(variant);
-        Log.i(TAG, "Selected HLS variant quality=" + requestedQuality
+        AppLog.i(TAG, "Selected HLS variant quality=" + requestedQuality
                 + " choices=" + variants.size()
                 + " bandwidth=" + variant.bandwidth
                 + " advertised=" + variant.width + "x" + variant.height
@@ -3511,7 +3511,7 @@ final class HlsProxyServer implements Closeable {
             String absolute = HlsUri.resolve(base, variant.uri).toString();
             VariantCandidate candidate = inspectVariant(absolute, variant);
             if (!candidate.available) {
-                Log.w(TAG, "Skipping unavailable HLS variant bandwidth=" + variant.bandwidth
+                AppLog.w(TAG, "Skipping unavailable HLS variant bandwidth=" + variant.bandwidth
                         + " uri=" + variant.uri);
                 continue;
             }
@@ -3519,7 +3519,7 @@ final class HlsProxyServer implements Closeable {
             if (candidate.matchesAdvertisedResolution()) {
                 return candidate;
             }
-            Log.w(TAG, "Skipping mislabeled HLS variant bandwidth=" + variant.bandwidth
+            AppLog.w(TAG, "Skipping mislabeled HLS variant bandwidth=" + variant.bandwidth
                     + " advertised=" + variant.width + "x" + variant.height
                     + " actual=" + candidate.actualDescription()
                     + " uri=" + variant.uri);
@@ -3770,7 +3770,7 @@ final class HlsProxyServer implements Closeable {
         }
         if (requestIndex == 1 && current.number > 0L) {
             long firstWarmup = Math.max(0L, current.number - CMG_INITIAL_PREWARM_SEGMENTS);
-            Log.i(TAG, "CMG initial prewarm "
+            AppLog.i(TAG, "CMG initial prewarm "
                     + segmentName(current.url(firstWarmup)) + ".."
                     + segmentName(current.url(current.number - 1L))
                     + " before " + segmentName(originUrl));
@@ -3791,10 +3791,10 @@ final class HlsProxyServer implements Closeable {
         long missingCount = lastMissing - firstMissing + 1L;
         if (missingCount > CMG_MAX_GAP_PREWARM_SEGMENTS) {
             firstMissing = lastMissing - CMG_MAX_GAP_PREWARM_SEGMENTS + 1L;
-            Log.w(TAG, "CMG segment gap too large, prewarming tail only gap=" + missingCount
+            AppLog.w(TAG, "CMG segment gap too large, prewarming tail only gap=" + missingCount
                     + " current=" + segmentName(originUrl));
         } else {
-            Log.i(TAG, "CMG segment gap detected gap=" + missingCount
+            AppLog.i(TAG, "CMG segment gap detected gap=" + missingCount
                     + " current=" + segmentName(originUrl));
         }
         ByteArrayOutputStream prefix = new ByteArrayOutputStream();
@@ -3823,20 +3823,20 @@ final class HlsProxyServer implements Closeable {
             applyRequestHeaders(connection, segmentUrl);
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
-                Log.w(TAG, "CMG prewarm segment HTTP " + status
+                AppLog.w(TAG, "CMG prewarm segment HTTP " + status
                         + " " + segmentName(segmentUrl));
                 return null;
             }
             byte[] previous = readUpstreamFully(connection.getInputStream(),
                     connection.getContentLength(),MAX_BUFFERED_RESPONSE_BYTES,true);
             responseConsumed = true;
-            Log.i(TAG, "CMG prewarm segment " + segmentName(segmentUrl)
+            AppLog.i(TAG, "CMG prewarm segment " + segmentName(segmentUrl)
                     + " bytes=" + previous.length);
             byte[] decrypted = decryptYangshipinTransportStream(previous, spsCompatibilityMode);
             cmgSegmentCache.put(segmentUrl, decrypted);
             return decrypted;
         } catch (IOException error) {
-            Log.w(TAG, "CMG prewarm segment failed " + segmentName(segmentUrl), error);
+            AppLog.w(TAG, "CMG prewarm segment failed " + segmentName(segmentUrl), error);
             return null;
         } finally {
             if (connection != null && !responseConsumed) {
@@ -3938,7 +3938,7 @@ final class HlsProxyServer implements Closeable {
             normalizeVideoContinuityCounters(output, videoPid);
             long elapsedMs = SystemClock.elapsedRealtime() - startedAt;
             if (elapsedMs >= 500L) {
-                Log.i(TAG, "CMG TS decrypt elapsed=" + elapsedMs + "ms bytes=" + ts.length);
+                AppLog.i(TAG, "CMG TS decrypt elapsed=" + elapsedMs + "ms bytes=" + ts.length);
             }
             return output;
         }
@@ -4026,12 +4026,12 @@ final class HlsProxyServer implements Closeable {
                 updateCmgLiveVideoFlag(nalType, nal);
                 byte[] decoded = NativeCmgDecryptor.decodeNalForProbe(nal, true, true);
                 if (decoded == null) {
-                    Log.w(TAG, "CMG state NAL rejected type=" + nalType + " len=" + nal.length);
+                    AppLog.w(TAG, "CMG state NAL rejected type=" + nalType + " len=" + nal.length);
                 } else if (decoded.length > nal.length) {
-                    Log.w(TAG, "Skipping CMG state NAL replacement because length grew type="
+                    AppLog.w(TAG, "Skipping CMG state NAL replacement because length grew type="
                             + nalType + " before=" + nal.length + " after=" + decoded.length);
                 } else if (decoded.length != nal.length || bytesDiffer(decoded, nal)) {
-                    Log.w(TAG, "CMG state NAL changed type=" + nalType
+                    AppLog.w(TAG, "CMG state NAL changed type=" + nalType
                             + " before=" + nal.length + " after=" + decoded.length
                             + "; keeping original bytes");
                 }
@@ -4043,15 +4043,15 @@ final class HlsProxyServer implements Closeable {
                         data, nalStart, nalLength, true, true);
                 long nalElapsed = SystemClock.elapsedRealtime() - nalStartedAt;
                 if (nalElapsed > 500L) {
-                    Log.i(TAG, "CMG decoded NAL type=" + nalType + " len=" + nalLength
+                    AppLog.i(TAG, "CMG decoded NAL type=" + nalType + " len=" + nalLength
                             + " out=" + decodedLength + " mode=live-in-place"
                             + " elapsed=" + nalElapsed + "ms");
                 }
                 if (decodedLength == -2) {
-                    Log.w(TAG, "Skipping CMG NAL replacement because length grew type="
+                    AppLog.w(TAG, "Skipping CMG NAL replacement because length grew type="
                             + nalType + " before=" + nalLength);
                 } else if (decodedLength < 0) {
-                    Log.w(TAG, "Skipping CMG NAL replacement because native rejected type="
+                    AppLog.w(TAG, "Skipping CMG NAL replacement because native rejected type="
                             + nalType + " len=" + nalLength);
                 } else {
                     replacementLength = decodedLength;
@@ -4382,7 +4382,7 @@ final class HlsProxyServer implements Closeable {
     @Override
     public void close() {
         if (!cleanupStarted.compareAndSet(false, true)) return;
-        Log.i(TAG, "Proxy closing streamedResponses=" + streamedResponseCount.get()
+        AppLog.i(TAG, "Proxy closing streamedResponses=" + streamedResponseCount.get()
                 + " streamedBytes=" + streamedResponseBytes.get()
                 + " upstreamBytes=" + upstreamDownloadedBytes.get());
         stopServing();
@@ -4455,12 +4455,12 @@ final class HlsProxyServer implements Closeable {
         try {
             if (!cctvPrefetchWorkers.awaitTermination(
                     CCTV_DECRYPT_SHUTDOWN_WAIT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "CCTV decrypt worker still stopping after proxy close port=" + port);
+                AppLog.w(TAG, "CCTV decrypt worker still stopping after proxy close port=" + port);
             }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
-        Log.i(TAG, "Proxy closed port=" + port);
+        AppLog.i(TAG, "Proxy closed port=" + port);
     }
 
     private void sampleSourceVideo(byte[] body) {
@@ -4493,11 +4493,11 @@ final class HlsProxyServer implements Closeable {
                 sourceVideoWidth = resolution.width;
                 sourceVideoHeight = resolution.height;
             }
-            Log.i(TAG, "HLS source video " + sourceVideoWidth + "x" + sourceVideoHeight
+            AppLog.i(TAG, "HLS source video " + sourceVideoWidth + "x" + sourceVideoHeight
                     + " " + frameRate + " fps (PTS)");
         } catch (RuntimeException error) {
             // Metadata sampling must never interrupt delivery of a playable segment.
-            Log.w(TAG, "Unable to sample HLS source video", error);
+            AppLog.w(TAG, "Unable to sample HLS source video", error);
         }
     }
 
@@ -4858,7 +4858,7 @@ final class HlsProxyServer implements Closeable {
 
         void copyBack(byte[] ts, byte[] data) {
             if (data.length != bytes.size()) {
-                Log.w(TAG, "Skipping CMG video payload copy because length changed before="
+                AppLog.w(TAG, "Skipping CMG video payload copy because length changed before="
                         + bytes.size() + " after=" + data.length);
                 return;
             }
@@ -4938,7 +4938,7 @@ final class HlsProxyServer implements Closeable {
                 }
             }
             if (dataOffset < dataLength) {
-                Log.w(TAG, "Rebuilt PES payload did not fit original TS packets before="
+                AppLog.w(TAG, "Rebuilt PES payload did not fit original TS packets before="
                         + size + " after=" + dataLength);
             }
         }
@@ -4963,7 +4963,7 @@ final class HlsProxyServer implements Closeable {
             }
             int updatedLength = payloadLength + pesHeaderLength - 6;
             if (updatedLength > 0xffff) {
-                Log.w(TAG, "Cannot update PES length because rebuilt payload is too large: "
+                AppLog.w(TAG, "Cannot update PES length because rebuilt payload is too large: "
                         + updatedLength);
                 return;
             }

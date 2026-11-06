@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.text.TextUtils;
 import android.util.Base64;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.JavascriptInterface;
 import org.json.JSONObject;
 import java.io.IOException;
@@ -67,7 +67,7 @@ abstract class Ku9Host implements NativeQuickJs.Host {
             return Ku9HttpClient.getText(url, Ku9HttpClient.parseHeaders(headersJson),
                     MAX_RESPONSE_BYTES);
         } catch (Exception error) {
-            Log.w(TAG, "Ku9 GET failed: " + url, error);
+            AppLog.w(TAG, "Ku9 GET failed: " + url, error);
             return "";
         }
     }
@@ -88,7 +88,7 @@ abstract class Ku9Host implements NativeQuickJs.Host {
                 followRedirects, MAX_RESPONSE_BYTES);
         try {
             JSONObject response = new JSONObject(result);
-            if (response.optInt("code") == 0) Log.w(TAG, "HTTP transport failure: " + response.optString("error"));
+            if (response.optInt("code") == 0) AppLog.w(TAG, "HTTP transport failure: " + response.optString("error"));
         } catch (Exception ignored) { }
         return result;
     }
@@ -204,7 +204,7 @@ abstract class Ku9Host implements NativeQuickJs.Host {
 
     @JavascriptInterface
     public void log(String value) {
-        Log.d(TAG, value);
+        AppLog.d(TAG, value);
     }
 
 

@@ -19,7 +19,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -187,10 +187,10 @@ final class WifiDirectCoordinator implements Closeable {
             }
         } catch (SecurityException error) {
             detail = "Wi-Fi Direct 权限被系统拒绝，继续使用局域网";
-            Log.w(TAG, "Wi-Fi Direct initialization denied", error);
+            AppLog.w(TAG, "Wi-Fi Direct initialization denied", error);
         } catch (RuntimeException error) {
             detail = "Wi-Fi Direct 初始化失败，继续使用局域网";
-            Log.w(TAG, "Wi-Fi Direct initialization unavailable", error);
+            AppLog.w(TAG, "Wi-Fi Direct initialization unavailable", error);
         }
         channel = initializedChannel;
         manager = channel != null ? service : null;
@@ -202,7 +202,7 @@ final class WifiDirectCoordinator implements Closeable {
             } catch (RuntimeException error) {
                 supported = false;
                 setState(STATE_UNAVAILABLE, "Wi-Fi Direct 初始化失败，继续使用局域网");
-                Log.w(TAG, "Wi-Fi Direct receiver unavailable", error);
+                AppLog.w(TAG, "Wi-Fi Direct receiver unavailable", error);
             }
         }
     }
@@ -509,11 +509,11 @@ final class WifiDirectCoordinator implements Closeable {
                         }
 
                         @Override public void onFailure(int reason) {
-                            Log.d(TAG, "Peer discovery retry failed: " + reason);
+                            AppLog.d(TAG, "Peer discovery retry failed: " + reason);
                         }
                     });
                 } catch (RuntimeException error) {
-                    Log.d(TAG, "Unable to retry peer discovery", error);
+                    AppLog.d(TAG, "Unable to retry peer discovery", error);
                 }
             }
         });
@@ -601,7 +601,7 @@ final class WifiDirectCoordinator implements Closeable {
                         }
                     });
                 } catch (RuntimeException error) {
-                    Log.d(TAG, "Unable to read connection info", error);
+                    AppLog.d(TAG, "Unable to read connection info", error);
                 }
             }
         });
@@ -622,7 +622,7 @@ final class WifiDirectCoordinator implements Closeable {
                         }
                     });
                 } catch (RuntimeException error) {
-                    Log.d(TAG, "Unable to read group info", error);
+                    AppLog.d(TAG, "Unable to read group info", error);
                 }
             }
         });
@@ -641,7 +641,7 @@ final class WifiDirectCoordinator implements Closeable {
                         }
                     });
                 } catch (RuntimeException error) {
-                    Log.d(TAG, "Unable to read local Direct device", error);
+                    AppLog.d(TAG, "Unable to read local Direct device", error);
                 }
             }
         });
@@ -661,7 +661,7 @@ final class WifiDirectCoordinator implements Closeable {
 
     private void setState(String value, String message) {
         if (!value.equals(state) || !(message == null ? "" : message).equals(detail)) {
-            Log.i(TAG, value + (message == null || message.length() == 0
+            AppLog.i(TAG, value + (message == null || message.length() == 0
                     ? "" : ": " + message));
         }
         state = value;
@@ -697,7 +697,7 @@ final class WifiDirectCoordinator implements Closeable {
             }
             return matchingInterface.length() > 0 ? matchingInterface : fallback;
         } catch (Exception error) {
-            Log.d(TAG, "Unable to find P2P interface address", error);
+            AppLog.d(TAG, "Unable to find P2P interface address", error);
             return "";
         }
     }
@@ -724,7 +724,7 @@ final class WifiDirectCoordinator implements Closeable {
                 if (!"02:00:00:00:00:00".equals(result)) return result;
             }
         } catch (Exception error) {
-            Log.d(TAG, "Unable to read P2P interface address", error);
+            AppLog.d(TAG, "Unable to read P2P interface address", error);
         }
         return "";
     }

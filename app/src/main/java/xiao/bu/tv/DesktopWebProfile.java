@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.Build;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.webkit.WebView;
 
 import androidx.webkit.ScriptHandler;
@@ -100,7 +100,7 @@ final class DesktopWebProfile {
                 try {
                     nativeMetadata = applyMetadata(mode, nativeUa, versionMode);
                 } catch (RuntimeException | LinkageError error) {
-                    Log.w(TAG, "Native UA metadata unavailable", error);
+                    AppLog.w(TAG, "Native UA metadata unavailable", error);
                 }
             }
             metadataMode = metadataKey;
@@ -129,7 +129,7 @@ final class DesktopWebProfile {
                 }
                 next = "(" + source() + ")(" + config.toString() + ");";
             } catch (Exception error) {
-                Log.w(TAG, "Cannot load desktop identity", error);
+                AppLog.w(TAG, "Cannot load desktop identity", error);
             }
         }
         if (next.equals(script)) return;
@@ -152,11 +152,11 @@ final class DesktopWebProfile {
                             Collections.<String>emptySet());
                 }
             } catch (RuntimeException | LinkageError error) {
-                Log.w(TAG, "Desktop identity feature unavailable", error);
+                AppLog.w(TAG, "Desktop identity feature unavailable", error);
             }
         }
         if (!script.isEmpty() && !documentStart) {
-            Log.w(TAG, "Legacy WebView: document-start privacy unavailable; UA-only before load");
+            AppLog.w(TAG, "Legacy WebView: document-start privacy unavailable; UA-only before load");
         }
     }
 

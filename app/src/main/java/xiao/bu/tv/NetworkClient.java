@@ -179,7 +179,7 @@ final class NetworkClient {
         if (factory == null) {
             http1Factory = null;
             Dns dns = DNS_SYSTEM.equals(getDnsMode())
-                    ? LegacySystemDns.create() : new PublicDns(getDnsMode());
+                    ? LegacySystemDns.create() : new PublicDns(getDnsMode(),1200,LegacySystemDns.create());
             OkHttpClient.Builder builder = new OkHttpClient.Builder()
                     .dns(new ProcessDns(dns))
                     .connectTimeout(10, TimeUnit.SECONDS)

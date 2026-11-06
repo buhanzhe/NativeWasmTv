@@ -11,6 +11,7 @@
 -keep interface tv.danmaku.ijk.media.player.misc.IMediaDataSource { *; }
 -keep class xiao.bu.tv.DolbyAudioOutput { public *; }
 -keep class xiao.bu.tv.IjkCodecPerformance { public *; }
+-keep class xiao.bu.tv.AppLog { *; }
 
 # Bugly reflection/JNI entry points and retraceable crash source locations.
 -keep class com.tencent.bugly.** { *; }

@@ -21,6 +21,7 @@ public class PageErrorCheck {
  static class LegacyWebSession {static final int HEARTBEAT=3;static Bundle bundle(String k,String v){Bundle b=new Bundle();b.put(k,v);return b;}}
  static class android {static class widget {static class Toast {static final int LENGTH_LONG=1;static Toast makeText(Object c,String t,int l){return new Toast();}void show(){}}}}
  static class Log {static void w(String a,String b){}}
+ static class AppLog {static void w(String a,String b){}}
  static class Build {static class VERSION {static int SDK_INT=25;}}
  static class WebViewClient {static final int ERROR_FAILED_SSL_HANDSHAKE=-11,ERROR_HOST_LOOKUP=-2;}
  static class WebView {}

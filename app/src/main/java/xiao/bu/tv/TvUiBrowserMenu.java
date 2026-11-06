@@ -10,12 +10,12 @@ final class TvUiBrowserMenu implements TvUi.Events {
     private static final String[] KEYS={"webViewResolution","webViewPageCover","webViewMinimalMode","webViewUserAgent","webViewBrowserVersion","webViewPageScale","webSourceEngine","webViewLoadImages","webViewAutoPlaySniffed","webViewAutoPlay"};
     private static final String[][] VALUES={
         {"720p","1080p","2k","4k"},{"off","status","black"},{"false","true"},
-        {"windows","macos","ipad","native","auto"},{"native","118","128","138","155"},
+        {"windows","macos","ipad","native"},{"native","118","128","138","155"},
         {"50","75","100","125","150","200","300"},{"system","lite"},{"false","true"},{"false","true"},{"false","true"}
     };
     private static final String[][] LABELS={
-        {"720P","1080P","2K","4K"},{"关闭","加载信息","纯黑"},{"关闭","开启"},
-        {"Windows","macOS","iPad","本机","自动适配"},{"本机版本","118","128","138","155"},
+        {"720P","1080P","2K","4K"},{"关闭","显示信息","纯黑"},{"关闭","开启"},
+        {"Windows","macOS","iPad","本机"},{"本机版本","118","128","138","155"},
         {"50%","75%","100%","125%","150%","200%","300%"},{"系统","轻量内核"},{"关闭","开启"},{"关闭","开启"},{"关闭","开启"}
     };
     private final Host host;

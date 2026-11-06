@@ -51,7 +51,7 @@ class Checks {
  }
  static class Http {
   static final int SOCKET_TIMEOUT_MS=100,MAX_KU9_SCRIPT_BYTES=2000000;static final String TAG="test";
-  static class Log {static void w(String a,String b,Exception e){}static void i(String a,String b){}}
+  static class AppLog {static void w(String a,String b,Exception e){}static void i(String a,String b){}}
   static class MediaFileDownload {}
   static class Listener {MediaFileDownload mediaDownload(String a,String b,String c){return null;}}
   Listener listener=new Listener(); int status;String message;
@@ -81,13 +81,13 @@ class Checks {
  }
  public static void main(String[] args)throws Exception{
   for(int scenario=0;scenario<5;scenario++){
-   Sniff s=new Sniff();s.open("one","");s.handler.advance(30000);s.open("redirect","");
+   Sniff s=new Sniff();long deadline=Sniff.SNIFF_TIMEOUT_MS;s.open("one","");s.handler.advance(deadline/2);s.open("redirect","");
    if(scenario==1)s.renderedPage=new Object();
    if(scenario==2){s.temporary=true;s.streamActive=true;}
    if(scenario==3)s.finalStream=true;
    if(scenario==4)s.close();
-   s.handler.advance(59999);check(s.failures==0);s.handler.advance(60000);
-   check(s.failures==(scenario<3?1:0));s.handler.advance(120000);check(s.failures<=1);
+   s.handler.advance(deadline-1);check(s.failures==0);s.handler.advance(deadline);
+   check(s.failures==(scenario<3?1:0));s.handler.advance(deadline*2);check(s.failures<=1);
   }
   Guard g=new Guard();for(String path:new String[]{"/sdcard/频道 列表.txt","file:///data/user/0/xiao.bu.tv/files/imported-playlists/local.playlist","content://provider/channels/123"," /storage/emulated/0/channels.m3u "}){
    check(new String(g.readForMobile(path),java.nio.charset.StandardCharsets.UTF_8).equals(path.trim()));
@@ -110,6 +110,6 @@ class Checks {
 for key,value in {'FIELDS':fields,'OPEN':opening,'GUARD':guard,'LOCAL':method(pm,'    static boolean isLocalLocation('),'SUPPORTED':method(pm,'    private static boolean isSupportedLocation('),'HANDLE':handle,'LINE':method(http,'    private static String readLine('),'QUERY':method(http,'    private static String queryParameter('),'DECODE':method(http,'    private static String decodeQueryValue(')}.items():java=java.replace('  '+key,value)
 with tempfile.TemporaryDirectory() as temp:
  d=Path(temp);(d/'Checks.java').write_text(java,encoding='utf-8');p=d/'org/json/JSONException.java';p.parent.mkdir(parents=True);p.write_text('package org.json; public class JSONException extends Exception {}')
- subprocess.run(['javac','-encoding','UTF-8','-d',temp,str(d/'Checks.java'),str(p),str(base/'ControlRequestException.java'),str(base/'ChannelStartupTiming.java')],check=True)
+ subprocess.run(['javac','-encoding','UTF-8','-d',temp,str(d/'Checks.java'),str(p),str(base/'ControlRequestException.java'),str(base/'ChannelStartupTiming.java'),str(base/'MulticastPlaylist.java')],check=True)
  subprocess.run(['java','-cp',temp,'xiao.bu.tv.Checks'],check=True,timeout=10)
 print('PASS sniff deadline across redirects/render/preroll, local playlist access and reread, HTTP 400/403/409, error privacy, failed timing')

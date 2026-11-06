@@ -9,7 +9,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Process;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import org.json.JSONObject;
 import java.io.File;
 import java.io.IOException;
@@ -51,7 +51,7 @@ public final class ReceivedApkCleanup extends BroadcastReceiver {
                     filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
                     filter.addDataScheme("package");
                     try { context.registerReceiver(new ReceivedApkCleanup(), filter); }
-                    catch (RuntimeException error) { Log.w("ReceivedApkCleanup", "Unable to register install cleanup", error); }
+                    catch (RuntimeException error) { AppLog.w("ReceivedApkCleanup", "Unable to register install cleanup", error); }
                 }
                 cleanup(context, target);
             }
@@ -116,7 +116,7 @@ public final class ReceivedApkCleanup extends BroadcastReceiver {
                 changed = true;
             } catch (PackageManager.NameNotFoundException ignored) {
                 // Not installed yet. Retry on an install event or the next cold start.
-            } catch (Exception error) { Log.w("ReceivedApkCleanup", "Unable to clean received APK", error); }
+            } catch (Exception error) { AppLog.w("ReceivedApkCleanup", "Unable to clean received APK", error); }
         }
         if (changed) edit.commit();
     }

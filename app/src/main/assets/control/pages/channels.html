@@ -7,7 +7,7 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>频道配置 · nTv</title>
-    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/channels.css?v=epg-inline2">
+    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/channels.css?v=20261105-probe-layout">
 </head>
   <body data-parent="/index.html">
     <main id="channelConfigPage" class="secondary-page channel-config-page">
@@ -45,7 +45,7 @@
         >
           刷新频道列表
         </button>
-        <div class="config-note">修改后刷新，应用到电视。</div>
+        <div class="config-note">支持频道列表及 RTP / UDP / RTSP 单频道地址；修改后刷新，应用到电视。</div>
       </section>
       <section class="config-epg-section">
         <div class="section-head">
@@ -87,6 +87,19 @@
         </div>
         <div class="config-note">仅JS，限2MB；同名文件覆盖。</div>
       </section>
+      <section class="channel-probe-section">
+        <div class="switch-row">
+          <div class="switch-copy"><b>邻位探测</b></div>
+          <div class="probe-actions">
+            <button id="probeAllButton" onclick="probeAllChannels()">全部探测</button>
+            <input id="neighborProbeEnabled" type="checkbox" aria-label="邻位探测" onchange="saveNeighborProbe()" />
+          </div>
+        </div>
+        <div class="probe-footer">
+          <span>自动跳过失效频道</span>
+          <span id="channelProbeStatus" aria-live="polite"></span>
+        </div>
+      </section>
     </main>
     <div id="message" class="message"></div>
     <div
@@ -116,7 +129,7 @@
     />
     <script src="/js/navigation.js?v=20261030-ui"></script>
     <script src="/js/common.js?v=20261103-network"></script>
-    <script src="/js/pages/channels.js?v=20261103-json-async"></script>
+    <script src="/js/pages/channels.js?v=20261105-probe-layout"></script>
   <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>

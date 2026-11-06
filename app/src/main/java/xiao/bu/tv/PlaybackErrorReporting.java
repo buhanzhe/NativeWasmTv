@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -27,7 +27,7 @@ final class PlaybackErrorReporting {
         PlayerErrorReports.Scene scene=reports.begin(request,backend,channel,source,decode,line);
         if(watcher==null){watcher=new Watcher();watcher.start();}
         // Ordered with native logs by logd; old queued lines keep their old scene.
-        Log.i(PlayerErrorReports.MARKER_TAG,watcher.token+":"+scene.id);
+        AppLog.i(PlayerErrorReports.MARKER_TAG,watcher.token+":"+scene.id);
     }
     static void error(int request,String component,String kind,String message){
         if(CrashReporting.enabled())reports.error(request,component,kind,message,null);
@@ -71,7 +71,7 @@ final class PlaybackErrorReporting {
                 try(BufferedReader input=new BufferedReader(new InputStreamReader(p.getInputStream(),"UTF-8"))){
                     String line;while(!closed&&(line=input.readLine())!=null)tail.line(line);
                 }
-            }catch(Exception unavailable){if(!closed)Log.w(TAG,"Native error logs unavailable; callback reporting remains enabled");}
+            }catch(Exception unavailable){if(!closed)AppLog.w(TAG,"Native error logs unavailable; callback reporting remains enabled");}
             finally{java.lang.Process p=process;if(p!=null)finish(p);process=null;}
         }
     }

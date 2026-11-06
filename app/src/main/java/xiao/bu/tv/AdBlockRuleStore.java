@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteStatement;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -102,7 +102,7 @@ final class AdBlockRuleStore {
         catch (RuntimeException error) {
             if (!queryErrorLogged) {
                 queryErrorLogged = true;
-                Log.w(TAG, "Unable to query rule database; leaving requests untouched", error);
+                AppLog.w(TAG, "Unable to query rule database; leaving requests untouched", error);
             }
             return NONE;
         }
@@ -132,7 +132,7 @@ final class AdBlockRuleStore {
                 } catch (Exception error) {
                     lastError = error.getMessage() == null
                             ? error.getClass().getSimpleName() : error.getMessage();
-                    Log.w(TAG, "Unable to update anti-AD rules", error);
+                    AppLog.w(TAG, "Unable to update anti-AD rules", error);
                 }
                 finally { updating = false; }
             }
@@ -158,7 +158,7 @@ final class AdBlockRuleStore {
             SQLiteDatabase db;
             try { db = database(); }
             catch (RuntimeException error) {
-                Log.w(TAG, "Unable to open rule database", error);
+                AppLog.w(TAG, "Unable to open rule database", error);
                 return NONE;
             }
             if (ruleCount > 0) {
@@ -244,7 +244,7 @@ final class AdBlockRuleStore {
                     .putString("ad_block_rule_etag", header(response, "ETag"))
                     .putString("ad_block_rule_modified", header(response, "Last-Modified"))
                     .apply();
-            Log.i(TAG, "Installed anti-AD " + version + " with " + ruleCount + " rules");
+            AppLog.i(TAG, "Installed anti-AD " + version + " with " + ruleCount + " rules");
         } finally { response.close(); }
     }
 

@@ -17,3 +17,12 @@ for(const change of [c=>c.auto=false,c=>c.stopped=true,c=>c.userPaused=true,c=>c
 ({c,el}=fixture());c.lastGesture=900;c.audioChoice({target:el});c.restoreHuyaAudio(el);assert.equal(c.calls,0,'recent manual audio choice must survive initial recovery');
 ({c,el}=fixture());el.currentTime=0;c.restoreHuyaAudio(el);assert.equal(c.calls,0);
 console.log('PASS Huya SDK auto-mute recovery, once-per-video, manual/tab/zero-volume mute, autoplay-off, handoff, background and hostname boundaries');
+{
+ const main={tagName:'VIDEO'},doc={getElementById:()=>main},ad={ownerDocument:doc};main.ownerDocument=doc;
+ const ctx={w:{location:{hostname:'www.huya.com'}}};vm.createContext(ctx);vm.runInContext(method('auxiliaryHuyaVideo'),ctx);
+ assert.equal(ctx.auxiliaryHuyaVideo(ad),true,'Ad must not replace the live player during a stream change');
+ assert.equal(ctx.auxiliaryHuyaVideo(main),false);
+ doc.getElementById=()=>null;assert.equal(ctx.auxiliaryHuyaVideo(ad),false,'Older/mobile SDK layouts keep their fallback');
+ doc.getElementById=()=>main;ctx.w.location.hostname='huya.com.example.test';assert.equal(ctx.auxiliaryHuyaVideo(ad),false);
+ console.log('PASS Huya live-node selection, advertisement exclusion, SDK fallback and hostname boundaries');
+}

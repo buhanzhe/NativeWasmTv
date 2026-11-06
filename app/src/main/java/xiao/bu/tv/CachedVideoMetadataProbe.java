@@ -1,7 +1,7 @@
 package xiao.bu.tv;
 
 import android.os.SystemClock;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.util.Arrays;
@@ -66,6 +66,7 @@ final class CachedVideoMetadataProbe {
             if (closed || Thread.currentThread().isInterrupted()) return;
             file = File.createTempFile("ijk-source-", ".ts", directory);
             try (FileOutputStream output = new FileOutputStream(file)) { output.write(sample); }
+            AppLog.loadIjkLibraries();
             probe = new IjkMediaPlayer();
             CountDownLatch ready = new CountDownLatch(1);
             final boolean[] prepared = {false};
@@ -92,13 +93,13 @@ final class CachedVideoMetadataProbe {
             if (!closed && prepared[0]) {
                 VideoStreamDescription found = IjkStreamMetrics.videoDescription(probe);
                 description = found.withFallback(description);
-                Log.i("CachedVideoMetadata", "IJK source headers " + description.debugLabel()
+                AppLog.i("CachedVideoMetadata", "IJK source headers " + description.debugLabel()
                         + " tookMs=" + (SystemClock.elapsedRealtime() - started));
             }
         } catch (InterruptedException cancelled) {
             Thread.currentThread().interrupt();
         } catch (Exception | LinkageError error) {
-            if (!closed) Log.w("CachedVideoMetadata", "Source headers unavailable", error);
+            if (!closed) AppLog.w("CachedVideoMetadata", "Source headers unavailable", error);
         } finally {
             if (probe != null) {
                 probe.setOnPreparedListener(null);

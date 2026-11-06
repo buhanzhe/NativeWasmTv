@@ -5,7 +5,7 @@ import android.app.Activity;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.view.ViewGroup;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -35,7 +35,7 @@ final class Ku9ScriptEngine {
             if (active == host) host.fail("脚本解析超时");
         };
         handler.postDelayed(timeout, 30000L);
-        Log.i("Ku9ScriptEngine", "engine=" + (browser ? "WebView" : "QuickJS"));
+        AppLog.i("Ku9ScriptEngine", "engine=" + (browser ? "WebView" : "QuickJS"));
         if (!browser) {
             destroyWebView();
             new Thread(() -> {
@@ -48,7 +48,7 @@ final class Ku9ScriptEngine {
                     host.fail("QuickJS: " + error.toString());
                 } finally {
                     handler.post(() -> { if (active == host) removeTimeout(); });
-                    Log.i("Ku9ScriptEngine", "QuickJS elapsedMs="
+                    AppLog.i("Ku9ScriptEngine", "QuickJS elapsedMs="
                             + (android.os.SystemClock.elapsedRealtime() - started));
                 }
             }, "ku9-quickjs").start();

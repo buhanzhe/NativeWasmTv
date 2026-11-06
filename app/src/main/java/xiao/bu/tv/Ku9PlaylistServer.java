@@ -1,6 +1,6 @@
 package xiao.bu.tv;
 
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -59,11 +59,11 @@ final class Ku9PlaylistServer implements Closeable {
                 handle(client);
             } catch (SocketException error) {
                 if (!listening.isClosed()) {
-                    Log.w(TAG, "Playlist socket failed", error);
+                    AppLog.w(TAG, "Playlist socket failed", error);
                 }
             } catch (IOException error) {
                 if (!listening.isClosed()) {
-                    Log.w(TAG, "Playlist request failed", error);
+                    AppLog.w(TAG, "Playlist request failed", error);
                 }
             } finally {
                 synchronized (this) {

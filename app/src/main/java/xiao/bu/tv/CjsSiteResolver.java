@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.app.Activity;
 import android.text.TextUtils;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -86,7 +86,7 @@ final class CjsSiteResolver {
                     final Pending request = new Pending(requestId, requestGeneration,
                             channelName, pageUrl, quality, sourceUrl, site, callback);
                     request.fresh = fresh;
-                    Log.i(TAG, "CJS local load site=" + site.id + " request=" + requestId
+                    AppLog.i(TAG, "CJS local load site=" + site.id + " request=" + requestId
                             + " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - loadStarted));
                     activity.runOnUiThread(new Runnable() {
                         @Override
@@ -121,7 +121,7 @@ final class CjsSiteResolver {
             String saved = cache.getString(key, "");
             if (saved.length() > 0) {
                 pending = request;
-                Log.i(TAG, "Using site URL cache id=" + request.site.id + " quality=" + request.quality);
+                AppLog.i(TAG, "Using site URL cache id=" + request.site.id + " quality=" + request.quality);
                 complete(request, saved);
                 return;
             }
@@ -254,7 +254,7 @@ final class CjsSiteResolver {
             return;
         }
         if (request.initialCompleted) {
-            Log.w(TAG, reason + "; retaining last live playlist");
+            AppLog.w(TAG, reason + "; retaining last live playlist");
             handler.removeCallbacks(refreshPlaylist);
             handler.postDelayed(refreshPlaylist, 5000L);
             return;

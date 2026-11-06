@@ -2,7 +2,7 @@ package xiao.bu.tv;
 
 import android.app.Activity;
 import android.os.*;
-import android.util.Log;
+import xiao.bu.tv.AppLog;
 import android.widget.FrameLayout;
 import java.util.*;
 import java.util.concurrent.*;
@@ -79,7 +79,7 @@ final class ChannelNetworkWarmup implements java.io.Closeable {
                     if(p.ku9||p.cjs)plans.add(p);
                 }
                 main.post(()->{if(closed||epoch!=generation)return;scripts.addAll(plans);next();});
-            }catch(Exception error){Log.d("ChannelWarmup","Network preparation deferred: "+error.getClass().getSimpleName());}
+            }catch(Exception error){AppLog.d("ChannelWarmup","Network preparation deferred: "+error.getClass().getSimpleName());}
         });
     }
     private void next(){
@@ -107,7 +107,7 @@ final class ChannelNetworkWarmup implements java.io.Closeable {
         }
     }
     private void dnsResult(String url){LitePageWarmup p=pages;if(p!=null)p.dns(url);}
-    private void ready(Entry e){if(!e.completed){e.completed=true;resolving=false;Log.d("ChannelWarmup","Neighbour resolver ready in "+(SystemClock.elapsedRealtime()-e.started)+" ms");next();}}
+    private void ready(Entry e){if(!e.completed){e.completed=true;resolving=false;AppLog.d("ChannelWarmup","Neighbour resolver ready in "+(SystemClock.elapsedRealtime()-e.started)+" ms");next();}}
     private void failed(Entry e){
         if(e.cancelled)return;
         if(!e.adopted){entries.remove(e.plan.key);e.cancel();}

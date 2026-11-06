@@ -28,6 +28,9 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
     private int playingSourceIndex;
     private FavoriteListener favoriteListener;
     private EpgManager epgManager;
+    private ChannelHealth health;
+    void setHealth(ChannelHealth value){health=value;}
+    private void healthStyle(View row,Object item){row.setAlpha(item instanceof Channel&&health!=null&&health.bad((Channel)item)?0.4f:1f);}
 
     private float measuredTitleSize=-1f, measuredTitleWidth;
     private int measuredFirst=-1,measuredCount=-1;
@@ -194,7 +197,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             return empty;
         }
         final boolean groupRow = item instanceof ChannelCatalog.Group;
-        if(TvUiPlugin.current()!=null){try{return pluginRow(position,convertView,item);}catch(RuntimeException|LinkageError failure){TvUiPlugin.rejectRenderer(inflater.getContext(),failure);convertView=null;}}
+        if(TvUiPlugin.current()!=null){try{View row=pluginRow(position,convertView,item);healthStyle(row,item);return row;}catch(RuntimeException|LinkageError failure){TvUiPlugin.rejectRenderer(inflater.getContext(),failure);convertView=null;}}
         ViewHolder holder;
         boolean favoriteFocused = !groupRow && parent.hasFocus() && position == favoriteFocusIndex;
         // A recycled row can survive an adapter or group/channel mode change.
@@ -298,6 +301,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
                 ? parent.getResources().getColor(R.color.accent)
                 : focused ? android.graphics.Color.WHITE
                 : parent.getResources().getColorStateList(R.color.channel_item_text).getDefaultColor());
+        healthStyle(convertView,item);
         return convertView;
     }
 
