@@ -91,7 +91,7 @@ public final class WindowsTv {
     UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
     SwingUtilities.invokeLater(() -> {
       WindowsTv app=new WindowsTv(home); app.frame.setVisible(true);
-      String source=args.length>0 ? args[0] : home.resolve("playlists/example.m3u").toString();
+      String source=args.length>0 ? args[0] : home.resolve("playlists/webview.txt").toString();
       if (source.startsWith("https://") || source.startsWith("http://") || Files.isRegularFile(Path.of(source))) app.load(source);
     });
   }

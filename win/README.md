@@ -1,4 +1,4 @@
-# 网页电视 Windows · 0.1
+# 网页电视 Windows · 0.1.1
 
 Windows 10/11 x64 的最小桌面版，采用简单的新界面。支持本地 M3U/TXT、
 在线 HTTP(S) 播放列表、播放列表切换、频道切换、播放和停止。
@@ -8,6 +8,10 @@ Windows 10/11 x64 的最小桌面版，采用简单的新界面。支持本地 M
 
 完整解压压缩包后，双击 `NativeWasmTv.exe` 或 `启动网页电视.cmd`。
 包内自带 Java 运行时，无需安装 Android SDK、Java、WSL 或浏览器。
+
+默认加载随包内置的 [webSourceM3U8/webview.txt](https://github.com/buhanzhe/webSourceM3U8/blob/main/webview.txt)，
+当前快照包含 828 个频道、36 个分组。打开程序即可看到完整列表，不依赖联网下载列表；
+频道本身仍需联网播放。来源提交和原始文件 SHA-256 保存在 `playlists/webview.source.json`。
 
 点击“打开列表”选择 UTF-8 编码的 M3U/TXT，或点击“添加地址”输入在线列表地址。
 上方下拉框切换已加载列表，点击频道即播放，也可使用上一台/下一台和停止按钮。
@@ -47,12 +51,17 @@ python win/build.py --core-output browser-core/litebrowser/windows/out/windows `
   --jdk $env:JAVA_HOME --player C:/tools/ffmpeg/bin/ffplay.exe
 ```
 
-输出 `win/out/windows/NativeWasmTv-win-x64-v0.1.0.zip`。
+输出 `win/out/windows/NativeWasmTv-win-x64-v0.1.1.zip`。
 Linux 可通过 `--jdk` 指向 Windows JDK、`--cc/--cxx` 指向 MinGW 交叉编译器，
 使用同版本宿主 JDK 的 `javac`/`jlink` 交叉打包；内核说明见私有工程对应目录。
 应用打包脚本可用 `--launcher-cc x86_64-w64-mingw32-gcc` 指定启动器编译器。
 `win/tests` 提供播放列表、进程切换及真实内核/MSE 测试。
 本次已执行的检查、Windows/Wine 的环境差异及复验命令见 [VALIDATION.md](VALIDATION.md)。
+
+更新内置频道快照：`python win/update_playlist.py`。此命令先解析 main 的精确提交，
+再获取该提交的原始文件并记录来源；不重排、去重或改写 UJS 地址。
+`win/tests/live-ten.json` 固定本轮抽测的 10 个真实频道，
+`test_live_channels.py` 使用实际 Windows 会话和解码器保留媒体时钟、视频帧及失败记录。
 
 运行时、播放器和原生库在发布 ZIP 内；构建缓存与发布产物不加入 Git。
 原有 Android 工程及其签名文件保留独立。

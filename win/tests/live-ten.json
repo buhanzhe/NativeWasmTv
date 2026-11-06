@@ -1,0 +1,76 @@
+{
+  "playlist_sha256": "05aec58ecee8db8088c0362d77bb435764ab63b4f3f9902d0210be270028a9fd",
+  "source_commit": "700fe2fac99a5ba0a9c8335378e7d1442ad638a6",
+  "channels": [
+    {
+      "id": "cctv1",
+      "name": "CCTV1",
+      "group": "央视频道",
+      "url": "webview://https://tv.cctv.com/live/cctv1/",
+      "source_line": 22
+    },
+    {
+      "id": "cctv13",
+      "name": "CCTV13",
+      "group": "央视频道",
+      "url": "webview://https://tv.cctv.com/live/cctv13/",
+      "source_line": 34
+    },
+    {
+      "id": "zhejiang",
+      "name": "浙江卫视",
+      "group": "浙江频道",
+      "url": "webview://https://www.cztv.com/liveTV/101",
+      "source_line": 321
+    },
+    {
+      "id": "zhejiang-news",
+      "name": "浙江新闻",
+      "group": "浙江频道",
+      "url": "webview://https://www.cztv.com/liveTV/107",
+      "source_line": 326
+    },
+    {
+      "id": "guangdong",
+      "name": "广东卫视",
+      "group": "广东频道",
+      "url": "webview://https://www.gdtv.cn/tvChannelDetail/43",
+      "source_line": 637
+    },
+    {
+      "id": "guangdong-sports",
+      "name": "广东体育",
+      "group": "广东频道",
+      "url": "webview://https://www.gdtv.cn/tvChannelDetail/47",
+      "source_line": 641
+    },
+    {
+      "id": "dezhou-news",
+      "name": "德州新闻综合",
+      "group": "山东频道",
+      "url": "webview://https://iapp.dztv.tv/share/dHZsLTE3OS0x.html",
+      "source_line": 478
+    },
+    {
+      "id": "dezhou-life",
+      "name": "德州经济生活",
+      "group": "山东频道",
+      "url": "webview://https://iapp.dztv.tv/share/dHZsLTE3OS0y.html",
+      "source_line": 479
+    },
+    {
+      "id": "neimenggu",
+      "name": "内蒙古卫视",
+      "group": "内蒙古频道",
+      "url": "webview://https://www.nmtv.cn/liveTv?ujs=KGZ1bmN0aW9uKCl7dmFyIG49MCx0PXNldEludGVydmFsKGZ1bmN0aW9uKCl7dmFyIGE9ZG9jdW1lbnQucXVlcnlTZWxlY3RvckFsbCgiLnR2LWxpc3QgLmMtbGFiZWwiKTtmb3IodmFyIGk9MDtpPGEubGVuZ3RoO2krKyl7aWYoYVtpXS50ZXh0Q29udGVudC50cmltKCk9PT0iXHU1MTg1XHU4NDk5XHU1M2U0XHU1MzZiXHU4OWM2Iil7YVtpXS5jbGljaygpO2NsZWFySW50ZXJ2YWwodCk7cmV0dXJuO319aWYoKytuPj0xMDApY2xlYXJJbnRlcnZhbCh0KTt9LDIwMCk7fSkoKTs%3D",
+      "source_line": 193
+    },
+    {
+      "id": "neimenggu-news",
+      "name": "内蒙古新闻综合",
+      "group": "内蒙古频道",
+      "url": "webview://https://www.nmtv.cn/liveTv?ujs=KGZ1bmN0aW9uKCl7dmFyIG49MCx0PXNldEludGVydmFsKGZ1bmN0aW9uKCl7dmFyIGE9ZG9jdW1lbnQucXVlcnlTZWxlY3RvckFsbCgiLnR2LWxpc3QgLmMtbGFiZWwiKTtmb3IodmFyIGk9MDtpPGEubGVuZ3RoO2krKyl7aWYoYVtpXS50ZXh0Q29udGVudC50cmltKCk9PT0iXHU2NWIwXHU5NWZiXHU3ZWZjXHU1NDA4Iil7YVtpXS5jbGljaygpO2NsZWFySW50ZXJ2YWwodCk7cmV0dXJuO319aWYoKytuPj0xMDApY2xlYXJJbnRlcnZhbCh0KTt9LDIwMCk7fSkoKTs%3D",
+      "source_line": 194
+    }
+  ]
+}

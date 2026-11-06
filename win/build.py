@@ -50,6 +50,10 @@ def main():
     if a.no_runtime and a.target != 'linux':
         p.error('--no-runtime is only for the Linux test layout')
     core = a.core_output.resolve()
+    playlist = HERE/'playlists/webview.txt'
+    playlist_info = json.loads((HERE/'playlists/webview.source.json').read_text(encoding='utf-8'))
+    if hashlib.sha256(playlist.read_bytes()).hexdigest() != playlist_info['sha256']:
+        raise RuntimeError('Bundled playlist differs from its recorded source snapshot')
     native = 'ntvLiteDesktop.dll' if a.target=='windows' else 'libntvLiteDesktop.so'
     if a.target=='windows':
         pe_x64(core/native); pe_x64(a.player); pe_x64(a.jdk/'bin/java.exe')
@@ -97,9 +101,9 @@ def main():
     (licenses/'README.txt').write_text('NativeWasmTv: GPL-3.0-only.\nFFplay/FFmpeg: GPL build; source/build information: https://github.com/BtbN/FFmpeg-Builds\nQuickJS, litehtml, wasm3, hls.js: see adjacent original notices.\nOkHttp and Okio: Apache-2.0; original notices retained inside app/lib JARs.\norg.json: https://github.com/stleary/JSON-java/tree/20180813\nTemurin runtime: GPL-2.0 with Classpath Exception; see runtime/legal.\nPrivate browser core remains a separately authorized dependency; see its source repository and third-party notices.\n',encoding='utf-8')
     core_info = json.loads((core/'build-info.json').read_text())
     files = {str(x.relative_to(bundle)).replace('\\','/'):hashlib.sha256(x.read_bytes()).hexdigest() for x in sorted(bundle.rglob('*')) if x.is_file()}
-    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.0','application_commit':revision(ROOT),'core_commit':revision(private),'core':core_info,'files':files},indent=2)+'\n')
+    (bundle/'build-info.json').write_text(json.dumps({'project':'buhanzhe/NativeWasmTv','branch':'win','target':a.target,'architecture':'x86_64','version':'0.1.1','application_commit':revision(ROOT),'core_commit':revision(private),'built_in_playlist':playlist_info,'core':core_info,'files':files},indent=2)+'\n')
     if a.target=='windows':
-        archive = output/'NativeWasmTv-win-x64-v0.1.0.zip'
+        archive = output/'NativeWasmTv-win-x64-v0.1.1.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
             for file in sorted(bundle.rglob('*')):
                 if file.is_file(): z.write(file,str(file.relative_to(output)))
