@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 group-title="网页频道",央视一套
+webview://https://tv.cctv.com/live/cctv1/
+#EXTINF:-1 group-title="网页频道",央视新闻
+webview://https://tv.cctv.com/live/cctv13/

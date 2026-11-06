@@ -181,3 +181,8 @@ http://your-iptv-server/channel/index.m3u8
 ```
 
 `browser-core/` 已被 Git 忽略。公开的 `.so` 不包含构建所需的 Java 接口和 JS 资源，不能单独替代该本地依赖；当前公开检出仍需要上述授权依赖才能构建。应用业务代码和通用 QuickJS/TLS 库仍在本仓库维护。分发包含内核的 bro 安装包时，完整对应源码的提供义务见 [版权说明](COPYRIGHT.md)，仅提交 `.so` 不代表已满足该义务。
+
+## Windows 最小版本
+
+`win` 分支的 Windows x64 网页电视位于 [`win/`](win/README.md)：简单播放列表、
+频道切换和播放，使用独立新界面及实际轻量内核。构建与验证见该目录说明。
