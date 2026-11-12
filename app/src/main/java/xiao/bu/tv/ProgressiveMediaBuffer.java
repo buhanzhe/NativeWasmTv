@@ -12,6 +12,7 @@ final class ProgressiveMediaBuffer {
     private final int limit;
     private int size;
     private int expectedLength = -1;
+    private byte[] contiguous;
     private boolean complete;
     private byte[] completedBody;
     private IOException failure;
@@ -29,15 +30,23 @@ final class ProgressiveMediaBuffer {
         if (expectedLength >= 0 && ownedBytes.length > expectedLength - size)
             throw new IOException("Progressive media exceeds declared length");
         if (ownedBytes.length == 0) return;
-        chunks.add(ownedBytes); size += ownedBytes.length; notifyAll();
+        // Prefetch can announce several downloads before ordered decryption
+        // starts. Reserve the full body only when its first clear PES arrives.
+        if (expectedLength >= 0 && contiguous == null)
+            contiguous = ownedBytes.length == expectedLength ? ownedBytes : new byte[expectedLength];
+        if (contiguous != null) {
+            if (contiguous != ownedBytes) System.arraycopy(ownedBytes, 0, contiguous, size, ownedBytes.length);
+        }
+        else chunks.add(ownedBytes);
+        size += ownedBytes.length; notifyAll();
     }
     synchronized byte[] finish() throws IOException {
         if (failure != null) throw failure;
         if (completedBody != null) return completedBody;
         if (expectedLength >= 0 && size != expectedLength)
             throw new IOException("Incomplete progressive media " + size + "/" + expectedLength);
-        byte[] body = chunks.size() == 1 ? chunks.get(0) : new byte[size]; int offset = 0;
-        if (chunks.size() != 1)
+        byte[] body = contiguous != null ? contiguous : chunks.size() == 1 ? chunks.get(0) : new byte[size]; int offset = 0;
+        if (contiguous == null && chunks.size() != 1)
             for (byte[] chunk : chunks) { System.arraycopy(chunk, 0, body, offset, chunk.length); offset += chunk.length; }
         completedBody = body;
         // Readers retain absolute positions, so consolidating storage cannot
@@ -67,6 +76,12 @@ final class ProgressiveMediaBuffer {
                             if (position == size) return -1;
                             int n = Math.min(count, size - position);
                             System.arraycopy(completedBody, position, target, start, n);
+                            position += n;
+                            return n;
+                        }
+                        if (contiguous != null && position < size) {
+                            int n = Math.min(count, size - position);
+                            System.arraycopy(contiguous, position, target, start, n);
                             position += n;
                             return n;
                         }

@@ -102,12 +102,13 @@ public final class ChannelUiInstrumentation extends Instrumentation {
         final ChannelLogoLoader[] loader = new ChannelLogoLoader[1];
         final android.widget.ImageView[] image = new android.widget.ImageView[1];
         final ChannelLogoCache disk = new ChannelLogoCache(directory);
+        final String url = "http://127.0.0.1:" + server.getLocalPort() + "/logo.png";
+        final String cacheKey = ChannelLogoLoader.cacheKey(context,"测试频道",url);
         try {
             for (int stage = 0; stage < 4; stage++) {
-                final String url = "http://127.0.0.1:" + server.getLocalPort() + "/logo.png?stage=" + stage;
-                if (stage == 2) check(disk.fileFor("测试频道").setLastModified(System.currentTimeMillis() - ChannelLogoCache.VALID_MS - 1000L), "Cannot expire PNG fixture");
+                if (stage == 2) check(disk.fileFor(cacheKey).setLastModified(System.currentTimeMillis() - ChannelLogoCache.VALID_MS - 1000L), "Cannot expire PNG fixture");
                 if (stage == 3) {
-                    FileOutputStream broken = new FileOutputStream(disk.fileFor("测试频道"));
+                    FileOutputStream broken = new FileOutputStream(disk.fileFor(cacheKey));
                     try { broken.write(new byte[]{1, 2, 3}); } finally { broken.close(); }
                 }
                 main(new Check() { public void run() {
@@ -124,13 +125,13 @@ public final class ChannelUiInstrumentation extends Instrumentation {
                 }
                 check(visible[0], "Logo did not display at stage " + stage);
                 check(requests.get() == (stage < 2 ? 1 : stage), "Repeated network request or stale PNG at stage " + stage);
-                check(disk.read("测试频道", System.currentTimeMillis()) != null, "Successful image not cached as PNG");
+                check(disk.read(cacheKey, System.currentTimeMillis()) != null, "Successful image not cached as PNG");
             }
-            File file = disk.fileFor("测试频道");
-            check(disk.read("测试频道", file.lastModified() + ChannelLogoCache.VALID_MS) == null, "PNG survived 24h expiry");
-            check(disk.read("测试频道", file.lastModified() - 1L) == null, "Clock rollback extends cache");
+            File file = disk.fileFor(cacheKey);
+            check(disk.read(cacheKey, file.lastModified() + ChannelLogoCache.VALID_MS) == null, "PNG survived 24h expiry");
+            check(disk.read(cacheKey, file.lastModified() - 1L) == null, "Clock rollback extends cache");
             check(disk.fileFor("../频道").getCanonicalFile().getParentFile().equals(file.getCanonicalFile().getParentFile()), "Unsafe cache name");
-            pass("PNG cache: cold loader reuses channel-name cache despite URL change; 24h expiry and corrupt file redownload; cached image displays");
+            pass("PNG cache: cold loader reuses source-specific cache; 24h expiry and corrupt file redownload; cached image displays");
         } finally {
             main(new Check() { public void run() { if (loader[0] != null) loader[0].close(); }});
             server.close(); peer.join(1000); bitmap.recycle();
@@ -211,7 +212,7 @@ public final class ChannelUiInstrumentation extends Instrumentation {
                 check(row.findViewById(R.id.channel_group_count).getVisibility() == View.GONE, "Single source count is redundant");
                 row = adapter.getView(1, row, parent);
                 check(title.getVisibility() == View.GONE && title.getText().length() == 0, "Recycled row keeps previous programme");
-                check(getTargetContext().getResources().getIdentifier("channel_item_logo", "id", getTargetContext().getPackageName()) == 0, "Logo view remains in layout");
+                check(row.findViewById(R.id.channel_item_logo).getVisibility() == View.GONE, "Disabled logo remains visible");
             } finally { /* Adapter owns no logo requests or background resources. */ }
         }});
         pass("Channel rows show current EPG; recycled rows clear absent programme/logo; single source badge hidden");

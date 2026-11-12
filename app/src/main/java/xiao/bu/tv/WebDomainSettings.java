@@ -34,7 +34,7 @@ final class WebDomainSettings {
                     .put("webViewMinimalMode",p.getBoolean("web_view_minimal_mode",false))
                     .put("webViewUserAgent","auto".equals(ua)?"windows":ua).put("webSourceEngine",engine)
                     .put("webViewBrowserVersion",p.getString("web_view_browser_version","native"))
-                    .put("webViewPageScale",(double)p.getFloat("web_view_page_scale",1f))
+                    .put("webViewPageScale",(double)PreferenceNumbers.readFloat(p,"web_view_page_scale",1f))
                     .put("webViewLoadImages",p.getBoolean("web_view_load_images",true))
                     .put("webViewAutoPlaySniffed",p.getBoolean("web_view_auto_play_sniffed",true))
                     .put("webViewAutoPlay",p.getBoolean("web_view_auto_play",true));

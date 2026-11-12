@@ -198,6 +198,9 @@ android {
                 proguardFile 'proguard-surface-retirement-test.pro'
             }
             if (project.hasProperty('liteKernelFixtures')) proguardFile 'proguard-lite-kernel-test.pro'
+            if (project.findProperty('testRunner') == 'xiao.bu.tv.HealthBalanceInstrumentation') {
+                proguardFile 'proguard-health-balance-test.pro'
+            }
             if (embeddedUjsChecks || project.findProperty('testRunner') in ['xiao.bu.tv.OriginalWebAuditInstrumentation',
                     'xiao.bu.tv.WebSourceUjsInstrumentation']) {
                 proguardFile 'proguard-original-web-test.pro'

@@ -14,15 +14,16 @@ final class LegacyTsStream {
         // Stagefright consumes this private header locally (KiB/KiB/seconds).
         return java.util.Collections.singletonMap("x-cache-config","64/256/5");
     }
+    static final class UnsupportedMediaException extends IOException {
+        UnsupportedMediaException(String message){super(message);}
+    }
     interface Source {
         String playlist(String url) throws IOException;
         byte[] segment(String url) throws IOException;
+        default boolean streamFirstSegment(String url,OutputStream output)throws IOException { return false; }
         boolean active();
         long now();
         void waitForUpdate() throws IOException;
-    }
-    static boolean needed(int sdk, String model, int cores) {
-        return sdk <= 15 && cores == 1 && "KONKA_800C".equalsIgnoreCase(model);
     }
     static final class Segment {
         final long sequence; final String url;
@@ -38,9 +39,9 @@ final class LegacyTsStream {
             if(!body.startsWith("#EXTM3U") || body.length()>2*1024*1024)
                 throw new IOException("Invalid legacy live playlist");
             if(body.contains("#EXT-X-ENDLIST")||body.contains("#EXT-X-PLAYLIST-TYPE:VOD"))
-                throw new IOException("Legacy TS transport requires live media");
+                throw new UnsupportedMediaException("Legacy TS transport requires live media");
             if(body.contains("#EXT-X-MAP:")||body.contains("#EXT-X-BYTERANGE:"))
-                throw new IOException("Legacy TS transport does not support fragmented MP4/byte ranges");
+                throw new UnsupportedMediaException("Legacy TS transport does not support fragmented MP4/byte ranges");
             boolean master=body.contains("#EXT-X-STREAM-INF:");
             List<Segment> entries=new ArrayList<>();long sequence=0;
             try {
@@ -68,6 +69,9 @@ final class LegacyTsStream {
             for(Segment segment:playlist.segments) {
                 if(!source.active())return;
                 if(segment.sequence<=last)continue;
+                if(last<0 && source.streamFirstSegment(segment.url,output)) {
+                    output.flush();last=segment.sequence;lastProgress=source.now();continue;
+                }
                 byte[] body=readSegment(source,segment.url);
                 // Do not send ciphertext, MP4 headers or an HTTP error as video.
                 if(body==null||body.length<188*3||body.length%188!=0)

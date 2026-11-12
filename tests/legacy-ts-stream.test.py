@@ -35,16 +35,19 @@ class Check {
   for(boolean finite:new boolean[]{false,true}){
    s=new Source();s.finite=finite;s.corrupt=!finite;bytes=new ByteArrayOutputStream();
    try{LegacyTsStream.pipe(s,"http://fixture/live.m3u8",bytes);throw new AssertionError("invalid media accepted");}
-   catch(IOException expected){ok(bytes.size()==0,"finite/corrupt media rejected before any video bytes");}
+   catch(IOException expected){ok(bytes.size()==0,"finite/corrupt media rejected before any video bytes");if(finite)ok(expected instanceof LegacyTsStream.UnsupportedMediaException,"finite source can fall back to normal HLS");}
   }
+  Source progressive=new Source(){int calls;public boolean streamFirstSegment(String url,OutputStream out)throws IOException{if(++calls!=1)throw new AssertionError("Only first segment streams progressively");byte[] b=segment(url);out.write(b);return true;}};
+  bytes=new ByteArrayOutputStream();LegacyTsStream.pipe(progressive,"http://fixture/live.m3u8",bytes);ok(bytes.size()==6*188*3,"progressive first segment followed by validated segments without replay");
+  Source brokenFirst=new Source(){public boolean streamFirstSegment(String url,OutputStream out)throws IOException{out.write(71);throw new EOFException("partial first PES");}};
+  bytes=new ByteArrayOutputStream();try{LegacyTsStream.pipe(brokenFirst,"http://fixture/live.m3u8",bytes);throw new AssertionError();}catch(EOFException expected){ok(bytes.size()==1,"partial first segment is never retried into an existing decoder stream");}
+  ok(ContinuousTsPolicy.defaultEnabled(1)&&!ContinuousTsPolicy.defaultEnabled(0)&&!ContinuousTsPolicy.defaultEnabled(4),"single-core default only");
   s=new Source();s.active=false;LegacyTsStream.pipe(s,"http://fixture/live.m3u8",new ByteArrayOutputStream());
   ok(s.reloads==0&&s.reads.isEmpty(),"retired stream performs no network work");
-  ok(LegacyTsStream.needed(15,"KONKA_800C",1),"affected device bypasses HLS on initial open");
-  ok(!LegacyTsStream.needed(16,"KONKA_800C",1)&&!LegacyTsStream.needed(15,"other",1)&&!LegacyTsStream.needed(15,"KONKA_800C",2),"unrelated devices retain original route");
   System.out.println("Continuous TS live windows, cancellation, corruption and device routing OK");
  }
 }'''
 with tempfile.TemporaryDirectory() as tmp:
     p=Path(tmp)/'Check.java';p.write_text(java,encoding='utf-8');jdk=Path(os.environ['JAVA_HOME'])/'bin'
-    subprocess.run([str(jdk/'javac'),'-encoding','UTF-8','-d',tmp,str(root/'app/src/main/java/xiao/bu/tv/LegacyTsStream.java'),str(p)],check=True)
+    subprocess.run([str(jdk/'javac'),'-encoding','UTF-8','-d',tmp,str(root/'app/src/main/java/xiao/bu/tv/LegacyTsStream.java'),str(root/'app/src/main/java/xiao/bu/tv/ContinuousTsPolicy.java'),str(p)],check=True)
     subprocess.run([str(jdk/'java'),'-cp',tmp,'xiao.bu.tv.Check'],check=True)

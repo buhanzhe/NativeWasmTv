@@ -134,6 +134,7 @@ public final class CjsPluginRuntime {
         } catch (Exception ignored) { return false; }
     }
     public static void ensureCatalog() throws Exception {
+        if (hasCatalog()) return;
         synchronized (INSTALL_LOCK) {
             if (hasCatalog()) return;
             refreshCatalog();
@@ -157,6 +158,13 @@ public final class CjsPluginRuntime {
     static void prepareSource(String url) throws Exception {
         CjsSource source = CjsSource.parse(url);
         if (source == null) throw new IOException("不是 CJS 频道地址");
+        // Cached playback must not queue behind another site's network update.
+        // Keep parameter validation on this path as well as the install path.
+        if (knowsSource(source)) {
+            playbackUrl(url);
+            State selected = sourceState(source);
+            if (selected != null && isInstalled(selected.id)) return;
+        }
         synchronized (INSTALL_LOCK) {
             JSONObject discovered = !knowsSource(source) ? discoverSourceDescriptor(source) : null;
             playbackUrl(url); // Validate parameters before retrying playback.
@@ -325,20 +333,17 @@ public final class CjsPluginRuntime {
             if (startupUpdateAttempted) return;
             startupUpdateAttempted = true;
         }
-        synchronized (INSTALL_LOCK) {
-            List<String> installed = new ArrayList<String>();
-            synchronized (CjsPluginRuntime.class) {
-                if (!hasCatalog()) return;
-                for (String id : states.keySet()) if (isInstalled(id)) installed.add(id);
-            }
-            if (installed.isEmpty()) return;
-            // Imported sites may use a different branch or descriptor URL. Keep
-            // their persisted routing during automatic checks; only an explicit
-            // catalog refresh may replace it.
-            for (String id : installed) {
-                try { installOrUpdate(id); }
-                catch (Exception error) { AppLog.w(TAG, "Startup site update failed: " + id, error); }
-            }
+        List<String> installed = new ArrayList<String>();
+        synchronized (CjsPluginRuntime.class) {
+            if (!hasCatalog()) return;
+            for (String id : states.keySet()) if (isInstalled(id)) installed.add(id);
+        }
+        // Each install owns INSTALL_LOCK separately. A foreground first install
+        // need not wait for the whole background batch of unrelated sites.
+        // Keep imported descriptors/branches; only explicit refresh replaces them.
+        for (String id : installed) {
+            try { installOrUpdate(id); }
+            catch (Exception error) { AppLog.w(TAG, "Startup site update failed: " + id, error); }
         }
     }
     private static String installOrUpdate(String id, JSONObject discovered) throws Exception {

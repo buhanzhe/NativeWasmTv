@@ -9,14 +9,16 @@ def jar(group,artifact):
 classpath=os.pathsep.join(map(str,[jar('org.json','json'),jar('com.squareup.okhttp3','okhttp'),jar('com.squareup.okio','okio')]))
 files={
  'android/content/SharedPreferences.java':'''package android.content;public interface SharedPreferences {
- String getString(String k,String d);boolean getBoolean(String k,boolean d);float getFloat(String k,float d);Editor edit();
+ String getString(String k,String d);boolean getBoolean(String k,boolean d);float getFloat(String k,float d);java.util.Map<String,?> getAll();Editor edit();
  interface Editor {Editor putString(String k,String v);void apply();}}''',
  'xiao/bu/tv/WebDomainSettings.java':(root/'app/src/main/java/xiao/bu/tv/WebDomainSettings.java').read_text('utf8'),
+ 'xiao/bu/tv/PreferenceNumbers.java':(root/'app/src/main/java/xiao/bu/tv/PreferenceNumbers.java').read_text('utf8'),
  'xiao/bu/tv/Check.java':r'''package xiao.bu.tv;
 import java.util.*;import org.json.*;import android.content.SharedPreferences;
 class Check {
  static class Prefs implements SharedPreferences,SharedPreferences.Editor {
   Map<String,Object> data=new HashMap<>();int writes;
+  public Map<String,?> getAll(){return new HashMap<>(data);}
   public String getString(String k,String d){return data.containsKey(k)?(String)data.get(k):d;}
   public boolean getBoolean(String k,boolean d){return data.containsKey(k)?(Boolean)data.get(k):d;}
   public float getFloat(String k,float d){return data.containsKey(k)?(Float)data.get(k):d;}

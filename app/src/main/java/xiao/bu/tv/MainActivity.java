@@ -15,8 +15,6 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.media.AudioManager;
-import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -95,6 +93,8 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo;
 public final class MainActivity extends Activity implements TvUiPlugin.Listener, xiao.bu.tv.skin.SharedTvUi.Viewport, xiao.bu.tv.skin.SharedTvUi.InputMode {
     private TvUiChrome tvUiChrome;
     private int appliedTvUiRevision=-1;
+    private int appliedTvUiCardRevision=-1;
+    private boolean tvUiChangePending;
     private boolean tvUiCardPending;
     private float appliedTvUiScale=-1f;
     private final TvUiMenu tvUiMenu = new TvUiMenu();
@@ -112,7 +112,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         String selectedKey = "", firstKey = "";
     }
     @Override public void onTvUiChanged() {
-        if(isFinishing()||channelListPanel==null||groupAdapter==null)return;
+        if(isFinishing())return;
+        if(!channelPanelInitialized||channelListPanel==null||groupAdapter==null||channelAdapter==null||epgAdapter==null){tvUiChangePending=true;applyTvUiCardTheme();return;}
+        tvUiChangePending=false;
         if(!TvUiPlugin.failure().isEmpty())Toast.makeText(this,TvUiPlugin.failure(),Toast.LENGTH_LONG).show();
         if(appliedTvUiRevision==TvUiPlugin.revision())return;
         appliedTvUiRevision=TvUiPlugin.revision();
@@ -121,6 +123,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (groupPasswordDialog != null) groupPasswordDialog.refreshTheme();
     }
     private void rebuildTvUiChrome() {
+        if(!channelPanelInitialized||groupAdapter==null||channelAdapter==null||epgAdapter==null)return;
+        int renderedRevision=TvUiPlugin.revision();
         rememberChannelCursor();rememberEpgCursor();
         groupPager.reset();channelPager.reset();epgPager.reset();channelNavigationGeneration++;
         appliedTvUiScale=themeScale();
@@ -132,6 +136,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         View[] chrome=tvUiChrome.apply(this,new View[]{groupList,channelList,epgToggle,epgColumn});
         channelListPanel=chrome[0];channelBar=chrome[1];
         TextView[] hud=tvUiChrome.applyHud(this,videoClock,networkSpeedOverlay);videoClock=hud[0];networkSpeedOverlay=hud[1];
+        appliedTvUiCardRevision=renderedRevision;
         applyClockLocation();applyNetworkSpeedVisibility();
         configureChannelPanelInteraction();groupAdapter.notifyDataSetChanged();applyEpgEnabled();epgAdapter.notifyDataSetChanged();
         refreshEpgViews();
@@ -140,6 +145,24 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if(channelBar.getVisibility()==View.VISIBLE&&!loadingActive)channelBar.postDelayed(hideChannelBar,CHANNEL_BAR_TIMEOUT_MS);
     }
     private TextView channelNumberView(){return (TextView)(tvUiChrome==null?findViewById(R.id.channel_card_number):tvUiChrome.originalCard().findViewById(R.id.channel_card_number));}
+    private void applyTvUiCardTheme(){
+        int renderedRevision=TvUiPlugin.revision();
+        if(channelBar==null||channelListPanel==null||videoClock==null||networkSpeedOverlay==null
+                ||appliedTvUiCardRevision==renderedRevision)return;
+        if(tvUiChrome==null){
+            if(TvUiPlugin.current()==null)return;
+            tvUiChrome=new TvUiChrome(channelListPanel,channelBar);
+        }
+        channelBar.removeCallbacks(hideChannelBar);
+        channelBar=tvUiChrome.applyCard(this);
+        TextView[] hud=tvUiChrome.applyHud(this,videoClock,networkSpeedOverlay);videoClock=hud[0];networkSpeedOverlay=hud[1];
+        // Renderer rejection can advance the revision while restoring the classic
+        // HUD. Leave that newer revision pending so its card is restored as well.
+        appliedTvUiCardRevision=renderedRevision;
+        applyClockLocation();applyNetworkSpeedVisibility();updateChannelBarWidth();refreshTvUiCard();
+        if(channelBar.getVisibility()==View.VISIBLE&&!loadingActive&&!channelPlaybackWaiting())
+            channelBar.postDelayed(hideChannelBar,CHANNEL_BAR_TIMEOUT_MS);
+    }
     private void refreshTvUiCard(){
         if(tvUiChrome==null||TvUiPlugin.current()==null||channelName==null)return;
         Bundle b=new Bundle();b.putString("title",channelName.getText().toString());b.putString("number",channelNumberView().getText().toString());
@@ -402,6 +425,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private View epgColumn;
     private boolean epgExpanded;
     private volatile boolean epgEnabled = true;
+    private volatile boolean epgShowLogos,epgDatePicker;
+    private volatile boolean epgShowFavorite=true;
+    private ListView epgDateList;
+    private EpgDateAdapter epgDateAdapter;
     private TextView epgToggle;
     private TextView epgFavorite;
     private long epgIdleSince;
@@ -426,6 +453,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private ChannelListAdapter channelAdapter;
     private ChannelHealth channelHealth;
     private boolean neighborProbeEnabled;
+    private boolean continuousTsEnabled;
+    private boolean litePreparseEnabled;
+    private LiteWebPreloader liteWebPreloader;
+    private int litePreparseRequest=-1,litePreparseDirection=1;
     private long healthStableAt,healthPosition=-1;
     private int healthNeighborRequest=-1;
     private void updateChannelHealth(){
@@ -443,14 +474,52 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             JSONObject web=webSourceView.currentWebMediaState();position=web.optLong("mediaTimeMs",-1);
             stable=web.optBoolean("playing")&&!web.optBoolean("mediaPaused",true)&&web.optInt("mediaReadyState")>=3;
         }
-        if(!stable||position<=healthPosition){healthStableAt=0;healthNeighborRequest=-1;channelHealth.pause();}
+        if(!stable||position<=healthPosition){healthStableAt=0;healthNeighborRequest=-1;channelHealth.pause();if(liteWebPreloader!=null)liteWebPreloader.cancelPending();}
         else if(healthStableAt==0)healthStableAt=now;
         healthPosition=position;
         if(healthStableAt>0&&now-healthStableAt>=5000){
             boolean catalogueLive=catchupProgram==null&&quickChannel==null&&multimediaReceiverChannel==null;
             if(catalogueLive)channelHealth.success(currentChannel(),currentSourceIndex);
             if(neighborProbeEnabled||channelHealth.scanning){channelHealth.resume();if(neighborProbeEnabled&&catalogueLive&&healthNeighborRequest!=playRequestId){healthNeighborRequest=playRequestId;channelHealth.neighbors(ChannelCatalog.GROUPS,currentGroupIndex,currentChannelIndex);}}
+            updateLiteWebPreparse(catalogueLive);
         }
+    }
+    private LiteWebPreloader.Request litePreparseProfile(String source){
+        if(!LiteWebPlayback.supported()||!litePreparseEnabled||source==null||!isWebViewSource(source))return null;
+        String page=webViewPage(source);if(page==null||CjsPluginRuntime.supportsSite(page)||LiteEngine.keepsOriginalMediaPipeline(page))return null;
+        SharedPreferences prefs=getSharedPreferences(PREFERENCES,MODE_PRIVATE);String key=WebDomainSettings.key(source);
+        JSONObject settings=WebDomainSettings.effective(prefs,key,WebDomainSettings.defaults(prefs,
+                playbackMemory.engine(key,defaultWebSourceEngine,true),playbackMemory.userAgent(key,defaultWebViewUserAgent)),true);
+        if(!"lite".equals(settings.optString("webSourceEngine"))||WebTvPlaybackPolicy.requiresWebView(page,settings.optBoolean("webViewAutoPlay",true),settings.optBoolean("webViewAutoPlaySniffed",true)))return null;
+        String mode=settings.optString("webViewUserAgent","windows"),version=settings.optString("webViewBrowserVersion","native");
+        String agent="native".equals(mode)?"":"ipad".equals(mode)?DesktopWebProfile.ipadUserAgent(LiteEngine.defaultUserAgent(page),version):DesktopWebProfile.userAgent(mode,LiteEngine.defaultUserAgent(page),version);
+        agent=SharedWebProfile.userAgent(this,page,mode,version,agent.isEmpty()?LiteEngine.defaultUserAgent(page):agent,false);
+        return new LiteWebPreloader.Request(page,"",agent,liteNetworkThreadMultiplier,settings.toString()+'\n'+NetworkClient.getDnsMode()+'\n'+SharedWebProfile.signature(this,page)+'\n'+LitePageScripts.signature(this),settings.optBoolean("webViewLoadImages",true));
+    }
+    private void updateLiteWebPreparse(boolean catalogueLive){
+        if(!LiteWebPlayback.supported()||!litePreparseEnabled||!catalogueLive||!windowContentActive||isFinishing()
+                ||multimediaSuspended||backgroundPlaybackSuspended||Build.VERSION.SDK_INT<19){if(liteWebPreloader!=null)liteWebPreloader.close();return;}
+        ActivityManager.MemoryInfo info=new ActivityManager.MemoryInfo();((ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(info);
+        if(liteWebPreloader!=null&&liteWebPreloader.occupied()){
+            if(info.lowMemory||info.availMem<128L*1024*1024)liteWebPreloader.close();return;
+        }
+        if(litePreparseRequest==playRequestId)return;
+        if(!LiteWebPreloader.eligible(Build.VERSION.SDK_INT,ContinuousTsPolicy.physicalCores(),info.availMem,info.lowMemory)){
+            if(liteWebPreloader!=null)liteWebPreloader.close();return;
+        }
+        if(channelHealth.busy())return;
+        for(int direction:new int[]{litePreparseDirection,-litePreparseDirection}){
+            int[] location=adjacentChannelLocation(currentGroupIndex,currentChannelIndex,direction);
+            if(location==null||!canBrowseGroupChannels(location[0]))continue;
+            ChannelCatalog.Group group=ChannelCatalog.GROUPS[location[0]];Channel candidate=group.channels[location[1]];
+            if(candidate==currentChannel())continue;
+            int source=rememberChannelSource?playbackMemory.source(playbackMemoryKey(group,candidate),candidate):0;
+            source=channelHealth.source(candidate,source);
+            LiteWebPreloader.Request target=litePreparseProfile(candidate.sourceUrl(source));if(target==null)continue;
+            if(liteWebPreloader==null)liteWebPreloader=new LiteWebPreloader(this);
+            litePreparseRequest=playRequestId;liteWebPreloader.prepare(target);AppLog.i(TAG,"Lite neighbor preparse started");return;
+        }
+        litePreparseRequest=playRequestId;
     }
     private EpgListAdapter epgAdapter;
     private boolean channelPanelInitialized;
@@ -1011,67 +1080,64 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private Channel volumeBalanceChannel;
     private int balanceSystemVolume = -1;
     private boolean balanceApplied, balanceMeasuring;
-    private int balanceSegments, balanceObservedSegments;
-    private String balanceSegmentUrl = "";
     private boolean balanceManualPending;
     private final Runnable volumeBalanceTick = new Runnable() {
         @Override public void run() {
             if (!playerVolumeBalance || isFinishing()) return;
-            IMediaPlayer active = player;
-            if (active != volumeBalancePlayer) { updateVolumeBalance(); return; }
-            if (active instanceof IjkMediaPlayer && !isPlaybackMuted()) try {
-                AudioManager audio = (AudioManager)getSystemService(AUDIO_SERVICE);
-                int current = audio == null ? 0 : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-                int maximum = audio == null ? 0 : audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                if (active.isPlaying() && (videoRenderingStarted || audioOnlyPlayback) && current > 0 && maximum > 0) {
-                    if(!balanceMeasuring && !balanceApplied) {
-                        balanceMeasuring=true; balanceObservedSegments=balanceSegments;
-                        IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,true);
-                    }
-                    if(balanceObservedSegments!=balanceSegments) {
-                        volumeBalance.finishSegment(); balanceObservedSegments=balanceSegments;
-                    }
-                    if(!balanceApplied || balanceManualPending) volumeBalance.sample(IjkStreamMetrics.audioPower((IjkMediaPlayer)active));
-                    boolean manual = balanceSystemVolume > 0 && current != balanceSystemVolume;
-                    if(manual) { balanceManualPending=true; balanceApplied=true;
-                        if(volumeBalance.samples<3) IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,true);
-                    }
-                    if (balanceManualPending && volumeBalance.samples >= 3) {
-                        balanceManualPending=false;
+            IMediaPlayer active=player;
+            if(active!=volumeBalancePlayer){updateVolumeBalance();return;}
+            long delay=balanceApplied&&!balanceManualPending?1000:150;
+            if(active instanceof IjkMediaPlayer && !isPlaybackMuted())try{
+                if(active.isPlaying() && !buffering && (videoRenderingStarted||audioOnlyPlayback)){
+                    AudioManager audio=(AudioManager)getSystemService(AUDIO_SERVICE);
+                    int current=audio==null?0:audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+                    int maximum=audio==null?0:audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                    boolean manual=balanceSystemVolume>=0&&current!=balanceSystemVolume;
+                    balanceSystemVolume=current;
+                    if(manual){
+                        balanceManualPending=true;balanceApplied=true;balanceMeasuring=false;
                         IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
-                        playerVolumeTarget = volumeBalance.learn(current, maximum);
-                        getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit()
-                                .putFloat("player_volume_target",(float)playerVolumeTarget).apply();
+                        volumeBalance.resetMeasurement();
                     }
-                    if (!balanceApplied && volumeBalance.ready()) {
-                        volumeBalance.adjust(playerVolumeTarget,current,maximum);
-                        balanceApplied=true;
-                        IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
-                        applyPlaybackMuteState();
-                        int percent=Math.round(volumeBalance.gain*100);
-                        Toast.makeText(MainActivity.this,"根据频道设置音量为 " + percent + "%",Toast.LENGTH_SHORT).show();
-                    }
+                    if(current>0&&maximum>0&&(!balanceApplied||balanceManualPending)){
+                        if(!balanceMeasuring){balanceMeasuring=true;IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,true);}
+                        long now=SystemClock.elapsedRealtime();
+                        volumeBalance.observe(IjkStreamMetrics.audioPower((IjkMediaPlayer)active),now);
+                        delay=volumeBalance.pollDelay(now);
+                        if(balanceManualPending&&volumeBalance.segments>=1){
+                            balanceManualPending=false;balanceMeasuring=false;
+                            IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
+                            playerVolumeTarget=volumeBalance.learn(current,maximum);
+                            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putFloat("player_volume_target",(float)playerVolumeTarget).apply();
+                            delay=1000;
+                        }else if(!balanceApplied&&volumeBalance.ready()){
+                            volumeBalance.adjust(playerVolumeTarget,current,maximum);
+                            balanceApplied=true;balanceMeasuring=false;
+                            IjkStreamMetrics.measureAudio((IjkMediaPlayer)active,false);
+                            applyPlaybackMuteState();delay=1000;
+                            int percent=Math.round(volumeBalance.gain*100);
+                            Toast.makeText(MainActivity.this,"根据频道设置音量为 "+percent+"%",Toast.LENGTH_SHORT).show();
+                            AppLog.i(TAG,"Volume balance applied gain="+percent+"% sampleMs="+(now-volumeBalance.startedAt));
+                        }
+                    }else if(current<=0||maximum<=0)delay=500;
                 }
-                balanceSystemVolume = current;
-            } catch (RuntimeException error) { AppLog.w(TAG,"Volume balance unavailable",error); }
-            channelBar.postDelayed(this,1000);
+            }catch(RuntimeException error){AppLog.w(TAG,"Volume balance unavailable",error);}
+            else if(isPlaybackMuted())delay=500;
+            channelBar.postDelayed(this,delay);
         }
     };
     private void updateVolumeBalance() {
         channelBar.removeCallbacks(volumeBalanceTick);
-        if (player instanceof IjkMediaPlayer) IjkStreamMetrics.measureAudio((IjkMediaPlayer)player,false);
-        balanceSegments=0; balanceSegmentUrl="";
-        Channel channel=currentChannel();
-        if(!playerVolumeBalance || channel!=volumeBalanceChannel) {
-            volumeBalance = new PlaybackVolumeBalance(); balanceApplied=false;
-            balanceManualPending=false;
+        if(volumeBalancePlayer instanceof IjkMediaPlayer)IjkStreamMetrics.measureAudio((IjkMediaPlayer)volumeBalancePlayer,false);
+        Channel channel=currentChannel();boolean changed=channel!=volumeBalanceChannel;
+        if(!playerVolumeBalance||changed){volumeBalance=new PlaybackVolumeBalance();balanceApplied=false;balanceManualPending=false;}
+        volumeBalanceChannel=channel;volumeBalancePlayer=player;balanceMeasuring=false;
+        if(changed||balanceSystemVolume<0){
+            AudioManager audio=(AudioManager)getSystemService(AUDIO_SERVICE);
+            balanceSystemVolume=audio==null?-1:audio.getStreamVolume(AudioManager.STREAM_MUSIC);
         }
-        volumeBalanceChannel=channel;
-        volumeBalancePlayer=player;
-        balanceSystemVolume=-1; balanceMeasuring=false; balanceObservedSegments=0;
         applyPlaybackMuteState();
-        if (playerVolumeBalance && player instanceof IjkMediaPlayer)
-            channelBar.postDelayed(volumeBalanceTick,1000);
+        if(playerVolumeBalance&&player instanceof IjkMediaPlayer)channelBar.postDelayed(volumeBalanceTick,150);
     }
     private volatile boolean groupPasswordRequired;
     private int passwordKeyUntilUp=-1;
@@ -1124,6 +1190,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private volatile String webSourceEngine;
     private volatile int liteNetworkThreadMultiplier;
     private LiteWebPlayback liteWebPlayback;
+    private String liteMsePlaybackUrl;
     private boolean channelRemovalBusy;
     private android.app.AlertDialog channelRemovalDialog;
     private android.app.AlertDialog channelActionsDialog;
@@ -1213,6 +1280,29 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private final Paint columnMeasurePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean favoriteActionFocused;
     private boolean suppressChannelItemClick;
+    private int channelConfirmKey=-1,channelConfirmGroup=-1,channelConfirmPosition=-1;
+    private boolean channelConfirmLongPress;
+    private int channelTouchFavoritePosition=-1,channelTouchFavoriteGroup=-1;
+    private float channelTouchFavoriteX,channelTouchFavoriteY;
+    private boolean channelTouchFavoriteConsumed;
+    private final Runnable channelTouchFavoriteLongPress=()->{
+        if(channelTouchFavoritePosition<0||channelTouchFavoriteConsumed||channelListPanel.getVisibility()!=View.VISIBLE
+                ||browsingGroupIndex!=channelTouchFavoriteGroup)return;
+        channelTouchFavoriteConsumed=true;
+        // Adapter updates during DOWN can cancel ListView's own long-press timer.
+        // Cancel its tap before rebinding the favorite state, retaining this gesture.
+        long now=SystemClock.uptimeMillis();MotionEvent cancel=MotionEvent.obtain(now,now,MotionEvent.ACTION_CANCEL,0,0,0);
+        channelList.onTouchEvent(cancel);cancel.recycle();
+        toggleChannelFavoriteFromLongPress(channelTouchFavoritePosition);
+    };
+    private final Runnable channelFavoriteLongPress=()->{
+        if(channelConfirmKey<0||channelConfirmLongPress||channelListPanel.getVisibility()!=View.VISIBLE
+                ||tvUiMenu.visible()||managementPanel.getVisibility()==View.VISIBLE||backPrompt.getVisibility()==View.VISIBLE
+                ||!channelList.hasFocus()||favoriteActionFocused||browsingGroupIndex!=channelConfirmGroup
+                ||browsingChannelPosition()!=channelConfirmPosition)return;
+        channelConfirmLongPress=true;
+        toggleChannelFavoriteFromLongPress(channelConfirmPosition);
+    };
     private boolean playbackGestureVertical;
     private boolean playbackGestureHorizontal;
     private boolean playbackGestureLeftSide;
@@ -1366,6 +1456,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SharedWebResources.install(this);
         applyPlaybackOrientation(MultiWindowCompat.isInMultiWindowMode(this));
         if (BuildConfig.DEBUG
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -1379,7 +1470,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         showCrashRecoveryNotice();
         TlsCompat.install();
         configureResourceProfile();
-        if (android.os.Build.VERSION.SDK_INT <= 15) {
+        if (android.os.Build.VERSION.SDK_INT <= 15 || "texture".equals(getSharedPreferences(PREFERENCES, MODE_PRIVATE)
+                .getString(DirectVideoView.RENDER_KEY, "surface"))) {
             // Some 4.0 devices default to a software window even with a modern target SDK.
             // The audio record's TextureView needs a hardware-accelerated window.
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
@@ -1443,6 +1535,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         groupList = (ListView) findViewById(R.id.channel_group_list);
         channelList = (ListView) findViewById(R.id.channel_list);
         epgList = (ListView) findViewById(R.id.epg_list);
+        epgDateList=(ListView)findViewById(R.id.epg_date_list);
+        epgDateAdapter=new EpgDateAdapter();epgDateList.setAdapter(epgDateAdapter);
+        epgDateList.setSelector(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        epgDateList.setOnFocusChangeListener((view,focused)->epgDateAdapter.notifyDataSetChanged());
+        epgDateList.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            public void onItemSelected(AdapterView<?> parent,View view,int position,long id){if(epgDateList.hasFocus())chooseEpgDay(position);}
+            public void onNothingSelected(AdapterView<?> parent){}
+        });
+        epgDateList.setOnItemClickListener((parent,view,position,id)->{chooseEpgDay(position);focusEpgPrograms();scheduleChannelListDismiss();});
         epgColumn = findViewById(R.id.epg_column);
         epgToggle = (TextView) findViewById(R.id.epg_toggle);
         epgFavorite = (TextView) findViewById(R.id.epg_favorite);
@@ -1503,6 +1604,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         epgAdapter = new EpgListAdapter(this, uiScaleHelper);
         final SharedPreferences preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
         neighborProbeEnabled=preferences.getBoolean("neighbor_probe_enabled",false);
+        continuousTsEnabled=preferences.getBoolean("continuous_ts_enabled",ContinuousTsPolicy.defaultEnabled(ContinuousTsPolicy.physicalCores()));
         channelHealth=new ChannelHealth(this,()->{if(!isFinishing()&&channelAdapter!=null)channelAdapter.notifyDataSetChanged();});
         channelAdapter.setHealth(channelHealth);
         personalBackground=new PersonalBackground(this,findViewById(R.id.startup_background),preferences);
@@ -1534,7 +1636,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         rememberChannelUserAgent=preferences.getBoolean("remember_channel_ua",true);
         rememberChannelWebEngine=LiteWebPlayback.supported()&&preferences.getBoolean("remember_channel_web_engine",true);
         playerVolumeBalance=preferences.getBoolean("player_volume_balance",false);
-        playerVolumeTarget=preferences.getFloat("player_volume_target",-30f);
+        playerVolumeTarget=PreferenceNumbers.readFloat(preferences,"player_volume_target",-30f);
         groupPasswordRequired=preferences.getBoolean("group_password_required",false);
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT && DECODE_MODE_AUTO.equals(decodeMode))
             channelDecodeHints = new ChannelDecodeHints(this); // Async disk warmup; never gates prepare.
@@ -1572,10 +1674,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             liteNetworkThreadMultiplier=0;
         webViewMinimalMode = preferences.getBoolean("web_view_minimal_mode", false);
         webViewPageScale = sanitizeWebViewPageScale(
-                preferences.getFloat(WEB_VIEW_PAGE_SCALE, 1f));
+                PreferenceNumbers.readFloat(preferences,WEB_VIEW_PAGE_SCALE,1f));
         webViewAutoPlaySniffed = preferences.getBoolean(
                 WEB_VIEW_AUTO_PLAY_SNIFFED, true);
         webViewAutoPlay = preferences.getBoolean("web_view_auto_play", true);
+        litePreparseEnabled=preferences.getBoolean("lite_web_preparse_enabled",Build.VERSION.SDK_INT>=19&&ContinuousTsPolicy.physicalCores()>1);
         String storedUserAgent=preferences.getString(WEB_VIEW_USER_AGENT,WEB_VIEW_USER_AGENT_WINDOWS);
         webViewUserAgent=sanitizeWebViewUserAgent(storedUserAgent);
         if(!webViewUserAgent.equals(storedUserAgent))preferences.edit().putString(WEB_VIEW_USER_AGENT,webViewUserAgent).apply();
@@ -1591,6 +1694,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         webViewPageCover = preferences.getBoolean(WEB_VIEW_PAGE_COVER, false);
         webViewPageCoverStyle = "black".equals(preferences.getString("web_view_page_cover_style","status"))?"black":"status";
         webViewWebRtcEnabled = preferences.getBoolean(WEB_VIEW_WEBRTC_ENABLED, false);
+        LitePageScripts.installDefaults(this,preferences);
         webViewUserScriptEnabled = preferences.getBoolean(WEB_VIEW_USER_SCRIPT_ENABLED, false);
         String storedUserScripts = preferences.getString(WEB_VIEW_USER_SCRIPTS, "");
         try {
@@ -1632,6 +1736,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         dateTimeFormat = sanitizeDateTimeFormat(preferences.getString(
                 DATE_TIME_FORMAT, DATE_TIME_DATE_FIRST));
         epgEnabled = preferences.getBoolean("epg_enabled", true);
+        epgShowLogos=preferences.getBoolean("epg_show_logos",false);
+        epgDatePicker=preferences.getBoolean("epg_date_picker",false);
+        epgShowFavorite=preferences.getBoolean("epg_show_favorite",true);
         epgUrls = readConfiguredEpgUrls(preferences);
         epgUrl = epgUrls.length == 0 ? "" : epgUrls[0];
         flyMouseEnabled = preferences.getBoolean(FLY_MOUSE_ENABLED, false);
@@ -1771,7 +1878,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     "启动失败: " + error.getMessage());
         }
         // Management remains available even when a source cannot produce a frame.
-        root.postDelayed(() -> { if (!isFinishing()) startManagementServer(); }, 900L);
+        root.postDelayed(startManagementServerTask, 900L);
         // Restore SQLite immediately; network refresh must not gate the cached list.
         loadCompleteCatalogInBackground(false);
         deferStartupMaintenance("catalog-refresh", () -> {
@@ -1898,7 +2005,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 if (target != videoView) return;
                 AppLog.i(TAG, "Video surface created size=" + videoView.getWidth()
                         + "x" + videoView.getHeight() + " sdk=" + Build.VERSION.SDK_INT
-                        + " output=SurfaceView");
+                        + " output=" + (videoView.isTextureOutput() ? "TextureView" : "SurfaceView"));
 
                 if (backgroundPlaybackSuspended) return;
                 if (pendingPlayerRequestId == playRequestId && pendingPlayerChannel != null) {
@@ -2045,6 +2152,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             }
         });
+        channelList.setOnItemLongClickListener((parent,view,position,id)->{
+            if(!channelTouchFavoriteConsumed){channelTouchFavoriteConsumed=true;root.removeCallbacks(channelTouchFavoriteLongPress);toggleChannelFavoriteFromLongPress(position);}return true;
+        });
         channelList.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -2060,6 +2170,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             }
         });
         configureChannelPanelInteraction();
+        // Cold/warm Activity startup can restore the theme before this lazy panel
+        // exists. Apply the latest selection once ready, without delaying playback.
+        if(tvUiChangePending||TvUiPlugin.current()!=null)onTvUiChanged();
     }
 
     boolean canPresentLegacyWeb() {
@@ -2502,12 +2615,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             closeWebSource();
             openWebSource(channel, configuredUrl, requestId, pageScript);
         };
-        liteWebPlayback = new LiteWebPlayback(this, new LiteWebPlayback.Host() {
+        LiteWebPlayback.Host host = new LiteWebPlayback.Host() {
             public String userAgent(String page,String fallback){
-                if("native".equals(webViewUserAgent))return "";
-                return "ipad".equals(webViewUserAgent)?DesktopWebProfile.ipadUserAgent(fallback,webViewBrowserVersion)
+                String proposed="native".equals(webViewUserAgent)?fallback:"ipad".equals(webViewUserAgent)?DesktopWebProfile.ipadUserAgent(fallback,webViewBrowserVersion)
                         :DesktopWebProfile.userAgent(webViewUserAgent,fallback,webViewBrowserVersion);
+                return SharedWebProfile.userAgent(MainActivity.this,page,webViewUserAgent,webViewBrowserVersion,proposed,true);
             }
+            public boolean loadImages(){return webViewLoadImages;}
             public int networkThreadMultiplier() { return liteNetworkThreadMultiplier; }
             private boolean current() { return requestId == playRequestId && liteWebPlayback != null && !isFinishing(); }
             public void status(String text) { if(current())showLoading(channel.name,text); }
@@ -2531,12 +2645,16 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 stopFailedLitePlayback(text);
             }
             public void stream(String url, boolean temporary) {
+                stream(url,temporary,false);
+            }
+            public void stream(String url,boolean temporary,boolean localMse) {
                 if(!current())return;
+                liteMsePlaybackUrl=localMse?url:null;
                 cancelCustomSourceTimeout();
                 webStreamHeaders="";
                 videoView.setVisibility(View.VISIBLE);
                 showLoading(channel.name,temporary?"正在播放网页前置视频":"轻量内核已嗅探，正在连接视频");
-                startResolvedPlayer(channel,url,false);
+                startResolvedPlayer(channel,url,localMse||isDirectHttpMediaSource(url));
                 cancelSniffedOpenTimeout();
                 sniffedOpenTimeout = () -> {
                     sniffedOpenTimeout = null;
@@ -2546,18 +2664,35 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 channelBar.postDelayed(sniffedOpenTimeout, 30000L);
             }
             public boolean playing() { return current() && player!=null && prepared && player.isPlaying(); }
-            public void setPaused(boolean paused) { if(current()&&player!=null&&prepared){if(paused&&player.isPlaying())player.pause();else if(!paused&&!player.isPlaying())player.start();} }
+            public Object playerIdentity(){return player;}
+            public void setPaused(boolean paused) {
+                if(current()&&player!=null&&prepared){
+                    // IJK processes pause/start asynchronously. A page can issue
+                    // pause(); play() in the same task while isPlaying() still
+                    // reports the state before pause. Forward both intents in
+                    // order, otherwise the queued pause has no matching start.
+                    if(paused)player.pause();else player.start();
+                }
+            }
             public long position() { return player.getCurrentPosition(); }
             public long duration() { return player.getDuration(); }
             public int width() { return player.getVideoWidth(); }
             public int height() { return player.getVideoHeight(); }
-        });
+        };
+        LiteWebPlayback cached=pageScript==null||pageScript.isEmpty()?liteWebPreloader==null?null:liteWebPreloader.take(litePreparseProfile(configuredUrl)):null;
+        liteWebPlayback=cached==null?new LiteWebPlayback(this,host):cached;
         liteWebPlayback.applyPageCover(webViewPageCover,webViewPageCoverStyle);
-        liteWebPlayback.open(configuredUrl.substring("webview://".length()),pageScript);
+        if(cached!=null){warmResultRequest=requestId;logChannelSwitchStage(requestId,"lite-preparse-hit");cached.adopt(host);}
+        else liteWebPlayback.open(configuredUrl.substring("webview://".length()),pageScript);
         scheduleVideoInfoRefresh();
     }
 
     private void closeWebSource() {
+        closeWebSource(false);
+    }
+    private void closeWebSource(boolean nextIsWeb) {
+        liteMsePlaybackUrl=null;
+        ++profileSwitchIntent;
         liteWebFallback = null;
         if(liteWebPlayback!=null){liteWebPlayback.close();liteWebPlayback=null;}
         dispatchFlyMouseButtonUp(true);
@@ -2566,7 +2701,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         clearSniffedPlaybackIdentity();
         clearSniffedResources();
         if (webSourceView != null) {
-            webSourceView.closePage();
+            if (nextIsWeb) webSourceView.closePageForWebSwitch();
+            else webSourceView.closePage();
         }
         if (flyMouseCursor != null) flyMouseCursor.hideCursor();
         clearWebCloseConfirmation();
@@ -2723,6 +2859,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 b.putBoolean("rememberChannelSource",rememberChannelSource);b.putBoolean("rememberChannelDecode",rememberChannelDecode);
                 b.putBoolean("rememberChannelUserAgent",rememberChannelUserAgent);
                 b.putBoolean("rememberChannelWebEngine",rememberChannelWebEngine);
+                b.putBoolean("updatePopupEnabled",AutoUpdater.popupEnabled(MainActivity.this));
                 b.putBoolean("liteBrowserSupported",LiteWebPlayback.supported());
                 b.putBoolean("boot",autoStart);b.putBoolean("reverse",reverseUpDown);b.putBoolean("clock",showDateTime);
                 b.putBoolean("position",showPlaybackPosition);b.putBoolean("speed",showNetworkSpeed);b.putBoolean("debug",showDebugInfo);b.putBoolean("epg",epgEnabled);b.putString("version",BuildConfig.VERSION_NAME);if(autoUpdater!=null){JSONObject u=autoUpdater.stateJson();b.putString("updateState",u.optString("state"));b.putString("updateVersion",u.optString("versionName"));}return b;
@@ -2741,6 +2878,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     case "exit":showTvUiExit();break;
                     case "guide":tvUiMenu.show(root,"guide",new Bundle(),new xiao.bu.tv.skin.TvUi.Events(){public Bundle options(int category){return new Bundle();}public void action(int category,int item){}public void dismiss(){tvUiMenu.dismiss();openTvUiMenu(5);}});break;
                     case "styles":showTvUiStyles();break;
+                    case "render":showTvUiRenderModes();break;
                     case "hdr":showTvUiHdrModes();break;
                     case "ui-size":showTvUiSizes();break;
                     case "radio-styles":RadioUiMenu.show(MainActivity.this,root,tvUiMenu,()->openTvUiMenu(6));break;
@@ -2762,6 +2900,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void stopFailedLitePlayback(String reason) {
+        if(retryWarmedSource(playRequestId))return;
         // An invalid URL must not escalate into an old system WebView. Its
         // renderer can share the TV's UI thread, defeating every remote key.
         closeWebSource();cancelCustomSourceTimeout();cancelSniffedOpenTimeout();
@@ -2863,6 +3002,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 choices.putInt("selected",index);return choices;
             }
             public void action(int category,int option){if(option>=0&&option<modes.length&&!modes[option].equals(uiScaleMode))applyTvUiSetting("uiScaleMode",modes[option]);}
+            public void dismiss(){tvUiMenu.dismiss();openTvUiMenu(5);}
+        });
+    }
+    private void showTvUiRenderModes(){
+        final String[] modes={"surface","texture"};
+        Bundle b=new Bundle();b.putStringArray("categories",new String[]{"渲染方式"});b.putBoolean("focusOptions",true);b.putBoolean("remoteInput",remoteInputMode);
+        tvUiMenu.showSubmenu(root,b,new xiao.bu.tv.skin.TvUi.Events(){
+            public Bundle options(int category){
+                Bundle choices=new Bundle();choices.putStringArray("items",new String[]{"SurfaceView","TextureView"});
+                choices.putInt("selected","texture".equals(getSharedPreferences(PREFERENCES,MODE_PRIVATE).getString(DirectVideoView.RENDER_KEY,"surface"))?1:0);return choices;
+            }
+            public void action(int category,int option){if(option>=0&&option<modes.length)applyTvUiSetting("videoRenderMode",modes[option]);}
             public void dismiss(){tvUiMenu.dismiss();openTvUiMenu(5);}
         });
     }
@@ -2985,10 +3136,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         startChannel(currentChannelIndex);
     }
 
+    private final Runnable startManagementServerTask=()->{
+        if(!startupMaintenanceDestroyed&&!isFinishing())startManagementServer();
+    };
     private void startManagementServer() {
+        if(startupMaintenanceDestroyed||isFinishing()||controlServer!=null)return;
         multimedia = new MultimediaReceiver(this);
         try {
             controlServer = new LocalControlServer(new LocalControlServer.Listener() {
+                @Override public String managementAddress(){return AndroidLanAddresses.preferred(MainActivity.this);}
                 @Override
                 public String multimediaControl(JSONObject request) throws Exception {
                     return multimedia.control(request);
@@ -2997,6 +3153,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 @Override
                 public String stateJson(String view) {
                     return buildControlState(view);
+                }
+
+                @Override public String channelProbeJson(){
+                    return channelHealth==null?"{}":channelHealth.progress().toString();
                 }
 
                 @Override
@@ -3388,9 +3548,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (controlServer == null) {
             return;
         }
+        controlServer.invalidateLanAddress();
         String url = controlServer.getLanUrl();
+        managementQr.setVisibility(url==null?View.GONE:View.VISIBLE);
         if (url == null) {
-            managementUrl.setText("未检测到局域网 IPv4 地址");
+            managementUrl.setText("暂未获取可供局域网访问的 IP 地址");
             managementQr.setText(null);
         } else {
             managementUrl.setText(url);
@@ -3630,6 +3792,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("liteBrowserSupported",LiteWebPlayback.supported())
                     .put("groupPasswordRequired",groupPasswordRequired)
                     .put("playerVolumeBalance",playerVolumeBalance)
+                    .put("updatePopupEnabled",AutoUpdater.popupEnabled(this))
                     .put("personalBackground",personalBackground.state());
         }
         if(full||"channels".equals(view))settings.put("neighborProbeEnabled",neighborProbeEnabled).put("channelProbe",channelHealth==null?new JSONObject():channelHealth.status());
@@ -3640,13 +3803,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     .put("dnsMode", NetworkClient.getDnsMode())
                     .put("autoStart", autoStart)
                     .put("decodeMode", defaultDecodeMode).put("currentDecodeMode",decodeMode)
+                    .put("videoRenderMode", getSharedPreferences(PREFERENCES, MODE_PRIVATE).getString(DirectVideoView.RENDER_KEY, "surface"))
                     .put("playerEngine", playerEngine)
                     .put("hdrMode", hdrMode)
                     .put("hardwareDecoder", hardwareDecoder)
                     .put("hardwareDecoders", availableHardwareDecodersJson())
                     .put("surfaceMode", surfaceMode)
                     .put("rtspTransport", rtspTransport)
-                    .put("h264SpsCompatibility", h264SpsCompatibility);
+                    .put("h264SpsCompatibility", h264SpsCompatibility)
+                    .put("continuousTsEnabled", continuousTsEnabled);
         }
         if (full || "playback".equals(view)) {
             settings.put("videoBlurSupported", Build.VERSION.SDK_INT >= 24)
@@ -3675,6 +3840,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     defaultWebSourceEngine,defaultWebViewUserAgent);
             settings.put("webSourceEngine", defaultWebSourceEngine).put("effectiveWebSourceEngine",webSourceEngine)
                     .put("liteNetworkThreadMultiplier",liteNetworkThreadMultiplier)
+                    .put("litePreparseEnabled",litePreparseEnabled&&LiteWebPlayback.supported())
                     .put("liteNetworkThreadCounts",new JSONObject()
                             .put("0",LiteEngine.networkThreadCount(0)).put("2",LiteEngine.networkThreadCount(2))
                             .put("4",LiteEngine.networkThreadCount(4)).put("8",LiteEngine.networkThreadCount(8)))
@@ -3713,6 +3879,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             settings.put("autoUpdateChannelList", autoUpdateChannelList)
                     .put("epgUrl", epgUrl)
                     .put("epgEnabled", epgEnabled)
+                    .put("epgShowLogos",epgShowLogos).put("epgDatePicker",epgDatePicker)
+                    .put("epgShowFavorite",epgShowFavorite)
                     .put("epgUrls", epgUrlsJson(epgUrls))
                     .put("effectiveEpgUrl", effectiveEpgUrl())
                     .put("effectiveEpgUrls", epgUrlsJson(effectiveEpgUrls()))
@@ -4060,6 +4228,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         boolean visible = webSourceView != null && webSourceView.hasRetainedPage() && webSourceView.isPageVisible();
         boolean sniffed = !visible && hasRetainedWebPlayback() && playingSniffedResource != null;
         result.put("webPageVisible", visible).put("webPageKey", currentSniffedPageKey())
+                .put("pageTitle", visible ? webSourceView.currentPageTitle() : "")
                 .put("pageUrl", visible ? webSourceView.activePageUrl() : sniffed ? playingSniffedPageUrl : "");
         if (!visible && !sniffed) return;
         applyBrowserChannelIdentity(result);
@@ -5382,6 +5551,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             CjsPluginRuntime.setManifestUrl(request.optString("cjsPluginManifestUrl", ""));
         }
         final boolean updateCjsPlugin = request.optBoolean("updateCjsPlugin", false);
+        if (request.has("updatePopupEnabled")) {
+            final boolean enabled=request.getBoolean("updatePopupEnabled");
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit()
+                    .putBoolean(AutoUpdater.POPUP_PREFERENCE,enabled).apply();
+            runOnUiThread(() -> {
+                if(autoUpdater==null)return;
+                autoUpdater.popupPreferenceChanged(enabled);
+                if(enabled)deferStartupMaintenance("optional-update-check",()->{
+                    if(autoUpdater!=null&&AutoUpdater.popupEnabled(MainActivity.this))autoUpdater.checkForUpdates();
+                });
+            });
+        }
         if (request.has("dnsMode")) {
             String rawDns = request.optString("dnsMode", NetworkClient.DEFAULT_DNS);
             String requestedDns = NetworkClient.sanitizeDnsMode(rawDns);
@@ -5453,6 +5634,20 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
                     .putBoolean(AUTO_START, autoStart).apply();
             AppLog.i(TAG, "Boot auto start=" + autoStart);
+        }
+        if (request.has("continuousTsEnabled")) {
+            boolean enabled=request.getBoolean("continuousTsEnabled");
+            restartPlayback |= enabled != continuousTsEnabled;
+            continuousTsEnabled=enabled;legacyHlsCompatibilityChannel=null;
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putBoolean("continuous_ts_enabled",enabled).apply();
+        }
+        if (request.has("videoRenderMode")) {
+            String requested = request.getString("videoRenderMode");
+            if (!"surface".equals(requested) && !"texture".equals(requested))
+                throw new JSONException("不支持的渲染方式");
+            android.content.SharedPreferences prefs = getSharedPreferences(PREFERENCES, MODE_PRIVATE);
+            recreateSurface |= !requested.equals(prefs.getString(DirectVideoView.RENDER_KEY, "surface"));
+            prefs.edit().putString(DirectVideoView.RENDER_KEY, requested).apply();
         }
         if (request.has("playerEngine")) {
             String requested = request.getString("playerEngine");
@@ -5657,7 +5852,18 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putBoolean("neighbor_probe_enabled",neighborProbeEnabled).apply();
             if(!neighborProbeEnabled&&channelHealth!=null)channelHealth.pause();
         }
-        if(request.optBoolean("probeAllChannels",false)&&channelHealth!=null)channelHealth.all(ChannelCatalog.GROUPS);
+        if(request.optBoolean("probeAllChannels",false)&&channelHealth!=null){
+            runOnUiThread(()->{if(liteWebPreloader!=null)liteWebPreloader.close();});
+            channelHealth.all(ChannelCatalog.GROUPS);
+        }
+        if(request.optBoolean("cancelChannelProbe",false)&&channelHealth!=null){
+            channelHealth.cancelAll(request.optLong("channelProbeScanId",0));
+        }
+        if(request.has("litePreparseEnabled")){
+            litePreparseEnabled=request.getBoolean("litePreparseEnabled");
+            getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit().putBoolean("lite_web_preparse_enabled",litePreparseEnabled).apply();
+            runOnUiThread(()->{litePreparseRequest=-1;if(liteWebPreloader!=null)liteWebPreloader.close();});
+        }
         if (request.has("liteNetworkThreadMultiplier")) {
             double raw=request.getDouble("liteNetworkThreadMultiplier");
             if(raw!=0&&raw!=2&&raw!=4&&raw!=8)throw new JSONException("不支持的轻量网络线程倍率");
@@ -5875,6 +6081,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     applyClockLocation();
                 }
             });
+        }
+        if(request.has("epgShowLogos")||request.has("epgDatePicker")||request.has("epgShowFavorite")){
+            SharedPreferences.Editor editor=getSharedPreferences(PREFERENCES,MODE_PRIVATE).edit();
+            if(request.has("epgShowLogos")){epgShowLogos=request.optBoolean("epgShowLogos",false);editor.putBoolean("epg_show_logos",epgShowLogos);}
+            if(request.has("epgDatePicker")){epgDatePicker=request.optBoolean("epgDatePicker",false);editor.putBoolean("epg_date_picker",epgDatePicker);}
+            if(request.has("epgShowFavorite")){epgShowFavorite=request.optBoolean("epgShowFavorite",true);editor.putBoolean("epg_show_favorite",epgShowFavorite);}
+            editor.apply();runOnUiThread(()->refreshEpgViews());
         }
         if (request.has("epgEnabled")) {
             epgEnabled = request.optBoolean("epgEnabled", true);
@@ -6789,6 +7002,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        if(!hasFocus){cancelChannelConfirm();cancelChannelTouchFavorite();}
         if(hasFocus)applySystemUiVisibility();
     }
 
@@ -7134,8 +7348,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         startChannel(index, archive, archiveUrl, false);
     }
 
-    private void startChannel(int index, EpgManager.Program archive, String archiveUrl,
+    private int profileSwitchIntent;
+    private void startChannel(int index,EpgManager.Program archive,String archiveUrl,boolean freshYangshipin){
+        final int intent=++profileSwitchIntent;final boolean quickIntent=openingQuickChannel;
+        Runnable begin=()->{if(intent!=profileSwitchIntent)return;boolean previous=openingQuickChannel;openingQuickChannel=quickIntent;try{startChannelAfterProfile(index,archive,archiveUrl,freshYangshipin);}finally{openingQuickChannel=previous;}};
+        if(webSourceView==null||!webSourceView.flushSharedProfile(begin))begin.run();
+    }
+    private void startChannelAfterProfile(int index, EpgManager.Program archive, String archiveUrl,
             boolean freshYangshipin) {
+        litePreparseRequest=-1;if(liteWebPreloader!=null)liteWebPreloader.cancelPending();
         if(channelHealth!=null)channelHealth.pause();healthStableAt=0;healthPosition=-1;healthNeighborRequest=-1;
         if (!openingQuickChannel && !requireGroupPassword(currentGroupIndex,
                 index, true, () -> startChannel(index, archive, archiveUrl, freshYangshipin))) return;
@@ -7172,12 +7393,15 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         pendingCjsChannelIndex = -1;
         armCrashRecovery();
         if (archive==null && quickChannel==null && navigateReceivedCastPage(index, switchStartedAt)) return;
-        closeWebSource();
+        Channel destination = quickChannel != null ? quickChannel
+                : currentGroup().channels[ChannelCatalog.wrapIndex(currentGroup().channels, index)];
+        closeWebSource(archive == null && isWebViewSource(destination.sourceUrl(currentSourceIndex)));
         webStreamHeaders = null;
         final ChannelCatalog.Group group = currentGroup();
         currentChannelIndex = ChannelCatalog.wrapIndex(group.channels, index);
         final Channel channel = quickChannel != null ? quickChannel : group.channels[currentChannelIndex];
         restoreWebChannelPreferences(group,channel);
+        if(liteWebPreloader!=null)liteWebPreloader.retain(archive==null&&quickChannel==null?litePreparseProfile(channel.sourceUrl(currentSourceIndex)):null);
         String selectedDecode=rememberChannelDecode&&quickChannel==null
                 ?playbackMemory.decode(playbackMemoryKey(group,channel),defaultDecodeMode):defaultDecodeMode;
         if(!selectedDecode.equals(decodeMode)){decodeMode=selectedDecode;autoSoftwareDecode=false;}
@@ -8015,6 +8239,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         return false;
     }
 
+    private boolean fallbackMissingSystemSource(Channel channel,int what){
+        // A confirmed upstream 404/410 is a source failure, not proof of decoder
+        // exhaustion. Configured backups use the usual bounded release/switch path.
+        if(prepared||SystemPlaybackError.crashed(what)||channel.sourceCount()<2||proxy==null
+                ||!PlaybackHttpError.isMissing(proxy.lastPlaybackFailure()))return false;
+        handleUnavailableSource("当前线路已失效",String.valueOf(proxy.lastPlaybackFailure()));
+        return true;
+    }
     private void showPlaybackForbidden(Channel channel) {
         recordLoadError(PlaybackHttpError.FORBIDDEN_MESSAGE);
         if (refreshYangshipinPlayback(playRequestId, "HTTP 403")) return;
@@ -8322,6 +8554,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 playbackResolutionMode(),
                 cctvStartupDownloadSegments(), cctvStartupDecryptSegments(),
                 genericStartupPrefetchSegments());
+        next.setContinuousTsMode(continuousTsEnabled && catchupProgram==null);
         if(catchupProgram!=null){
             catchupTimeVerified=next.catchupTimeVerified();
             final int request=playRequestId;final Channel channel=currentChannel();
@@ -9270,7 +9503,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private int systemPlayerMode(Channel channel, String streamUrl, boolean forceSoftwareDecode) {
         // App-to-app casting carries IJK-specific transport options.
         if (isNtVCastSource(streamUrl)) return 0;
-        if (PLAYER_ENGINE_SYSTEM.equals(playerEngine)) return channel.radio ? 2 : 1;
+        if (PLAYER_ENGINE_SYSTEM.equals(playerEngine)) return channel.radio||isExplicitAudioSource(streamUrl) ? 2 : 1;
+        if (continuousTsEnabled && !forceSoftwareDecode && !DECODE_MODE_SOFTWARE.equals(decodeMode)
+                && !channel.radio && catchupProgram==null && isHttpHlsSource(streamUrl)
+                && proxy!=null && !proxy.finiteMedia()) return 1;
         // Local audio needs no video Surface; Stagefright also covers PCM WAV/FLAC
         // variants absent from a trimmed native codec build. Explicit software stays IJK.
         if (channel.radio && streamUrl != null && streamUrl.startsWith("file:")
@@ -9381,11 +9617,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private void startAndroidMediaPlayer(final Channel channel, final String streamUrl,
             boolean forceSoftwareDecode, final boolean systemVideo, final long resumePositionMs) throws IOException {
         final boolean hls = isHttpHlsSource(streamUrl);
-        final boolean legacyTs = LEGACY_TS_COMPATIBILITY_ENABLED && hls && systemVideo && !channel.radio && catchupProgram==null
-                && Build.VERSION.SDK_INT<=15 && proxy!=null && !proxy.finiteMedia()
-                && (legacyHlsCompatibilityChannel==channel
-                    || LegacyTsStream.needed(Build.VERSION.SDK_INT,Build.MODEL,Runtime.getRuntime().availableProcessors())
-                        && (channel.streamId!=null||channel.yangshipinPid!=null));
+        final boolean legacyTs = LEGACY_TS_COMPATIBILITY_ENABLED && continuousTsEnabled
+                && hls && systemVideo && !channel.radio && catchupProgram==null
+                && Build.VERSION.SDK_INT>=14 && proxy!=null && !proxy.finiteMedia() && proxy.supportsContinuousTs();
         if(legacyTs)legacyHlsCompatibilityChannel=channel;
         if (!videoView.isSurfaceReady()) {
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
@@ -9408,7 +9642,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             queuePendingPlayer(channel, streamUrl, forceSoftwareDecode);
             return;
         }
-        final AndroidMediaPlayer nextPlayer = legacyTs ? new LegacyStreamMediaPlayer() : new AndroidMediaPlayer();
+        final AndroidMediaPlayer nextPlayer = legacyTs && Build.VERSION.SDK_INT<=15
+                ? new LegacyStreamMediaPlayer() : new AndroidMediaPlayer();
         final int sourceRequestId = playRequestId;
         final boolean customSource = currentCatalogSource() == ChannelCatalog.SOURCE_CUSTOM;
         final boolean radioChannel = channel.radio;
@@ -9471,6 +9706,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             } else {
                 // Android 4.0 does not consistently send VIDEO_RENDERING_START for HLS.
                 // Wait briefly for the first frame, then use its playback clock as fallback.
+                probeLegacySystemVideoReady(nextPlayer, channel, sourceRequestId);
                 channelBar.postDelayed(() -> {
                     if (player != nextPlayer || sourceRequestId != playRequestId
                             || videoRenderingStarted || !prepared) return;
@@ -9552,6 +9788,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             });
         });
         nextPlayer.setOnErrorListener((mediaPlayer, what, extra) -> {
+            if(player==mediaPlayer && sourceRequestId==playRequestId && legacyTs && proxy!=null && !proxy.supportsContinuousTs()) {
+                channelBar.post(()->{
+                    if(player!=mediaPlayer||sourceRequestId!=playRequestId)return;
+                    try{startAndroidMediaPlayer(channel,streamUrl,false,systemVideo,resumePositionMs);}
+                    catch(IOException error){recoverStalledPlayback(sourceRequestId,mediaPlayer,"Unsupported continuous TS media");}
+                });return true;
+            }
+
             if(sourceRequestId==playRequestId && retryWarmedSource(sourceRequestId))return true;
             if (player != mediaPlayer || sourceRequestId != playRequestId) return true;
             PlaybackErrorReporting.error(sourceRequestId,"SystemPlayer","Error_"+what+"_"+extra,
@@ -9574,6 +9818,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         showPlaybackForbidden(channel);
                         return;
                     }
+                    if(hls&&fallbackMissingSystemSource(channel,what))return;
                     if (!hls) androidMp3FallbackRequestId = sourceRequestId;
                     if (SystemPlaybackError.crashed(what))
                         Toast.makeText(this, lastSystemPlaybackError + "，正在恢复", Toast.LENGTH_LONG).show();
@@ -9676,6 +9921,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if(prepared&&(!expectedVideo||videoRenderingStarted)){
                 playerStartupWatchdog=null;return;
             }
+            // Some firmware keeps prepareAsync pending after an HTTP failure
+            // instead of delivering onError. The proxy can confirm a missing URL.
+            if(expected instanceof AndroidMediaPlayer&&activePlayerChannel!=null
+                    &&fallbackMissingSystemSource(activePlayerChannel,1))return;
             if(expected instanceof AndroidMediaPlayer&&expectedVideo&&"video/hevc".equals(mime)
                     &&Boolean.FALSE.equals(VideoDecoderSupport.hasDecoder(mime))){
                 failPlayerStartup(request,expected,"当前设备无法解码 H.265/HEVC 视频，请改用软件解码或切换线路","missing system HEVC decoder");return;
@@ -9692,6 +9941,29 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         channelBar.postDelayed(playerStartupWatchdog,500L);
     }
 
+    private void probeLegacySystemVideoReady(final AndroidMediaPlayer expected,
+            final Channel channel, final int request) {
+        if (Build.VERSION.SDK_INT > 15 || expected instanceof LegacyStreamMediaPlayer) return;
+        final long started = SystemClock.elapsedRealtime();
+        final long initialPosition = expected.getCurrentPosition();
+        channelBar.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (player != expected || request != playRequestId || !prepared
+                        || videoRenderingStarted || isFinishing()) return;
+                long elapsed = SystemClock.elapsedRealtime() - started;
+                // This is readiness inference, never a confirmed rendering callback.
+                // Sample only during startup; steady playback keeps its normal ticker.
+                if (windowContentActive && !buffering && expected.isPlaying()
+                        && expected.getVideoWidth() > 0 && expected.getVideoHeight() > 0
+                        && initialPosition >= 0 && expected.getCurrentPosition() >= initialPosition + 100L) {
+                    markAndroidHlsVideoReady(expected, channel, request);
+                    return;
+                }
+                if (elapsed < 1500L) channelBar.postDelayed(this, 250L);
+            }
+        }, 250L);
+    }
+
     private void markAndroidHlsVideoReady(AndroidMediaPlayer expected, Channel channel,
             int requestId) {
         markAndroidHlsVideoReady(expected, channel, requestId, false);
@@ -9699,7 +9971,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private boolean retryLegacyHlsCompatibility(int requestId, AndroidMediaPlayer expected,
             Channel channel, String url, boolean hls) {
-        if (!LEGACY_TS_COMPATIBILITY_ENABLED || requestId != playRequestId || player != expected || Build.VERSION.SDK_INT > 15
+        if (!continuousTsEnabled || !LEGACY_TS_COMPATIBILITY_ENABLED || requestId != playRequestId || player != expected || Build.VERSION.SDK_INT > 15
                 || !hls || channel.radio || catchupProgram != null || proxy == null || proxy.finiteMedia()
                 || systemFirstFrameRequestId == requestId || legacyHlsCompatibilityChannel == channel)
             return false;
@@ -9794,20 +10066,6 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 new java.util.concurrent.atomic.AtomicBoolean();
         nextPlayer.setOnNativeInvokeListener(new IjkMediaPlayer.OnNativeInvokeListener() {
             @Override public boolean onNativeInvoke(int what, Bundle args) {
-                if(playerVolumeBalance && (videoRenderingStarted || audioOnlyPlayback)
-                        && what==EVENT_DID_HTTP_OPEN && args!=null
-                        && args.getInt(ARG_HTTP_CODE)>=200 && args.getInt(ARG_HTTP_CODE)<300) {
-                    final String opened=args.getString(ARG_URL, "");
-                    final String origin=proxy==null?opened:proxy.probeOriginUrl(opened);
-                    final String path=Uri.parse(origin).getPath();
-                    if((proxy!=null && proxy.isKnownAudioBalanceSegment(origin)) || path!=null && (path.toLowerCase(Locale.US).endsWith(".ts")
-                            || path.toLowerCase(Locale.US).endsWith(".m4s")))
-                        runOnUiThread(()->{
-                            if(player==nextPlayer && !opened.equals(balanceSegmentUrl)) {
-                                balanceSegmentUrl=opened; balanceSegments++;
-                            }
-                        });
-                }
                 if((what==EVENT_DID_HTTP_OPEN||what==EVENT_DID_HTTP_SEEK)&&args!=null&&args.getInt(ARG_HTTP_CODE)>=400){
                     final int code=args.getInt(ARG_HTTP_CODE);runOnUiThread(()->{if(player==nextPlayer&&seekFeedback.pending())seekFeedback.failed(code==403?PlaybackHttpError.FORBIDDEN_MESSAGE:"下载失败（HTTP "+code+"），请重试或切换线路");});
                 }
@@ -9989,7 +10247,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // A long default probe can consume the first decrypted segment before
         // playback and force startup to wait for another live playlist refresh.
         final boolean broadcastProbe = cctvSource || yangshipinSource;
-        final boolean finiteHls = proxy != null && proxy.finiteMedia();
+        final boolean virtualMseSource = liteWebPlayback != null
+                && liteWebPlayback.isVirtualMseSource(streamUrl);
+        final boolean finiteHls = !virtualMseSource && proxy != null && proxy.finiteMedia();
         final boolean directLiveHls = directHttpMedia && streamUrl.startsWith("http://")
                 && isResolvedHlsSource(streamUrl) && !finiteHls;
         final boolean genericLiveHls = !cctvSource && isResolvedHlsSource(streamUrl) && !finiteHls;
@@ -10002,10 +10262,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // drains AudioTrack and resumes immediately with another tiny packet.
         // The short broadcast first-water mark below still bounds startup delay.
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "packet-buffering",
-                realtimeCastSource || proxyControlledLive && !broadcastProbe ? 0 : 1);
+                realtimeCastSource || virtualMseSource || proxyControlledLive && !broadcastProbe ? 0 : 1);
         // Native demux verifies ENDLIST/duration before changing buffering;
         // live HLS and realtime casting retain their existing latency profile.
-        final int vodBufferMode = !cctvSource && !yangshipinSource && isResolvedHlsSource(streamUrl)
+        final int vodBufferMode = !virtualMseSource && !cctvSource && !yangshipinSource && isResolvedHlsSource(streamUrl)
                 && !realtimeCastSource && !remoteCatalogPlayback
                 ? LIVE_DELAY_STABLE.equals(liveDelayMode) ? 2
                 : LIVE_DELAY_BALANCED.equals(liveDelayMode) ? 1 : 0 : 0;
@@ -10030,8 +10290,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         : (bufferedHttpMedia ? 360 : 60));
         if (bufferedHttpMedia || cctvSource || genericLiveHls) {
             int bufferMiB = liveRadioStartup ? 2 : lowResourceDevice
-                    ? (cctvSource || genericLiveHls ? 15 : 8)
+                    ? (cctvSource || genericLiveHls ? (finiteHls ? 15 : 8) : 8)
                     : LIVE_DELAY_STABLE.equals(liveDelayMode) && (cctvSource || genericLiveHls) ? 64 : 48;
+            // Bound the extra live packet queue on old low-memory devices;
+            // their decoder and proxy also retain compressed/video buffers.
+            // First-frame watermarks and refill recovery are independent.
             // Other ABI packages may still carry the upstream native limit.
             if (!IjkStreamMetrics.extendedMetricsAvailable(nextPlayer)) bufferMiB = Math.min(bufferMiB, 15);
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,
@@ -10065,10 +10328,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         // or an extra network request to classify the container.
                         : bufferedHttpMedia ? 500 : 5000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "next-high-water-mark-ms",
-                realtimeCastSource ? 100 : liveRadioStartup ? 2000 : remoteCatalogPlayback ? 3000
+                realtimeCastSource ? 100 : virtualMseSource ? 1000
+                        : liveRadioStartup ? 2000 : remoteCatalogPlayback ? 3000
                         : cctvSource || genericLiveHls ? liveIjkNextBufferMs() : 5000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "last-high-water-mark-ms",
-                realtimeCastSource ? 150 : remoteCatalogPlayback ? 5000
+                // The original SDK already caps its own MSE forward buffer.
+                // Waiting for a larger native refill reserve deadlocks both:
+                // IJK stops its clock, so the SDK never downloads more data.
+                realtimeCastSource ? 150 : virtualMseSource ? 2000 : remoteCatalogPlayback ? 5000
                         : cctvSource || genericLiveHls ? liveIjkLastBufferMs() : 5000);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "reconnect", 1);
         if (isRtspSource(streamUrl)) {
@@ -10130,7 +10397,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             // FFmpeg's small default socket queue loses packets while decoding.
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "buffer_size", 1024 * 1024);
         }
-        if (liveRadioStartup) {
+        if (virtualMseSource) {
+            // This owned relay publishes only after the initialization and all
+            // encoded tracks have been validated. Generic multi-second probing
+            // adds the same delay on every SDK reconnect on slow devices.
+            nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 300000);
+            nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "fpsprobesize", 0);
+        } else if (liveRadioStartup) {
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", 200000);
         } else if (broadcastProbe) {
             // Known H.264/AAC live TS streams expose both tracks in the first segment.
@@ -10613,6 +10886,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // without crypto/TLS protocols.
         acquireMulticastPlayback(streamUrl);
         boolean directDataSource = isNativeStreamingSource(streamUrl) || streamUrl.startsWith("file:")
+                || directHttpMedia && streamUrl.equals(liteMsePlaybackUrl)
                 || (directHttpMedia && streamUrl.startsWith("http://")
                     && (proxy == null || channel.radio || directLiveHls));
         if (directHttpMedia || genericLiveHls && proxy != null && proxy.canUseDirectHttpHlsUrl(streamUrl)) {
@@ -10800,49 +11074,16 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 || HARDWARE_DECODER_AUTO.equals(decoder)) {
             return HARDWARE_DECODER_AUTO;
         }
+        if(HardwareDecoderInventory.snapshot()==null)return decoder;
         return availableHardwareDecoderNames().contains(decoder)
                 ? decoder : HARDWARE_DECODER_AUTO;
     }
 
     private Set<String> availableHardwareDecoderNames() {
-        Set<String> cached = cachedHardwareDecoderNames;
-        if (cached != null) {
-            return cached;
-        }
-        Set<String> decoders = new LinkedHashSet<String>();
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN) {
-            hardwareVideoDecoderAvailable = false;
-            cachedHardwareDecoderNames = decoders;
-            return decoders;
-        }
-        try {
-            boolean hasHardwareVideo = false;
-            int codecCount = MediaCodecList.getCodecCount();
-            for (int index = 0; index < codecCount; index++) {
-                MediaCodecInfo codecInfo = MediaCodecList.getCodecInfoAt(index);
-                if (codecInfo == null || codecInfo.isEncoder()) {
-                    continue;
-                }
-                String name = codecInfo.getName();
-                if (name == null || isSoftwareCodecName(name)) {
-                    continue;
-                }
-                for (String type : codecInfo.getSupportedTypes()) {
-                    if (type != null && type.toLowerCase(Locale.US).startsWith("video/"))
-                        hasHardwareVideo = true;
-                    if ("video/avc".equalsIgnoreCase(type)) {
-                        decoders.add(name);
-                        break;
-                    }
-                }
-            }
-            hardwareVideoDecoderAvailable = hasHardwareVideo;
-            if (!hasHardwareVideo) AppLog.w(TAG, "MediaCodecList exposes no hardware video decoder; system player fallback enabled");
-        } catch (Throwable error) {
-            AppLog.w(TAG, "Unable to enumerate AVC hardware decoders", error);
-        }
-        cachedHardwareDecoderNames = decoders;
-        return decoders;
+        HardwareDecoderInventory.warm(this);
+        HardwareDecoderInventory.Snapshot known=HardwareDecoderInventory.snapshot();
+        if(known!=null){cachedHardwareDecoderNames=known.avc;hardwareVideoDecoderAvailable=known.hasVideo;}
+        return cachedHardwareDecoderNames==null?java.util.Collections.<String>emptySet():cachedHardwareDecoderNames;
     }
 
     private void warnUnsupportedTenBitVideo(IjkMediaPlayer mediaPlayer, int requestId) {
@@ -10854,15 +11095,21 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if (video == null || !TenBitVideoSupport.isTenBit(
                     video.getString(IjkMediaMeta.IJKM_KEY_CODEC_PIXEL_FORMAT), video.mCodecProfile)) return;
             if (mediaPlayer.getVideoDecoder() == IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC) return;
-            Boolean supported = TenBitVideoSupport.hasHardwareDecoder(
-                    TenBitVideoSupport.mime(video.mCodecName), video.mCodecProfile);
-            if (!Boolean.FALSE.equals(supported)) return;
-            tenBitWarningRequestId = requestId;
-            String message = "当前设备不支持 " + readableCodec(video.mCodecName, null)
-                    + " 10bit 硬解，软解播放可能卡顿";
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-            AppLog.i(TAG, "Ten-bit hardware unavailable: " + video.mCodecName
-                    + " profile=" + video.mCodecProfile + " request=" + requestId);
+            tenBitWarningRequestId=requestId;
+            String codec=video.mCodecName,profile=video.mCodecProfile;
+            java.lang.ref.WeakReference<MainActivity> owner=new java.lang.ref.WeakReference<>(this);
+            java.lang.ref.WeakReference<IjkMediaPlayer> selected=new java.lang.ref.WeakReference<>(mediaPlayer);
+            TenBitVideoSupport.checkAsync(TenBitVideoSupport.mime(codec),profile,supported->{
+                MainActivity activity=owner.get();
+                if(activity==null||!Boolean.FALSE.equals(supported))return;
+                activity.runOnUiThread(()->{
+                    if(activity.isFinishing()||activity.player!=selected.get()||activity.playRequestId!=requestId
+                            ||activity.tenBitWarningRequestId!=requestId)return;
+                    Toast.makeText(activity,"当前设备不支持 "+readableCodec(codec,null)
+                            +" 10bit 硬解，软解播放可能卡顿",Toast.LENGTH_LONG).show();
+                    AppLog.i(TAG,"Ten-bit hardware unavailable: "+codec+" profile="+profile+" request="+requestId);
+                });
+            });
         } catch (RuntimeException error) {
             AppLog.w(TAG, "Unable to inspect 10-bit playback support", error);
         }
@@ -11697,6 +11944,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         groupAdapter.setUiScale(nextScale);
         channelAdapter.setUiScale(nextScale);
         epgAdapter.setUiScale(nextScale);
+        epgDateAdapter.setUiScale(nextScale);
         if (webSourceView != null) {
             webSourceView.setInterfaceScale(nextScale);
         }
@@ -12502,6 +12750,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void switchRelative(int offset) {
+        if(offset!=0)litePreparseDirection=offset>0?1:-1;
         cancelPendingChannelListSelection();
         if (offset == 0 || ChannelCatalog.GROUPS.length == 0) {
             return;
@@ -12760,7 +13009,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         final int outgoingRequest = playRequestId;
         final float swipeX=channelSwitchDirectionX,swipeY=channelSwitchDirectionY;
         ensureWebLastFrame();
-        webLastFrame.captureSurface(outgoing.getSurfaceView(), () -> {
+        webLastFrame.captureVideo(outgoing, () -> {
             if (isFinishing() || outgoingRequest != playRequestId || currentGroup() != targetGroup) return;
             if(nativeLiteSwipe)webLastFrame.animateNativeSwipe(outgoing.getTranslationX(),outgoing.getTranslationY(),
                     swipeX,swipeY,GESTURE_SWITCH_EASING);
@@ -12962,7 +13211,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void setFavoriteActionFocused(boolean focused) {
-        favoriteActionFocused = focused;
+        favoriteActionFocused = focused&&epgShowFavorite;
         updateFavoriteButton();
         if (focused || epgFavorite.hasFocus() || epgList.hasFocus()) {
             channelList.requestFocus();
@@ -12971,6 +13220,67 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private void toggleSelectedChannelFavorite() {
         toggleBrowsingChannelFavorite(browsingChannelPosition());
+    }
+
+    private void toggleChannelFavoriteFromLongPress(int position){
+        if(!canBrowseGroupChannels(browsingGroupIndex))return;
+        ChannelCatalog.Group group=ChannelCatalog.GROUPS[browsingGroupIndex];
+        if(position<0||position>=group.channels.length)return;
+        View row=channelList.getChildAt(position-channelList.getFirstVisiblePosition());
+        int top=row==null?0:row.getTop()-channelList.getPaddingTop();
+        channelList.clearChoices();channelList.setItemChecked(position,true);channelAdapter.setSelectedIndex(position);
+        toggleBrowsingChannelFavorite(position);setFavoriteActionFocused(false);
+        channelList.requestFocusFromTouch();channelList.requestFocus();
+        if(group.source!=ChannelCatalog.SOURCE_FAVORITES&&group.title.equals(ChannelCatalog.GROUPS[browsingGroupIndex].title)){
+            channelPager.reset();channelList.setSelectionFromTop(position,top);
+        }
+        scheduleChannelListDismiss();
+    }
+
+    private void cancelChannelConfirm(){
+        if(root!=null)root.removeCallbacks(channelFavoriteLongPress);
+        channelConfirmKey=-1;channelConfirmGroup=-1;channelConfirmPosition=-1;channelConfirmLongPress=false;
+    }
+
+    private void cancelChannelTouchFavorite(){
+        if(root!=null)root.removeCallbacks(channelTouchFavoriteLongPress);
+        channelTouchFavoritePosition=-1;channelTouchFavoriteGroup=-1;channelTouchFavoriteConsumed=false;
+    }
+
+    private boolean trackChannelFavoriteTouch(MotionEvent event){
+        int action=event.getActionMasked();
+        if(action==MotionEvent.ACTION_DOWN){
+            cancelChannelTouchFavorite();channelTouchFavoritePosition=channelList.pointToPosition((int)event.getX(),(int)event.getY());
+            channelTouchFavoriteGroup=browsingGroupIndex;channelTouchFavoriteX=event.getX();channelTouchFavoriteY=event.getY();
+            if(channelTouchFavoritePosition>=0)root.postDelayed(channelTouchFavoriteLongPress,android.view.ViewConfiguration.getLongPressTimeout());
+        }else if(action==MotionEvent.ACTION_MOVE){
+            if(channelTouchFavoriteConsumed)return true;
+            int slop=android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+            if(Math.abs(event.getX()-channelTouchFavoriteX)>slop||Math.abs(event.getY()-channelTouchFavoriteY)>slop)cancelChannelTouchFavorite();
+        }else if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL||action==MotionEvent.ACTION_POINTER_DOWN){
+            boolean consumed=channelTouchFavoriteConsumed;cancelChannelTouchFavorite();return consumed;
+        }
+        return channelTouchFavoriteConsumed;
+    }
+
+    /** A row's short OK is committed on release, so holding OK cannot also tune it. */
+    private boolean handleChannelConfirmKey(KeyEvent event,int key){
+        if(key!=KeyEvent.KEYCODE_DPAD_CENTER&&key!=KeyEvent.KEYCODE_ENTER){
+            if(event.getAction()==KeyEvent.ACTION_DOWN)cancelChannelConfirm();return false;
+        }
+        if(event.getAction()==KeyEvent.ACTION_UP&&channelConfirmKey==key){
+            boolean tune=!channelConfirmLongPress&&!event.isCanceled()&&channelListPanel.getVisibility()==View.VISIBLE
+                    &&channelList.hasFocus()&&browsingGroupIndex==channelConfirmGroup&&browsingChannelPosition()==channelConfirmPosition;
+            int position=channelConfirmPosition;cancelChannelConfirm();
+            if(tune)switchBrowsingChannel(position);return true;
+        }
+        if(event.getAction()!=KeyEvent.ACTION_DOWN)return false;
+        if(channelConfirmKey==key)return true;
+        if(event.getRepeatCount()!=0||channelListPanel.getVisibility()!=View.VISIBLE||!channelList.hasFocus()
+                ||favoriteActionFocused||epgNavigationActive&&epgExpanded)return false;
+        cancelChannelConfirm();channelConfirmKey=key;channelConfirmGroup=browsingGroupIndex;
+        channelConfirmPosition=channelPager.position(browsingChannelPosition());
+        root.postDelayed(channelFavoriteLongPress,android.view.ViewConfiguration.getLongPressTimeout());return true;
     }
 
     private int browsingChannelPosition() {
@@ -13077,6 +13387,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         cancelPendingChannelListSelection();
         ensureChannelPanelInitialized();
         final int navigationGeneration=++channelNavigationGeneration;
+        channelAdapter.setLogosActive(true);
         groupPager.reset();channelPager.reset();epgPager.reset();
         epgExpanded = false;
         setEpgColumnVisible(false);
@@ -13268,6 +13579,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void closeChannelList(boolean refreshOverlay) {
+        if(channelAdapter!=null)channelAdapter.setLogosActive(false);
+        cancelChannelConfirm();
+        cancelChannelTouchFavorite();
         rememberChannelCursor();rememberEpgCursor();channelNavigationGeneration++;
         groupPager.reset();channelPager.reset();epgPager.reset();
         channelListPanel.removeCallbacks(hideChannelList);
@@ -13298,7 +13612,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             @Override
             public boolean onTouch(View view, MotionEvent event) {
                 int action = event.getActionMasked();
+                boolean consumed=view==channelList&&trackChannelFavoriteTouch(event);
                 if(action==MotionEvent.ACTION_DOWN){
+                    cancelChannelConfirm();
                     channelNavigationGeneration++;lastListRepeatAt=0;
                     epgNavigationActive=view==epgList;
                     if(view==channelList)setFavoriteActionFocused(false);
@@ -13317,7 +13633,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     channelPanelTouching = false;
                     scheduleChannelListDismiss();
                 }
-                return false;
+                return consumed;
             }
         };
         View.OnHoverListener panelHoverListener = new View.OnHoverListener() {
@@ -13341,6 +13657,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         epgFavorite.setOnTouchListener(touchListener);
         channelListPanel.setOnHoverListener(panelHoverListener);
         epgList.setOnHoverListener(panelHoverListener);
+        epgDateList.setOnHoverListener(panelHoverListener);
         groupList.setOnHoverListener(new View.OnHoverListener() {
             @Override
             public boolean onHover(View view, MotionEvent event) {
@@ -13498,20 +13815,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private int desiredChannelColumnWidth(float density) {
+        int logoSpace=epgShowLogos?Math.round(64f*density):0;
+        int controls=epgShowFavorite?111:77;
         // Match the compact controls and the same catalog-wide title cap as all themes.
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
-            return Math.round((14f * effectiveUiScale * ChannelNameWidth.MAX_CHARS + 111f) * density);
+            return logoSpace+Math.round((14f * effectiveUiScale * ChannelNameWidth.MAX_CHARS + controls) * density);
         }
         Paint paint=columnPaint(14f);
-        return Math.max(Math.round(180f*density),
-                (int)Math.ceil(ChannelNameWidth.pixels(paint))+Math.round(111f*density));
+        return logoSpace+Math.max(Math.round(180f*density),
+                (int)Math.ceil(ChannelNameWidth.pixels(paint))+Math.round(controls*density));
     }
 
     private int desiredEpgColumnWidth(float density) {
         // Keep all channel-panel sizing off the affected legacy font path. Unlike
         // the group column, this is reached when the EPG pane is first displayed.
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
-            return Math.round(440f * density);
+            return Math.round((440f+(epgDateList.getVisibility()==View.VISIBLE?68f:0))*density);
         }
         Paint statusPaint = columnPaint(13f);
         float widest = epgStatus == null || epgStatus.getText() == null ? 0f
@@ -13525,7 +13844,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
             }
         }
-        return clamp((int) Math.ceil(widest) + Math.round(24f * density),
+        return (epgDateList.getVisibility()==View.VISIBLE?Math.round(68f*density):0)+clamp((int) Math.ceil(widest) + Math.round(24f * density),
                 Math.round(220f * density), Math.round(440f * density));
     }
 
@@ -13703,6 +14022,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void applyEpgEnabled() {
+        if(!epgShowFavorite)favoriteActionFocused=false;
+        if(channelAdapter!=null)channelAdapter.setShowFavorite(epgShowFavorite);
+        if(epgFavorite!=null&&!epgShowFavorite){boolean focused=epgFavorite.hasFocus();epgFavorite.setVisibility(View.GONE);if(focused)channelList.requestFocus();}
+        if(channelAdapter!=null)channelAdapter.setShowLogos(epgShowLogos);
+        if(epgAdapter!=null)epgAdapter.setDatePickerEnabled(epgDatePicker);
         if (!epgEnabled) epgExpanded = false;
         if (epgToggle != null) epgToggle.setVisibility(epgEnabled ? View.VISIBLE : View.GONE);
         if (epgColumn != null) setEpgColumnVisible(epgEnabled && epgExpanded);
@@ -13830,9 +14154,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         epgFavorite.setText(isBrowsingChannelFavorite(safePosition) ? "★ 已收藏" : "☆ 收藏");
         java.util.List<EpgManager.Program> programs = epgManager.programsFor(channel);
         rememberEpgCursor();epgPager.reset();
-        epgNavigationKey=channelNavigationKey(channel);
-        BrowseCursor cursor=epgCursors.get(epgNavigationKey);
         epgAdapter.showPrograms(programs,channel);
+        epgNavigationKey=channelNavigationKey(channel)+(epgAdapter.hasDatePicker()?"@"+epgAdapter.selectedDay():"");
+        BrowseCursor cursor=epgCursors.get(epgNavigationKey);
+        refreshEpgDatePicker();
         // User opened the guide: do not wait for the startup/playback idle gate.
         // The manager deduplicates in-flight, cached and recently failed requests.
         if(programs.isEmpty()&&!epgManager.isLoading())refreshEpgNow();
@@ -13860,6 +14185,32 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
     }
 
+    private void refreshEpgDatePicker(){
+        boolean visible=epgDatePicker&&epgAdapter.hasDatePicker();
+        epgDateAdapter.show(epgAdapter.availableDays(),epgAdapter.selectedDay());
+        boolean focused=epgDateList.hasFocus();epgDateList.setVisibility(visible?View.VISIBLE:View.GONE);
+        // The skin renderer adds this logical width to the original guide width.
+        epgColumn.setTag(Float.valueOf(visible?68f:0f));
+        ViewGroup.LayoutParams dateParams=epgDateList.getLayoutParams();dateParams.width=Math.round(68*(TvUiPlugin.current()==null?effectiveUiDensity():themeScale()));epgDateList.setLayoutParams(dateParams);
+        if(visible){epgDateList.setItemChecked(epgDateAdapter.selectedIndex(),true);epgDateList.setSelection(epgDateAdapter.selectedIndex());}
+        else if(focused)epgList.requestFocus();
+    }
+    private void chooseEpgDay(int index){
+        Long day=epgDateAdapter.getItem(index);
+        if(day==null||day==epgAdapter.selectedDay()||browsingGroupIndex<0||browsingGroupIndex>=ChannelCatalog.GROUPS.length)return;
+        int channel=browsingChannelPosition();Channel[] channels=ChannelCatalog.GROUPS[browsingGroupIndex].channels;
+        if(channel<0||channel>=channels.length)return;
+        rememberEpgCursor();epgPager.reset();epgAdapter.selectDay(day);
+        epgNavigationKey=channelNavigationKey(channels[channel])+"@"+day;
+        BrowseCursor cursor=epgCursors.get(epgNavigationKey);
+        int current=cursor==null?Math.max(0,epgAdapter.currentProgramIndex()):findEpgCursor(cursor.selectedKey,cursor.selected);
+        int first=cursor==null?current:findEpgCursor(cursor.firstKey,cursor.first);
+        refreshEpgDatePicker();epgList.clearChoices();
+        if(cursor!=null&&cursor.paged)epgPager.show(epgList,epgAdapter.getCount(),current,first,navigationRowHeight(epgList));
+        else{epgList.setItemChecked(current,true);epgList.setSelectionFromTop(current,cursor==null?0:cursor.top+(current-first)*(navigationRowHeight(epgList)+epgList.getDividerHeight()));}
+        updateEpgBrowseHeader();
+        scheduleChannelListDismiss();
+    }
     private void playEpgProgram(int position) {
         EpgManager.Program program=epgAdapter.getItem(position);
         if(program==null||browsingGroupIndex<0||browsingGroupIndex>=ChannelCatalog.GROUPS.length)return;
@@ -13944,7 +14295,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (epgDivider != null) {
             epgDivider.setVisibility(visibility);
         }
-        if (!visible && (epgList.hasFocus() || epgFavorite.hasFocus() || epgStatus.hasFocus())) {
+        if (!visible && (epgList.hasFocus() || epgDateList.hasFocus() || epgFavorite.hasFocus() || epgStatus.hasFocus())) {
             setFavoriteActionFocused(false);
             channelList.requestFocus();
         }
@@ -14037,6 +14388,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 updateChannelCardEpg(title);
                 showChannelCard();
                 if (!loadingActive && (!playbackStatus || !channelPlaybackWaiting())) {
+                    channelBar.removeCallbacks(hideChannelBar);
                     channelBar.postDelayed(hideChannelBar, CHANNEL_BAR_TIMEOUT_MS);
                 }
             }
@@ -14044,6 +14396,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void showChannelCard() {
+        applyTvUiCardTheme();
         refreshTvUiCard();
         if (receivingRtspCast()) {
             channelBar.setVisibility(View.GONE);
@@ -15017,7 +15370,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 : hardwareDecoder;
         if (stats.videoDecoderName == null) return false;
         String key = interlacedPreferenceKey(stats);
-        float baseline = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getFloat(key, 0f);
+        float baseline = PreferenceNumbers.readFloat(getSharedPreferences(PREFERENCES, MODE_PRIVATE),key,0f);
         if (baseline <= 0f) return false;
         activeInterlacedPreferenceKey = key;
         interlacedHardwareFps = baseline;
@@ -15144,7 +15497,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (stats.height != 1080 || !"interlaced".equals(stats.videoDescription.scanType)
                 || stats.nominalFrameRate < 24f || stats.nominalFrameRate > 26f) return false;
         String key = interlacedPreferenceKey(stats);
-        float oldFps = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getFloat(key, 0f);
+        float oldFps = PreferenceNumbers.readFloat(getSharedPreferences(PREFERENCES, MODE_PRIVATE),key,0f);
         if (oldFps <= 0f || interlacedSoftwareAttemptRequest == playRequestId) return false;
         activeInterlacedPreferenceKey = key;
         interlacedHardwareFps = oldFps;
@@ -15178,8 +15531,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         float rememberedHardwareFps = 0f;
         if (eligible && hardware) {
             activeInterlacedPreferenceKey = interlacedPreferenceKey(stats);
-            rememberedHardwareFps = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-                    .getFloat(activeInterlacedPreferenceKey, 0f);
+            rememberedHardwareFps = PreferenceNumbers.readFloat(getSharedPreferences(PREFERENCES, MODE_PRIVATE),activeInterlacedPreferenceKey,0f);
         }
         long position = 0L, cached = 0L;
         if (eligible) {
@@ -16018,6 +16370,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
     }
     private void focusEpgList(){
+        if(epgDateList.getVisibility()==View.VISIBLE){epgNavigationActive=true;setFavoriteActionFocused(false);epgDateList.requestFocusFromTouch();epgDateList.requestFocus();epgDateList.setSelection(epgDateAdapter.selectedIndex());return;}
+        focusEpgPrograms();
+    }
+    private void focusEpgPrograms(){
         if(!epgExpanded||epgAdapter.getCount()==0)return;
         epgNavigationActive=true;
         setFavoriteActionFocused(false);epgList.requestFocusFromTouch();epgList.requestFocus();
@@ -16033,6 +16389,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             int next=groupPager.move(groupList,ChannelCatalog.GROUPS.length,browsingGroupIndex,offset,navigationRowHeight(groupList));
             if(next>=0&&next!=browsingGroupIndex){showChannelMenu(next);groupPager.reapply(ChannelCatalog.GROUPS.length);}
             return;
+        }
+        if(epgDateList.hasFocus()){
+            int current=epgDateList.getSelectedItemPosition();if(current<0)current=epgDateAdapter.selectedIndex();
+            int next=Math.max(0,Math.min(epgDateAdapter.getCount()-1,current+offset));
+            chooseEpgDay(next);epgDateList.setSelection(next);return;
         }
         if(epgList.hasFocus()||epgNavigationActive&&epgExpanded){
             epgPager.move(epgList,epgAdapter.getCount(),Math.max(0,epgAdapter.currentProgramIndex()),offset,navigationRowHeight(epgList));
@@ -16964,6 +17325,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (event.getAction() == KeyEvent.ACTION_DOWN && isHandledRemoteKey(keyCode)) {
             setRemoteInputMode(true);
         }
+        if(backPrompt.getVisibility()!=View.VISIBLE&&managementPanel.getVisibility()!=View.VISIBLE
+                &&handleChannelConfirmKey(event,keyCode))return true;
         if (event.getAction() == KeyEvent.ACTION_UP && isHandledRemoteKey(keyCode)) {
             return true;
         }
@@ -17009,6 +17372,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     closeChannelList();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
+                    if(epgList.hasFocus()&&epgDateList.getVisibility()==View.VISIBLE){epgDateList.requestFocus();return true;}
                     if (epgExpanded && (epgNavigationActive || epgList.hasFocus() || favoriteActionFocused)) {
                         rememberEpgCursor();
                         epgExpanded = false;
@@ -17024,6 +17388,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                     return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    if(epgDateList.hasFocus()){focusEpgPrograms();return true;}
                     if (groupList.hasFocus()) {
                         if (ChannelCatalog.GROUPS[browsingGroupIndex].channels.length > 0) {
                             enterChannelColumn();
@@ -17035,7 +17400,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             focusEpgList();
                         }
                     } else if (channelList.hasFocus()) {
-                        setFavoriteActionFocused(true);
+                        if(epgShowFavorite)setFavoriteActionFocused(true);
+                        else if(canOpenBrowsingEpg(browsingChannelPosition())){
+                            epgExpanded=true;showEpgForBrowsingChannel(browsingChannelPosition());focusEpgList();
+                        }
                     }
                     return true;
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -17046,6 +17414,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
+                    if(epgDateList.hasFocus()){focusEpgPrograms();return true;}
                     if(epgList.hasFocus()||epgNavigationActive&&epgExpanded){
                         playEpgProgram(epgList.getSelectedItemPosition());
                     } else if (favoriteActionFocused) {
@@ -17426,6 +17795,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override
     protected void onPause() {
+        cancelChannelConfirm();
+        cancelChannelTouchFavorite();
         abortChannelSwitchAnimation();
         if (videoControlsOverlay != null) videoControlsOverlay.hide();
         dispatchFlyMouseButtonUp(true);
@@ -17480,6 +17851,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     private void setWindowContentActive(boolean active) {
         if (active != windowContentActive) resetPlaybackStallClock();
         windowContentActive=active;
+        if(!active&&liteWebPreloader!=null)liteWebPreloader.close();
         if(liteWebPlayback!=null)liteWebPlayback.setActive(active);
         if (jarChannelRuntime != null) jarChannelRuntime.setActive(active||backgroundPlaybackEnabled);
         if (audioArtwork != null) audioArtwork.setActive(active);
@@ -17558,6 +17930,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void trimUiCaches() {
+        if(liteWebPreloader!=null)liteWebPreloader.close();
         albumArtLoader.cancelNeighbors();
         if (audioArtwork != null) audioArtwork.trimMemory();
         if (webSourceView != null) webSourceView.trimMemory();
@@ -17565,6 +17938,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @Override
     protected void onDestroy() {
+        startupMaintenanceDestroyed=true;
+        if(root!=null)root.removeCallbacks(startManagementServerTask);
+        if(channelAdapter!=null)channelAdapter.close();
+        if(groupAdapter!=null)groupAdapter.close();
+        if(liteWebPreloader!=null)liteWebPreloader.close();
         if(channelBar!=null)channelBar.removeCallbacks(volumeBalanceTick);
         if(channelHealth!=null)channelHealth.close();
         PlaybackErrorReporting.close();

@@ -1,0 +1,16 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('browser-core/litebrowser/src/main/assets/browser.js','utf8');
+const c={};c.g=c;vm.createContext(c);
+vm.runInContext(source.slice(source.indexOf('function cssName('),source.indexOf('function defineDOMProperties(')),c);
+vm.runInContext("var text='color:red',node={getAttribute(){return text},setAttribute(k,v){text=v}},style=declaration(node),computed=declaration(node,{color:'blue'});",c);
+assert.equal(vm.runInContext('Object.prototype.toString.call(style)',c),'[object CSSStyleDeclaration]');
+assert.equal(vm.runInContext('style instanceof CSSStyleDeclaration',c),true);
+vm.runInContext(fs.readFileSync('browser-core/litebrowser/src/androidTest/assets/vue-2.6.14.min.js','utf8'),c);
+vm.runInContext('var state2=Vue.observable({style:style,ordinary:{n:1}});',c);
+assert.equal(vm.runInContext('!!state2.ordinary.__ob__&&!style.__ob__',c),true);
+vm.runInContext(fs.readFileSync('browser-core/litebrowser/src/androidTest/assets/vue-3.5.22.global.prod.js','utf8'),c);
+assert.equal(vm.runInContext('Vue.reactive(style)===style&&Vue.reactive(computed)===computed',c),true);
+vm.runInContext('var state3=Vue.reactive({style:style,ordinary:{n:1}}),runs=0;Vue.effect(()=>{state3.ordinary.n;runs++});state3.ordinary.n=2;state3.style.color="green";',c);
+assert.equal(vm.runInContext('runs',c),2);assert.equal(vm.runInContext('node.getAttribute("style")',c),'color:green');
+assert.equal(vm.runInContext('computed.color',c),'blue');
+console.log('PASS actual CSS declaration and real Vue2/Vue3: DOM styles remain raw and live, ordinary state remains reactive');

@@ -29,6 +29,8 @@ import java.util.zip.ZipFile;
 
 /** Checks release manifests, downloads a compatible APK, and opens the system installer. */
 final class AutoUpdater {
+    static final String POPUP_PREFERENCE = "update_popup_enabled";
+    interface ManifestReader { String read(String url) throws IOException; }
     private static final String TAG = "AutoUpdater";
     private static final String IMPORTANT_VERSION_URL = "https://github.com/buhanzhe/NativeWasmTv/"
             + "releases/latest/download/version.json";
@@ -40,6 +42,7 @@ final class AutoUpdater {
     private static final long MAX_APK_BYTES = 256L * 1024L * 1024L;
 
     private final Activity activity;
+    private final ManifestReader manifestReader;
     private volatile boolean destroyed;
     private volatile Runnable liteListener;
     void setLiteListener(Runnable listener){liteListener=listener;}
@@ -59,11 +62,27 @@ final class AutoUpdater {
     private volatile UpdateInfo liteUpdate;
     private volatile boolean downloadActive;
     private boolean promptShowing;
+    private boolean optionalPrompt;
+    private volatile UpdateInfo importantUpdate;
     private AlertDialog promptDialog;
     private ProgressDialog progressDialog;
 
     AutoUpdater(Activity activity) {
+        this(activity, null);
+    }
+
+    AutoUpdater(Activity activity, ManifestReader reader) {
         this.activity = activity;
+        this.manifestReader = reader;
+    }
+
+    static boolean popupEnabled(android.content.Context context) {
+        return context.getSharedPreferences(MainActivity.PREFERENCES, 0)
+                .getBoolean(POPUP_PREFERENCE, false);
+    }
+
+    void popupPreferenceChanged(boolean enabled) {
+        if (!enabled && optionalPrompt && promptDialog != null) promptDialog.dismiss();
     }
 
     void checkForUpdates() {
@@ -74,17 +93,23 @@ final class AutoUpdater {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                boolean importantAvailable = importantUpdate != null;
                 try {
                     final UpdateInfo update = loadUpdateInfo(IMPORTANT_VERSION_URL, false);
-                    if (update.versionCode <= BuildConfig.VERSION_CODE || destroyed) {
+                    if (destroyed) return;
+                    if (update.versionCode <= BuildConfig.VERSION_CODE) {
+                        importantUpdate = null;
+                        importantAvailable = false;
                         return;
                     }
+                    importantUpdate = update;
+                    importantAvailable = true;
                     AppLog.i(TAG, "Update available: " + update.versionName + ", asset="
                             + update.apkAsset);
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            showUpdatePrompt(update);
+                            if (importantUpdate == update) showUpdatePrompt(update, false);
                         }
                     });
                 } catch (Exception error) {
@@ -92,6 +117,10 @@ final class AutoUpdater {
                     AppLog.w(TAG, "Update check failed", error);
                 } finally {
                     importantChecking = false;
+                    // The important-version threshold always runs, even with
+                    // optional notices disabled. Never stack a lite notice on it.
+                    if (!importantAvailable && !destroyed && popupEnabled(activity))
+                        checkLiteForUpdates(false, true);
                 }
             }
         }, "update-check").start();
@@ -100,6 +129,10 @@ final class AutoUpdater {
     synchronized String checkLiteForUpdates() {return checkLiteForUpdates(false);}
 
     synchronized String checkLiteForUpdates(final boolean showResult) {
+        return checkLiteForUpdates(showResult, false);
+    }
+
+    private synchronized String checkLiteForUpdates(final boolean showResult, final boolean popup) {
         if (destroyed) return stateResponse(false, "更新服务已关闭");
         if (downloadActive || "downloading".equals(liteState)) return stateResponse(true, "正在下载更新");
         if (liteChecking) return stateResponse(true, "正在检查更新");
@@ -129,6 +162,10 @@ final class AutoUpdater {
                     liteState = "available";
                     liteMessage = architectureUpgrade
                             ? "可升级到 64 位版本" : "发现新版本 " + update.versionName;
+                    if (popup) activity.runOnUiThread(() -> {
+                        if (popupEnabled(activity) && importantUpdate == null)
+                            showUpdatePrompt(update, true);
+                    });
                 } catch (Exception error) {
                     liteState = "error";
                     liteMessage = "检查失败：" + readableMessage(error);
@@ -201,7 +238,7 @@ final class AutoUpdater {
 
     private UpdateInfo loadUpdateInfo(String manifestUrl, boolean allowArchitectureUpgrade)
             throws IOException, JSONException {
-        String json = readManifest(manifestUrl);
+        String json = manifestReader == null ? readManifest(manifestUrl) : manifestReader.read(manifestUrl);
 
         JSONObject object = new JSONObject(json);
         return parseUpdateInfo(object, allowArchitectureUpgrade);
@@ -334,11 +371,14 @@ final class AutoUpdater {
                 && Build.SUPPORTED_64_BIT_ABIS.length > 0;
     }
 
-    private void showUpdatePrompt(final UpdateInfo update) {
-        if (destroyed || promptShowing || downloadActive || activity.isFinishing()) {
+    private void showUpdatePrompt(final UpdateInfo update, boolean optional) {
+        if (optional && (!popupEnabled(activity) || importantUpdate != null)) return;
+        if (!optional && optionalPrompt && promptDialog != null) promptDialog.dismiss();
+        if (!canShowDialog() || promptShowing || downloadActive) {
             return;
         }
         promptShowing = true;
+        optionalPrompt = optional;
         String notes = update.releaseNotes.length() == 0 ? "包含功能改进和问题修复。"
                 : update.releaseNotes;
         String title = update.architectureUpgrade
@@ -398,7 +438,20 @@ final class AutoUpdater {
                 }
             }
         });
-        dialog.show();
+        if(!showDialog(dialog)){promptShowing=false;promptDialog=null;}
+    }
+
+    private boolean canShowDialog(){
+        return !destroyed&&!activity.isFinishing()
+                &&(Build.VERSION.SDK_INT<17||!activity.isDestroyed())
+                &&activity.getWindow()!=null&&activity.getWindow().getDecorView().getWindowToken()!=null;
+    }
+    private boolean showDialog(android.app.Dialog dialog){
+        if(!canShowDialog())return false;
+        try{dialog.show();return true;}
+        catch(android.view.WindowManager.BadTokenException|IllegalStateException stale){
+            AppLog.w("AutoUpdater","Activity window unavailable for update dialog",stale);return false;
+        }
     }
 
     private void downloadUpdate(final UpdateInfo update) {
@@ -406,7 +459,7 @@ final class AutoUpdater {
     }
 
     private void downloadUpdate(final UpdateInfo update, boolean showProgress) {
-        if (downloadActive) return;
+        if (destroyed || downloadActive) return;
         downloadActive = true;
         if (showProgress) {
         progressDialog = new ProgressDialog(activity);
@@ -415,7 +468,7 @@ final class AutoUpdater {
         progressDialog.setIndeterminate(true);
         progressDialog.setCancelable(false);
         progressDialog.setMax(100);
-        progressDialog.show();
+        if(!showDialog(progressDialog))progressDialog=null;
         }
 
         new Thread(new Runnable() {

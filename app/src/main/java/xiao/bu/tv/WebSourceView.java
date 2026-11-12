@@ -200,7 +200,8 @@ public final class WebSourceView extends FrameLayout {
     private String userAgentPageUrl = "";
     private String browserVersionMode = "native";
     private volatile String activeUserAgent = WINDOWS_USER_AGENT;
-    private boolean loadImages = true;
+    private volatile boolean loadImages = true;
+    private static Boolean rendererImagePolicy;
     private boolean adBlockEnabled = false;
     private boolean webRtcEnabled;
     private boolean userScriptEnabled;
@@ -336,9 +337,9 @@ public final class WebSourceView extends FrameLayout {
     @SuppressLint("SetJavaScriptEnabled")
     public WebSourceView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        // Keep the disposable host for older systems. Android 7+ uses the
-        // embedded browser so channel navigation reuses its WebView and native
-        // playback menus stay in the same window above the playing page.
+        SharedWebResources.install(context);
+        // Systems without renderer termination callbacks use a disposable host.
+        // API 26+ can recover its embedded browser after a renderer exits.
         legacy = getResources().getBoolean(R.bool.legacy_web_activity_enabled)
                 && !(context instanceof LegacyWebActivity)
                 ? new LegacyWebSession(this) : null;
@@ -391,8 +392,7 @@ public final class WebSourceView extends FrameLayout {
                 releaseRetainedWebViews(true);
                 loadImages = enabled;
                 if (webView != null) {
-                    webView.getSettings().setLoadsImagesAutomatically(enabled);
-                    webView.getSettings().setBlockNetworkImage(!enabled);
+                    configureImagePolicy(webView);
                 }
                 notifyBrowserPoliciesChanged();
                 reloadPage();
@@ -457,12 +457,17 @@ public final class WebSourceView extends FrameLayout {
             browserUserAgent = settings.getUserAgentString();
         }
         activeUserAgent = userAgentForMode(WebSiteProfile.userAgentMode(userAgentMode, userAgentPageUrl), browserVersionMode);
-        configureWebViewSettings(settings);
+        configureWebViewSettings(nextWebView);
         nextWebView.setPivotX(0f);
         nextWebView.setPivotY(0f);
         nextWebView.setInitialScale(cssInitialScalePercent());
 
         ((BrowserWebView) nextWebView).browserChromeClient = new WebChromeClient() {
+            @Override public boolean onJsPrompt(WebView view,String url,String message,String value,android.webkit.JsPromptResult result){
+                if(((BrowserWebView)view).sharedProfile.prompt(url,message,value,result))return true;
+                return super.onJsPrompt(view,url,message,value,result);
+            }
+
             @Override
             public void onReceivedTitle(WebView view, String title) {
                 if (isActiveDocument(view)) {
@@ -609,6 +614,7 @@ public final class WebSourceView extends FrameLayout {
     /** WebView with native mouse handling and per-tab page policies. */
     private final class BrowserWebView extends WebView {
         final DesktopWebProfile desktopPolicy = new DesktopWebProfile(this);
+        final WebProfileSession sharedProfile = new WebProfileSession(getContext(),this,()->retryProfileRestore(this));
         final WebPageScriptManager pagePolicy = new WebPageScriptManager(this);
         private Boolean pageResumed;
         private WebViewShutdown shutdown;
@@ -778,7 +784,18 @@ public final class WebSourceView extends FrameLayout {
         dispatchWindowVisibilityChanged(getWindowVisibility());
     }
 
-    private void configureWebViewSettings(WebSettings settings) {
+    private void configureImagePolicy(WebView view) {
+        // Chromium can satisfy decoded images from RAM without invoking the
+        // response callback. Evict that RAM cache only when the policy changes;
+        // keep HTTP disk/shared caches and normal channel switches intact.
+        if(rendererImagePolicy!=null&&rendererImagePolicy.booleanValue()!=loadImages)view.clearCache(false);
+        rendererImagePolicy=loadImages;
+        view.getSettings().setLoadsImagesAutomatically(true);
+        view.getSettings().setBlockNetworkImage(false);
+    }
+
+    private void configureWebViewSettings(WebView view) {
+        WebSettings settings=view.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setSupportMultipleWindows(true);
@@ -802,8 +819,7 @@ public final class WebSourceView extends FrameLayout {
             // muted autoplay even when their own volume preference is audible.
             settings.setMediaPlaybackRequiresUserGesture(!autoPlayEnabled);
         }
-        settings.setLoadsImagesAutomatically(loadImages);
-        settings.setBlockNetworkImage(!loadImages);
+        configureImagePolicy(view);
         settings.setUserAgentString(activeUserAgent);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
@@ -877,7 +893,7 @@ public final class WebSourceView extends FrameLayout {
         if (retained == null) return false;
         webView = retained;
         retained.setVisibility(View.VISIBLE);
-        configureWebViewSettings(retained.getSettings());
+        configureWebViewSettings(retained);
         retained.setInitialScale(cssInitialScalePercent());
 
         sourceClient = new SourceClient();
@@ -1031,6 +1047,7 @@ public final class WebSourceView extends FrameLayout {
         sourceClient.awaitDocument(url);
         WebViewRecovery.attach(webView, sourceClient, this::onRendererGone);
         activeUserAgent = userAgentForMode(WebSiteProfile.userAgentMode(userAgentMode, url), browserVersionMode);
+        activeUserAgent=SharedWebProfile.userAgent(getContext(),url,userAgentMode,browserVersionMode,activeUserAgent,true);
         if (!activeUserAgent.equals(webView.getSettings().getUserAgentString()))
             webView.getSettings().setUserAgentString(activeUserAgent);
         updateDesktopProfile();
@@ -1637,8 +1654,7 @@ public final class WebSourceView extends FrameLayout {
         activeUserAgent = nextUserAgent;
         if (webView != null) {
             WebSettings settings = webView.getSettings();
-            settings.setLoadsImagesAutomatically(loadImages);
-            settings.setBlockNetworkImage(!loadImages);
+            configureImagePolicy(webView);
             settings.setUserAgentString(activeUserAgent);
             webView.setInitialScale(cssInitialScalePercent());
         }
@@ -1805,6 +1821,7 @@ public final class WebSourceView extends FrameLayout {
             String channelTitle, String channelGroup) {
         if (legacy != null) { legacy.open(newRequestId, url, pageScript, htmlMimeOverride,
                 channelTitle, channelGroup); return; }
+        profileRestoreRetries=0;
         String entryUrl = url;
         WebSourceOptions options = WebSourceOptions.parse(url, pageScript);
         url = options.url;
@@ -1828,6 +1845,14 @@ public final class WebSourceView extends FrameLayout {
 
     private void openPage(int newRequestId, String url) {
         loadPage(newRequestId, url);
+    }
+
+    private int profileRestoreRetries;
+    private void retryProfileRestore(BrowserWebView failed){
+        if(failed!=webView||!pageActive||destroyed)return;
+        if(profileRestoreRetries++>=1){failed.loadUrl(pageUrl);return;}
+        int id=requestId;String url=pageUrl;
+        failed.sharedProfile.close();destroyCurrentWebView();loadPage(id,url);
     }
 
     private void loadPage(int newRequestId, String url) {
@@ -1948,7 +1973,7 @@ public final class WebSourceView extends FrameLayout {
         }
         if (!reuseRetainedTab
                 && (!restoreTab || webView.restoreState(targetTab.state) == null)) {
-            webView.loadUrl(url);
+            ((BrowserWebView)webView).sharedProfile.load(url);
         }
         if (enteringPage) setPageCovered(defaultPageCovered);
         else updatePageCover();
@@ -2145,9 +2170,21 @@ public final class WebSourceView extends FrameLayout {
         }, 750L);
     }
 
+    boolean flushSharedProfile(Runnable done){
+        if(legacy!=null){if(!legacy.active||legacy.browser==null)return false;legacy.flushProfile(done);return true;}
+        if(!(webView instanceof BrowserWebView)||!pageActive||!((BrowserWebView)webView).sharedProfile.active())return false;
+        ((BrowserWebView)webView).sharedProfile.flush(done);return true;
+    }
+
+    void closePageForWebSwitch() {
+        if (legacy != null) { legacy.closeForWebSwitch(); setVisibility(View.GONE); }
+        else closePage();
+    }
+
     void closePage() {
         if (interactiveFallbackTask != null) removeCallbacks(interactiveFallbackTask);
         if (legacy != null) { legacy.close(); setVisibility(View.GONE); return; }
+        if(webView instanceof BrowserWebView)((BrowserWebView)webView).sharedProfile.close();
         releaseRetiredWebViews();
         tabBar.dismissTransientPanels();
         dismissSmartContextPopup();
@@ -2263,21 +2300,14 @@ public final class WebSourceView extends FrameLayout {
     }
 
     private String userAgentForMode(String mode, String versionMode) {
-        if (DesktopWebProfile.isDesktop(mode)) {
-            return DesktopWebProfile.userAgent(mode, browserUserAgent, versionMode);
-        }
-        if ("ipad".equals(mode)) {
-            return DesktopWebProfile.ipadUserAgent(browserUserAgent, versionMode);
-        }
-        if ("native".equals(mode)) {
-            return browserUserAgent;
-        }
-        return WINDOWS_USER_AGENT;
+        String proposed=DesktopWebProfile.isDesktop(mode)?DesktopWebProfile.userAgent(mode,browserUserAgent,versionMode)
+                :"ipad".equals(mode)?DesktopWebProfile.ipadUserAgent(browserUserAgent,versionMode):"native".equals(mode)?browserUserAgent:WINDOWS_USER_AGENT;
+        return browserUserAgent==null?proposed:SharedWebProfile.userAgent(getContext(),userAgentPageUrl,mode,versionMode,proposed,false);
     }
 
     private void updateDesktopProfile() {
         if (desktopProfile != null) {
-            desktopProfile.update(WebSiteProfile.userAgentMode(userAgentMode, userAgentPageUrl), browserUserAgent, browserVersionMode,
+            desktopProfile.update(WebSiteProfile.userAgentMode(userAgentMode, userAgentPageUrl), activeUserAgent, browserVersionMode,
                     viewportWidth, viewportHeight, effectivePageScale());
         }
     }
@@ -3131,6 +3161,21 @@ public final class WebSourceView extends FrameLayout {
                 new ByteArrayInputStream(new byte[0]));
     }
 
+    private static WebResourceResponse blankImageResponse(java.util.Map<String,String> requestHeaders) {
+        WebResourceResponse response=new WebResourceResponse("image/png",null,BlankWebImage.open());
+        if(Build.VERSION.SDK_INT>=21){
+            java.util.Map<String,String> headers=new java.util.HashMap<>();
+            headers.put("Cache-Control","no-store");
+            headers.put("Content-Length",String.valueOf(BlankWebImage.length()));
+            String origin=BlankWebImage.header(requestHeaders,"Origin");
+            headers.put("Access-Control-Allow-Origin",origin==null?"*":origin);
+            if(origin!=null)headers.put("Access-Control-Allow-Credentials","true");
+            response.setStatusCodeAndReasonPhrase(200,"OK");
+            response.setResponseHeaders(headers);
+        }
+        return response;
+    }
+
     private final class SourceClient extends WebViewClient {
         // Interception runs off the UI thread: never inspect Views or mutable Tab state there.
         private volatile boolean requestAdBlockEnabled;
@@ -3237,6 +3282,7 @@ public final class WebSourceView extends FrameLayout {
 
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
+            if(((BrowserWebView)view).sharedProfile.bootstrap(url)||((BrowserWebView)view).sharedProfile.bootstrapDocument())return;
             if (this != sourceClient || view != webView || !pageActive || requestId < 0 || isBlankPage(url)) {
                 return;
             }
@@ -3246,6 +3292,7 @@ public final class WebSourceView extends FrameLayout {
             if (awaitingDocument && navigationDocument(url).equals(replacedDocument)
                     && !navigationDocument(url).equals(expectedDocument)) return;
             awaitingDocument = false;
+            ((BrowserWebView)view).sharedProfile.document(url);
             tabBar.dismissTransientPanels();
             pageUrl = url;
             tabBar.updateActive(url, null);
@@ -3284,12 +3331,14 @@ public final class WebSourceView extends FrameLayout {
 
         @Override
         public void onPageFinished(WebView view, String url) {
+            if(((BrowserWebView)view).sharedProfile.bootstrap(url)||((BrowserWebView)view).sharedProfile.bootstrapDocument())return;
             if (this != sourceClient || view != webView || !pageActive || requestId < 0 || isBlankPage(url)) {
                 return;
             }
             if (!url.equals(view.getUrl())) return;
             if (awaitingDocument) return;
             pageUrl = url;
+            ((BrowserWebView)view).sharedProfile.document(url);
             observeDocumentMedia(view, this);
             if (Build.VERSION.SDK_INT < 23) releaseRetiredAfterStablePage(view);
             // onPageFinished does not guarantee that a new favicon arrived.
@@ -3374,6 +3423,8 @@ public final class WebSourceView extends FrameLayout {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+            if(this==sourceClient&&view==webView&&pageActive&&!loadImages
+                    &&BlankWebImage.matches(url,"GET",sameDocument(url,mainDocumentUrl),null))return blankImageResponse(null);
             if (requestAdBlockEnabled && !sameDocument(url, mainDocumentUrl)
                     && WebAdBlocker.shouldBlock(url)) return blockedResponse();
             if (this != sourceClient || view != webView || !pageActive) return null;
@@ -3392,7 +3443,7 @@ public final class WebSourceView extends FrameLayout {
                             view.loadUrl(target);
                         }));
             }
-            return null;
+            return SharedWebResources.intercept(getContext(),url,mainDocumentUrl,activeUserAgent,null,false);
         }
 
         @TargetApi(21)
@@ -3401,6 +3452,8 @@ public final class WebSourceView extends FrameLayout {
                 WebResourceRequest request) {
             if (request == null) return null;
             String url = request.getUrl() == null ? null : request.getUrl().toString();
+            if(this==sourceClient&&view==webView&&pageActive&&!loadImages
+                    &&BlankWebImage.matches(url,request.getMethod(),request.isForMainFrame(),request.getRequestHeaders()))return blankImageResponse(request.getRequestHeaders());
             if (requestAdBlockEnabled && !request.isForMainFrame()
                     && WebAdBlocker.shouldBlock(url)) return blockedResponse();
             if (this != sourceClient || view != webView || !pageActive) {
@@ -3415,7 +3468,8 @@ public final class WebSourceView extends FrameLayout {
                 }
                 observeResource(view, this, url, referer);
             }
-            return null;
+            if(!"GET".equals(request.getMethod()))return null;
+            return SharedWebResources.intercept(getContext(),url,mainDocumentUrl,activeUserAgent,request.getRequestHeaders(),request.isForMainFrame());
         }
 
         private WebResourceResponse interceptConfirmedHtml(WebView view, String url) {

@@ -39,12 +39,14 @@ static class Web {int fullscreen;void showPlaybackFullscreen(){fullscreen++;}Str
 static class Toast {static final int LENGTH_SHORT=0,LENGTH_LONG=1;static String text;
  static Toast makeText(Object c,String t,int duration){text=t;return new Toast();}void show(){}}
 static class Log {static void i(String t,String message){}static void w(String t,String message){}}
+static class AppLog extends Log {}
 Map<String,SniffedResource> sniffedResources=new HashMap<>();Object sniffedResourcesSnapshot;
 SniffedResource pendingSniffedResource;String pendingSniffedPageKey="";boolean pendingSniffedAutomatic;
 Probe sniffedMediaProbe=new Probe();Web webSourceView=new Web();int playRequestId=1,opened;
 int webOriginalFallbackRequestId=-1;boolean finishing;boolean isFinishing(){return finishing;}
 Runnable liteWebFallback;boolean playingDiscoveredWebStream,playingSniffedAutomatic,restore=true;
 boolean retryLegacyGdtvPlayback(String reason){return false;}
+void stopFailedLitePlayback(String reason){}
 SniffedResource playingSniffedResource;String playingSniffedTitle="test";
 void cancelSniffedOpenTimeout(){}void cancelCustomSourceTimeout(){}void abortChannelSwitchAnimation(){}
 boolean canReturnToSniffedPage(){return true;}void closeChannelList(){}void closeManagementPanel(){}

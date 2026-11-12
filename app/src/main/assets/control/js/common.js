@@ -85,6 +85,7 @@ function refresh() {
 }
 function suspendPage() {
   pageActive = false;
+  if (typeof onPageSuspended === "function") onPageSuspended();
   stateRequestSequence++;
   var flight = stateRequest;
   stateRequest = null;

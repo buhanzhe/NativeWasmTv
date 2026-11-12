@@ -35,6 +35,7 @@ final class BrowserCacheClear {
         if (!running.compareAndSet(false,true)) { result.busy=true;return result; }
         try {
             Map<String,Long> before=snapshot(context);result.before=total(before);
+            SharedWebResources.clear(context);
             CountDownLatch done=new CountDownLatch(1);String[] error={null};
             new Handler(Looper.getMainLooper()).post(()->{
                 try { action.run(value->{error[0]=value;done.countDown();}); }
@@ -70,7 +71,7 @@ final class BrowserCacheClear {
     private static Map<String,Long> snapshot(Context c){
         Map<String,Long> files=new HashMap<>();
         collect(c.getDir("webview",Context.MODE_PRIVATE),false,files);
-        for(String name:new String[]{"webview","WebView","webviewCacheChromium","browser"})collect(new File(c.getCacheDir(),name),true,files);
+        for(String name:new String[]{"webview","WebView","webviewCacheChromium","browser","web-resource-http-cache","lite-http-cache"})collect(new File(c.getCacheDir(),name),true,files);
         return files;
     }
     private static void collect(File file,boolean cache,Map<String,Long> files){

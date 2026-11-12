@@ -391,11 +391,27 @@
                     android:textSize="13sp"
                     tools:ignore="HardcodedText" />
 
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:orientation="horizontal">
+                <ListView
+                    android:id="@+id/epg_date_list"
+                    android:layout_width="68dp"
+                    android:layout_height="match_parent"
+                    android:visibility="gone"
+                    android:choiceMode="singleChoice"
+                    android:focusableInTouchMode="true"
+                    android:scrollbars="none"
+                    android:divider="@android:color/transparent"
+                    android:dividerHeight="4dp"
+                    android:listSelector="@drawable/channel_item_background" />
                 <ListView
                     android:id="@+id/epg_list"
                     android:scrollbars="none"
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
                     android:layout_weight="1"
                     android:choiceMode="singleChoice"
                     android:clipToPadding="false"
@@ -405,6 +421,7 @@
                     android:listSelector="@drawable/channel_item_background"
                     android:paddingTop="0dp"
                     android:paddingBottom="0dp" />
+                </LinearLayout>
             </LinearLayout>
 
         </LinearLayout>

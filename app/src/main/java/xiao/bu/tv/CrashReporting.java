@@ -63,7 +63,9 @@ final class CrashReporting {
     }
 
     static synchronized void startIfAllowed(Context context) {
-        if (started || Build.VERSION.SDK_INT < 15) return;
+        // Instrumentation and developer assertions belong in local logs, not
+        // the production crash/ANR totals. Release packages keep all monitors.
+        if (started || BuildConfig.DEBUG || Build.VERSION.SDK_INT < 15) return;
         try {
             // Separate class keeps the SDK out of the API 14 verification path.
             Sdk.start(context.getApplicationContext());
@@ -103,7 +105,9 @@ final class CrashReporting {
             strategy.setEnableANRCrashMonitor(true);
             strategy.setEnableUserInfo(false);
             strategy.setBuglyLogUpload(true);
-            strategy.setEnableCatchAnrTrace(false);
+            // Collect the system trace when an ANR occurs. Keep continuous main-
+            // thread stack sampling disabled on low-resource devices.
+            strategy.setEnableCatchAnrTrace(true);
             strategy.setEnableRecordAnrMainStack(false);
             strategy.setAppReportDelay(20000L);
             CrashReport.initCrashReport(context, "80f289fe97", false, strategy);

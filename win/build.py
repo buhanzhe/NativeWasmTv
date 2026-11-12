@@ -45,6 +45,7 @@ def main():
     p.add_argument('--player', type=Path, required=True)
     p.add_argument('--jdk', type=Path, required=True, help='Target JDK 17 (Windows JDK for Windows packages)')
     p.add_argument('--launcher-cc', default=os.environ.get('CC','gcc'))
+    p.add_argument('--output', type=Path, help='Build directory (defaults to win/out/<target>)')
     p.add_argument('--no-runtime', action='store_true', help='Development Linux smoke-test layout only')
     a = p.parse_args()
     if a.no_runtime and a.target != 'linux':
@@ -52,12 +53,17 @@ def main():
     core = a.core_output.resolve()
     playlist = HERE/'playlists/webview.txt'
     playlist_info = json.loads((HERE/'playlists/webview.source.json').read_text(encoding='utf-8'))
-    if hashlib.sha256(playlist.read_bytes()).hexdigest() != playlist_info['sha256']:
+    playlist_bytes=playlist.read_bytes()
+    if hashlib.sha256(playlist_bytes).hexdigest()!=playlist_info['sha256']:
+        # Git's Windows checkout may normalize LF to CRLF. Accept only the
+        # exact pinned upstream bytes after reversing that normalization.
+        playlist_bytes=playlist_bytes.replace(b'\r\n',b'\n')
+    if hashlib.sha256(playlist_bytes).hexdigest() != playlist_info['sha256']:
         raise RuntimeError('Bundled playlist differs from its recorded source snapshot')
     native = 'ntvLiteDesktop.dll' if a.target=='windows' else 'libntvLiteDesktop.so'
     if a.target=='windows':
         pe_x64(core/native); pe_x64(a.player); pe_x64(a.jdk/'bin/java.exe')
-    output = HERE/'out'/a.target
+    output = a.output.resolve() if a.output else HERE/'out'/a.target
     output.mkdir(parents=True,exist_ok=True)
     bundle = output/'NativeWasmTv-win-x64'
     if bundle.exists():
@@ -71,19 +77,24 @@ def main():
     player.mkdir()
     shutil.copy2(a.player,player/('ffplay.exe' if a.target=='windows' else 'ffplay'))
     shutil.copytree(HERE/'playlists',bundle/'playlists')
+    (bundle/'playlists/webview.txt').write_bytes(playlist_bytes)
     shutil.copy2(HERE/'README.md',bundle/'README.md')
     shutil.copy2(HERE/'VALIDATION.md',bundle/'VALIDATION.md')
     classes = output/'classes'
     if classes.exists(): shutil.rmtree(classes)
     classes.mkdir()
     cp = os.pathsep.join(str(x) for x in [core/'litecore.jar',*sorted((core/'lib').glob('*.jar'))])
-    run(['javac','--release','17','-encoding','UTF-8','-cp',cp,'-d',classes,*sorted((HERE/'src').rglob('*.java'))])
+    host_sources=[ROOT/'app/src/main/java/xiao/bu/tv'/(name+'.java') for name in ['WebSiteCompatibility','LiteApiClock','LiteLiveMediaPolicy']]
+    run(['javac','--release','17','-encoding','UTF-8','-cp',cp,'-d',classes,*sorted((HERE/'src').rglob('*.java')),*host_sources])
+    shutil.copytree(ROOT/'app/src/main/assets/userscripts',classes/'userscripts')
     manifest = output/'MANIFEST.MF'
     manifest.write_text('Manifest-Version: 1.0\nMain-Class: xiao.bu.tv.windows.WindowsTv\nClass-Path: litecore.jar lib/json-20180813.jar lib/okhttp-3.12.13.jar\n  lib/okio-1.17.5.jar\n\n')
     run(['jar','--create','--file',app/'ntv-tv.jar','--manifest',manifest,'-C',classes,'.'])
     if not a.no_runtime:
+        modules='java.desktop,java.management,java.xml,java.naming,jdk.management,jdk.crypto.ec,jdk.charsets,jdk.unsupported,jdk.httpserver'
+        if a.target=='windows':modules+=',jdk.crypto.mscapi'
         run(['jlink','--module-path',a.jdk/'jmods','--add-modules',
-             'java.desktop,java.management,java.xml,java.naming,jdk.management,jdk.crypto.ec,jdk.charsets,jdk.unsupported,jdk.httpserver',
+             modules,
              '--strip-debug','--no-header-files','--no-man-pages','--compress=2','--output',bundle/'runtime'])
     if a.target=='windows':
         run([a.launcher_cc,'-O2','-s','-Wl,--no-insert-timestamp','-municode','-mwindows',HERE/'native/launcher.c','-o',bundle/'NativeWasmTv.exe'])

@@ -113,5 +113,8 @@
             android:authorities="${applicationId}.apk"
             android:exported="false"
             android:grantUriPermissions="true" />
+        <provider android:name=".WebResourceProvider"
+            android:authorities="${applicationId}.webresources"
+            android:exported="false" />
     </application>
 </manifest>

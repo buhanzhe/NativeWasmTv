@@ -1,3 +1,36 @@
+var videoRenderModeSaving = false, videoRenderModeStateAfter = -1;
+function renderVideoRenderMode() {
+  var input = document.getElementById("videoRenderMode");
+  if (!input) return;
+  if (!videoRenderModeSaving && stateRequestSequence > videoRenderModeStateAfter) input.value = state.settings.videoRenderMode || "surface";
+  input.disabled = videoRenderModeSaving;
+}
+function saveVideoRenderMode() {
+  if (videoRenderModeSaving || !state || !state.settings) return;
+  var value = document.getElementById("videoRenderMode").value;
+  videoRenderModeSaving = true;
+  renderVideoRenderMode();
+  api("/api/settings", {videoRenderMode: value}, function(error) {
+    videoRenderModeStateAfter = stateRequestSequence;
+    videoRenderModeSaving = false;
+    if (!error) state.settings.videoRenderMode = value;
+    document.getElementById("videoRenderMode").value = state.settings.videoRenderMode || "surface";
+    renderVideoRenderMode();
+    toast(error ? error.message : "渲染方式已保存，正在重新加载", !!error);
+    refresh();
+  });
+}
+var continuousTsSaving=false,continuousTsStateAfter=-1;
+function saveContinuousTs(){
+  if(continuousTsSaving||!state||!state.settings||typeof state.settings.continuousTsEnabled!=="boolean")return;
+  var input=document.getElementById("continuousTsEnabled"),value=input.value==="true";
+  continuousTsSaving=true;input.disabled=true;
+  api("/api/settings",{continuousTsEnabled:value},function(error){
+    continuousTsStateAfter=stateRequestSequence;continuousTsSaving=false;input.disabled=false;input.value=String(error?!value:value);
+    if(!error&&state&&state.settings)state.settings.continuousTsEnabled=value;
+    renderPageState();toast(error?error.message:"连续 TS 已"+(value?"开启":"关闭")+"，正在重新播放",!!error);refresh();
+  });
+}
 var fullscreenSaving=false,fullscreenStateAfter=-1;
 function saveFullscreenStartup(){
   if(fullscreenSaving||!state||!state.settings||typeof state.settings.fullscreenStartup!=="boolean")return;
@@ -46,6 +79,7 @@ function saveBackgroundPlayback(){
 }
 var playerEngineSaving = false;
 function renderPlayerEngine() {
+  renderVideoRenderMode();
   var select = document.getElementById("playerEngine");
   if (!playerEngineSaving) select.value = state.settings.playerEngine || "ijk";
   select.disabled = playerEngineSaving;
@@ -146,6 +180,10 @@ function renderPageState() {
   document.getElementById("decoder").value = s.decodeMode || "auto";
   document.getElementById("hdrMode").value = s.hdrMode === "hardware_sdr" ? "mapping" : s.hdrMode === "passthrough" ? "hardware" : s.hdrMode || "hardware";
   document.getElementById("rtspTransport").value = s.rtspTransport || "tcp";
+  if(!continuousTsSaving){
+    var continuous=document.getElementById("continuousTsEnabled");continuous.disabled=typeof s.continuousTsEnabled!=="boolean";
+    if(!continuous.disabled&&stateRequestSequence>continuousTsStateAfter)continuous.value=String(s.continuousTsEnabled);
+  }
   document.getElementById("spsCompatibility").value = String(s.h264SpsCompatibility !== false);
   renderHardwareDecoders();
   renderPlayerEngine();

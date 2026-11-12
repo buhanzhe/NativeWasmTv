@@ -67,6 +67,7 @@ final class WebViewShutdown {
                     String message, JsResult result) { result.confirm(); return true; }
             @Override public boolean onJsAlert(WebView v, String url,
                     String message, JsResult result) { result.cancel(); return true; }
+            @Override public boolean onJsPrompt(WebView v,String url,String message,String value,android.webkit.JsPromptResult result){result.cancel();return true;}
             @Override public boolean onJsConfirm(WebView v, String url,
                     String message, JsResult result) { result.cancel(); return true; }
         });

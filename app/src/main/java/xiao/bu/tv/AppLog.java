@@ -22,6 +22,7 @@ public final class AppLog {
     private static long dropped;
     private static volatile String failure = "";
     private static volatile boolean nativeAvailable;
+    private static boolean ijkLogConfigured;
     private AppLog() { }
 
     private static final class Entry {
@@ -83,6 +84,11 @@ public final class AppLog {
                 catch (LinkageError unavailable) { w("AppLog", "IJK direct log capture unavailable", unavailable); }
             }
             tv.danmaku.ijk.media.player.IjkMediaPlayer.loadLibrariesOnce(null);
+            if (!ijkLogConfigured) {
+                ijkLogConfigured = true;
+                tv.danmaku.ijk.media.player.IjkMediaPlayer.native_setLogLevel(
+                        tv.danmaku.ijk.media.player.IjkMediaPlayer.IJK_LOG_INFO);
+            }
         }
     }
     public static void appendNative(int level, byte[] message) {

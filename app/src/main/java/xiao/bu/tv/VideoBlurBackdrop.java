@@ -19,7 +19,7 @@ final class VideoBlurBackdrop {
     private FrameRateSource frameRateSource;
     void setFrameRateSource(FrameRateSource source) { frameRateSource = source; }
     private boolean hasBars() {
-        android.view.SurfaceView surface = owner.getSurfaceView();
+        android.view.View surface = owner.getRenderView();
         return surface.getWidth() > 0 && surface.getHeight() > 0
                 && (surface.getLeft() > 0 || surface.getTop() > 0
                 || surface.getRight() < owner.getWidth() || surface.getBottom() < owner.getHeight());
@@ -60,7 +60,7 @@ final class VideoBlurBackdrop {
             int w = Math.round(image.getWidth()*scale), h = Math.round(image.getHeight()*scale);
             int x = (owner.getWidth()-w)/2, y = (owner.getHeight()-h)/2;
             target.set(x,y,x+w,y+h);
-            android.view.SurfaceView surface = owner.getSurfaceView();
+            android.view.View surface = owner.getRenderView();
             int saved = canvas.save();
             canvas.clipRect(surface.getLeft(), surface.getTop(), surface.getRight(), surface.getBottom(), Region.Op.DIFFERENCE);
             canvas.drawBitmap(image,null,target,paint);
@@ -71,10 +71,10 @@ final class VideoBlurBackdrop {
     }
     private void capture() {
         if (!enabled || !owner.isShown() || owner.isFrameCovered()
-                || !hasBars() || !owner.isSurfaceReady() || Build.VERSION.SDK_INT < 24) {
+                || !hasBars() || !owner.isSurfaceReady() || (Build.VERSION.SDK_INT < 24 && !owner.isTextureOutput())) {
             pending=false; return;
         }
-        int w=owner.getSurfaceView().getWidth(), h=owner.getSurfaceView().getHeight();
+        int w=owner.getRenderView().getWidth(), h=owner.getRenderView().getHeight();
         if(w<=0 || h<=0) {pending=false;return;}
         if (frameRateSource != null && frameRateSource.frameRate() < 0f) {
             pending = false; captureStarted = SystemClock.uptimeMillis(); schedule(); return;
@@ -90,7 +90,7 @@ final class VideoBlurBackdrop {
                 Math.max(1,Math.round(h*scale)),Bitmap.Config.ARGB_8888);
         // PixelCopy must return to a looper that outlives clear(). A worker
         // stopped during the copy can otherwise lose its callback and bitmap.
-        Api24.copy(owner,sample,ui,result->{
+        owner.copyVideoFrame(sample,ui,result->{
             if(token!=generation){sample.recycle();return;}
             if(result!=0){completeCapture(token,sample,result);return;}
             if(!workerHandler.post(()->{
@@ -131,13 +131,5 @@ final class VideoBlurBackdrop {
             int[] swap=a;a=out;out=swap;
         }
         b.setPixels(a,0,w,0,0,w,h);
-    }
-    private interface Result {void done(int result);}
-    @android.annotation.TargetApi(24) private static final class Api24 {
-        static void copy(DirectVideoView v,Bitmap b,Handler handler,Result result){
-            try {android.view.PixelCopy.request(v.getSurfaceView(),b,result::done,
-                    handler);}
-            catch(IllegalArgumentException e){result.done(-1);}
-        }
     }
 }

@@ -32,7 +32,7 @@ final class SniffedMediaProbe {
         String videoCodec = "--";
         float frameRate;
         VideoStreamDescription videoDescription = VideoStreamDescription.UNKNOWN;
-        boolean manifestKnown, live, bitrateEstimated;
+        boolean manifestKnown, live, bitrateEstimated, hasAudio, hasVideo;
         String variant, sampleSegment;
         double sampleSeconds;
         JSONObject json() throws JSONException {
@@ -49,7 +49,9 @@ final class SniffedMediaProbe {
                 return thread;
             }, new ThreadPoolExecutor.DiscardPolicy());
 
-    SniffedMediaProbe() { worker.allowCoreThreadTimeOut(true); }
+    private final String rtspTransport;
+    SniffedMediaProbe() { this("tcp"); }
+    SniffedMediaProbe(String transport) {rtspTransport="udp".equals(transport)?"udp":"tcp";worker.allowCoreThreadTimeOut(true);}
     void clear() { generation.incrementAndGet(); worker.getQueue().clear(); }
     void close() { clear(); worker.shutdownNow(); }
     void submit(String url, String pageUrl, String agent, String cookies, Callback callback) {
@@ -149,7 +151,8 @@ final class SniffedMediaProbe {
                 player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "timeout", 3000000);
                 // A UDP probe can join after the first SPS/keyframe. Allow the
                 // next GOP before concluding that only the early audio is present.
-                boolean rtp = url.regionMatches(true,0,"rtp://",0,6);
+                boolean rtp = url.regionMatches(true,0,"rtp://",0,6)||url.regionMatches(true,0,"udp://",0,6);
+                if(url.regionMatches(true,0,"rtsp://",0,7))player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,"rtsp_transport",rtspTransport);
                 if (rtp) player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "buffer_size", 1024 * 1024);
                 player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "probesize", rtp ? 4 * 1024 * 1024 : 512 * 1024);
                 player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "analyzeduration", rtp ? 3000000 : 1500000);
@@ -198,6 +201,7 @@ final class SniffedMediaProbe {
 
     private static void applyMeta(Result result, IjkMediaMeta meta) {
         if (meta.mVideoStream == null && meta.mAudioStream == null) return;
+        result.hasAudio=meta.mAudioStream!=null;result.hasVideo=meta.mVideoStream!=null;
         result.status = "ready";
         result.error = "";
         if (!result.manifestKnown) result.durationMs = Math.max(0, meta.mDurationUS / 1000);

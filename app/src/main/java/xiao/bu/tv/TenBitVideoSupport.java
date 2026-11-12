@@ -4,10 +4,32 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.os.Build;
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Advisory only: never changes decoding, playback or source selection. */
 final class TenBitVideoSupport {
     private TenBitVideoSupport() {}
+    interface Callback { void complete(Boolean supported); }
+    private static final class Deferred {
+        // A broken codec service must not create a thread per channel switch.
+        static final ThreadPoolExecutor worker=new ThreadPoolExecutor(1,1,15,TimeUnit.SECONDS,
+                new ArrayBlockingQueue<Runnable>(1),task->{
+                    Thread thread=new Thread(task,"ten-bit-codec-support");
+                    thread.setDaemon(true);thread.setPriority(Thread.MIN_PRIORITY);return thread;
+                },new ThreadPoolExecutor.DiscardOldestPolicy());
+        static {worker.allowCoreThreadTimeOut(true);}
+    }
+    static void checkAsync(String mime,String profile,Callback callback){
+        if(mime.isEmpty()||Build.VERSION.SDK_INT<16)return;
+        try{Deferred.worker.execute(()->{
+            Boolean supported;
+            try{supported=hasHardwareDecoder(mime,profile);}
+            catch(LinkageError unavailable){supported=null;}
+            callback.complete(supported);
+        });}catch(RuntimeException unavailable){/* Advisory only; playback continues. */}
+    }
 
     static boolean isTenBit(String pixelFormat, String profile) {
         String pixels = normalize(pixelFormat);

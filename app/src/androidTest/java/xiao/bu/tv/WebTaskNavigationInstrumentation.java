@@ -65,7 +65,7 @@ public class WebTaskNavigationInstrumentation extends Instrumentation {
     @Override public void onCreate(Bundle args){start();}
     @Override public void onStart(){Bundle result=new Bundle();JSONObject report=new JSONObject();int code=-1;ServerSocket server=null;ChannelCatalog.Group[] savedGroups=ChannelCatalog.GROUPS;SharedPreferences prefs=getTargetContext().getSharedPreferences("tv_player",0);Map<String,?> saved=new HashMap<>(prefs.getAll());
         try{
-            if(Build.VERSION.SDK_INT<24)throw new AssertionError("Embedded-task test requires Android 7+");
+            if(Build.VERSION.SDK_INT<26)throw new AssertionError("Embedded-task test requires Android 8+; API 24/25 use the isolated browser");
             server=new ServerSocket(0,16,InetAddress.getByName("127.0.0.1"));final ServerSocket fixture=server;
             new Thread(()->{while(!fixture.isClosed())try(Socket peer=fixture.accept()){
                 peer.setSoTimeout(3000);BufferedReader in=new BufferedReader(new InputStreamReader(peer.getInputStream(),"UTF-8"));String line;while((line=in.readLine())!=null&&!line.isEmpty()){if(line.toLowerCase(java.util.Locale.US).startsWith("user-agent:"))fixtureUserAgent=line.substring(11).trim();}
@@ -91,7 +91,7 @@ public class WebTaskNavigationInstrumentation extends Instrumentation {
             main(()->{Set<String> unavailable=(Set<String>)field(activity,"unavailableWebChannels");unavailable.add("0:0");unavailable.add("0:1");call("recoverUnavailableWebChannel",new Class<?>[]{int.class,String.class},(Integer)field(activity,"playRequestId"),"all unavailable fixture");});checkpoint("all-channels-unavailable",task);
             liteCoverChecks(a,report);checkpoint("lite-cover",task);
             boolean legacyEnabled=getTargetContext().getPackageManager().getActivityInfo(new ComponentName(getTargetContext(),LegacyWebActivity.class),android.content.pm.PackageManager.GET_DISABLED_COMPONENTS).enabled;
-            report.put("legacyActivityEnabled",legacyEnabled);if(legacyEnabled)throw new AssertionError("Legacy task Activity remains enabled on Android 7+");
+            report.put("legacyActivityEnabled",legacyEnabled);if(legacyEnabled)throw new AssertionError("Legacy task Activity remains enabled on Android 8+");
             report.put("passed",true).put("taskId",task);
         }catch(Throwable error){code=0;try{report.put("passed",false).put("failure",android.util.Log.getStackTraceString(error));}catch(Exception ignored){}}
         finally{if(server!=null)try{server.close();}catch(IOException ignored){}try{if(activity!=null){main(()->{call("stopCurrentChannelLoad");activity.finish();});long until=SystemClock.elapsedRealtime()+3000;while(!activity.isDestroyed()&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(50);}}catch(Exception ignored){}if(mainMonitor!=null)removeMonitor(mainMonitor);if(webMonitor!=null)removeMonitor(webMonitor);ChannelCatalog.GROUPS=savedGroups;restore(prefs,saved);try{report.put("preferencesRestored",saved.equals(prefs.getAll())).put("sdk",Build.VERSION.SDK_INT).put("model",Build.MODEL).put("stages",stages);File dir=new File(getTargetContext().getExternalFilesDir(null),"web-task");dir.mkdirs();try(FileOutputStream out=new FileOutputStream(new File(dir,"result.json"))){out.write(report.toString(2).getBytes("UTF-8"));}result.putString("stream",report.toString());}catch(Exception ignored){}finish(code,result);}

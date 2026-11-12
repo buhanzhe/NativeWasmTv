@@ -28,6 +28,9 @@ public class ProgressiveCheck {
    check(sizes.size()==4);check(Arrays.equals(read(b.open()),cached));check(Arrays.equals(read(b.open()),cached));check(cached.length==source.length);
    int cc=4;for(int i=0;i<cached.length;i+=188){int pid=((cached[i+1]&31)<<8)|(cached[i+2]&255);if(pid==256){cc=(cc+1)&15;check((cached[i+3]&15)==cc);check(cached[i+20]==(byte)(source[i+20]^0x33));}else check(Arrays.equals(Arrays.copyOfRange(source,i,i+188),Arrays.copyOfRange(cached,i,i+188)));}
   }
+  int[] emitted={0};
+  try{new CmgTsStream(decoder,8192).copy(new ByteArrayInputStream(source),p->{emitted[0]++;Thread.currentThread().interrupt();});throw new AssertionError("Cancelled transform completed");}
+  catch(InterruptedIOException expected){check(emitted[0]==1);}finally{Thread.interrupted();}
   ExecutorService pool=Executors.newCachedThreadPool();
   try {
    for(int consumed:new int[]{0,1,187,188,189,375,376}){
@@ -40,11 +43,19 @@ public class ProgressiveCheck {
    }
    ProgressiveMediaBuffer single=new ProgressiveMediaBuffer(1000);byte[] owned=packet(256,true,0);single.append(owned);check(single.finish()==owned);
    ProgressiveMediaBuffer empty=new ProgressiveMediaBuffer(1);check(empty.finish().length==0&&empty.open().read()==-1);
-   ProgressiveMediaBuffer known=new ProgressiveMediaBuffer(1000);known.expectLength(188);check(known.expectedLength()==188);known.append(owned);check(known.finish()==owned);
+   ProgressiveMediaBuffer known=new ProgressiveMediaBuffer(1000);known.expectLength(188);check(known.expectedLength()==188);known.append(owned);check(Arrays.equals(known.finish(),owned));
+   for(int consumed:new int[]{0,1,187,188,189,375,376}){
+    ProgressiveMediaBuffer bounded=new ProgressiveMediaBuffer(1000);bounded.expectLength(564);
+    byte[] one=packet(100,true,0),two=packet(256,true,1),three=packet(257,true,2);
+    bounded.append(one);bounded.append(two);InputStream partial=bounded.open(),independent=bounded.open();
+    byte[] prefix=new byte[consumed];int pos=0;while(pos<consumed)pos+=partial.read(prefix,pos,consumed-pos);
+    bounded.append(three);byte[] body=bounded.finish();check(bounded.finish()==body);
+    check(Arrays.equals(join(prefix,read(partial)),body));check(Arrays.equals(read(independent),body));
+   }
    ProgressiveMediaBuffer shortBody=new ProgressiveMediaBuffer(1000);shortBody.expectLength(376);shortBody.append(owned);try{shortBody.finish();throw new AssertionError();}catch(IOException expected){}
    ProgressiveMediaBuffer longBody=new ProgressiveMediaBuffer(1000);longBody.expectLength(188);try{longBody.append(new byte[376]);throw new AssertionError();}catch(IOException expected){}
-   ProgressiveMediaBuffer b=new ProgressiveMediaBuffer(10000);CountDownLatch blocked=new CountDownLatch(1),release=new CountDownLatch(1);
-   InputStream slow=new ByteArrayInputStream(source){boolean paused;public synchronized int read(byte[] p,int o,int l){if(pos>=188*6&&!paused){paused=true;blocked.countDown();try{release.await();}catch(InterruptedException e){throw new RuntimeException(e);}}return super.read(p,o,l);}};
+   ProgressiveMediaBuffer b=new ProgressiveMediaBuffer(10000);b.expectLength(source.length);CountDownLatch blocked=new CountDownLatch(1),release=new CountDownLatch(1);
+   InputStream slow=new ByteArrayInputStream(source){boolean paused;public synchronized int read(byte[] p,int o,int l){if(pos>=188*6&&!paused){paused=true;blocked.countDown();try{release.await();}catch(InterruptedException e){throw new RuntimeException(e);}}return super.read(p,o,pos<188*6?Math.min(l,188*6-pos):l);}};
    Future<?> producer=pool.submit(()->{try{new CmgTsStream(decoder,8192).copy(slow,b::append);b.finish();}catch(Exception e){throw new RuntimeException(e);}});
    check(blocked.await(2,TimeUnit.SECONDS));check(!producer.isDone());InputStream reader=b.open();byte[] early=new byte[188*5];int n=0;while(n<early.length){int k=reader.read(early,n,early.length-n);check(k>0);n+=k;}check(n==188*5);release.countDown();producer.get(2,TimeUnit.SECONDS);read(reader);
    ProgressiveMediaBuffer failed=new ProgressiveMediaBuffer(1000);Future<?> waiting=pool.submit(()->{try{failed.open().read();throw new AssertionError();}catch(IOException expected){}});failed.fail(new IOException("truncated"));waiting.get(2,TimeUnit.SECONDS);try{failed.finish();throw new AssertionError();}catch(IOException expected){}

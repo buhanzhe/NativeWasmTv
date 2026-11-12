@@ -15,7 +15,7 @@ class Check {
  static class Proxy {boolean finite;boolean finiteMedia(){return finite;}}
  static class AppLog {static void w(String t,String s){}static void w(String t,String s,Throwable e){}}
  static final String TAG="test";
- static boolean LEGACY_TS_COMPATIBILITY_ENABLED;
+ static boolean LEGACY_TS_COMPATIBILITY_ENABLED;boolean continuousTsEnabled=true;
  int playRequestId=7,systemFirstFrameRequestId=-1,starts,recoveries;boolean software,systemVideo;
  Channel legacyHlsCompatibilityChannel;Object catchupProgram;Proxy proxy=new Proxy();AndroidMediaPlayer player=new AndroidMediaPlayer();
  void showLoading(String n,String s){}

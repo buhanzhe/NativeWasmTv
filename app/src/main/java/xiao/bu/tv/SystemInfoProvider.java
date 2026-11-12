@@ -813,6 +813,7 @@ final class SystemInfoProvider {
     }
 
     private List<String> networkAddresses(boolean publicIpv6) {
+        if(!publicIpv6)return LanAddresses.ipv4(AndroidLanAddresses.collect(context));
         LinkedHashSet<String> values = new LinkedHashSet<String>();
         final LinkedHashSet<String> wifiAddresses = new LinkedHashSet<String>();
         final String wifiIp = publicIpv6 ? "" : connectedWifiIpv4();

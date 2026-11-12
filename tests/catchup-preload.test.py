@@ -6,6 +6,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 sources = {
+    'xiao/bu/tv/AppLog.java': '''package xiao.bu.tv;
+final class AppLog {static void loadIjkLibraries(){tv.danmaku.ijk.media.player.IjkMediaPlayer.loadLibrariesOnce(null);}}''',
     'android/os/Looper.java': '''package android.os;
 public class Looper { public static Looper getMainLooper(){return new Looper();} }''',
     'android/os/Handler.java': '''package android.os;

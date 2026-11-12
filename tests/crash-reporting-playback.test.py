@@ -18,7 +18,7 @@ public class CrashReport{
  public static void setCollectPrivacyInfo(Context c,boolean b){}public static void putUserData(Context c,String k,String v){}
  public static void initCrashReport(Context c,String id,boolean debug,UserStrategy s){starts++;}public static void setIsDevelopmentDevice(Context c,boolean b){}
  public static class UserStrategy{
-  public UserStrategy(Context c){}public void setAppVersion(String s){}public void setAppChannel(String s){}public void setEnableNativeCrashMonitor(boolean b){}public void setEnableANRCrashMonitor(boolean b){}public void setEnableUserInfo(boolean b){}public void setBuglyLogUpload(boolean b){if(!b)throw new AssertionError("missing error log attachment");}public void setEnableCatchAnrTrace(boolean b){}public void setEnableRecordAnrMainStack(boolean b){}public void setAppReportDelay(long t){}
+  public UserStrategy(Context c){}public void setAppVersion(String s){}public void setAppChannel(String s){}public void setEnableNativeCrashMonitor(boolean b){if(!b)throw new AssertionError("native monitor disabled");}public void setEnableANRCrashMonitor(boolean b){if(!b)throw new AssertionError("ANR monitor disabled");}public void setEnableUserInfo(boolean b){}public void setBuglyLogUpload(boolean b){if(!b)throw new AssertionError("missing error log attachment");}public void setEnableCatchAnrTrace(boolean b){if(!b)throw new AssertionError("system ANR trace missing");}public void setEnableRecordAnrMainStack(boolean b){if(b)throw new AssertionError("continuous main-stack sampling enabled");}public void setAppReportDelay(long t){}
  }
 }''',
 'xiao/bu/tv/CrashReporting.java':(root/'app/src/main/java/xiao/bu/tv/CrashReporting.java').read_text(encoding='utf8'),
@@ -30,7 +30,8 @@ public class Check{
  static void waitFor(int n)throws Exception{long end=System.currentTimeMillis()+3500;while(CrashReport.errors.size()<n&&System.currentTimeMillis()<end)Thread.sleep(20);check(CrashReport.errors.size()==n,"expected SDK deliveries "+n);}
  public static void main(String[]args)throws Exception{
   Context c=new Context();CrashReporting.startIfAllowed(c);check(CrashReport.starts==0&&!CrashReporting.enabled(),"API14 does not initialize SDK");
-  Build.VERSION.SDK_INT=19;CrashReporting.startIfAllowed(c);check(CrashReport.starts==1&&BuglyLog.cache==16384,"SDK configured once");CrashReporting.startIfAllowed(c);check(CrashReport.starts==1,"duplicate init avoided");
+  Build.VERSION.SDK_INT=19;BuildConfig.DEBUG=true;CrashReporting.startIfAllowed(c);check(CrashReport.starts==0&&!CrashReporting.enabled(),"debug tests do not pollute production reports");
+  BuildConfig.DEBUG=false;CrashReporting.startIfAllowed(c);check(CrashReport.starts==1&&BuglyLog.cache==16384,"SDK configured once");CrashReporting.startIfAllowed(c);check(CrashReport.starts==1,"duplicate init avoided");
   PlayerErrorReports.PlaybackFailure error=new PlayerErrorReports.PlaybackFailure(1,"summary","native details");
   CrashReporting.postPlayerError(error,Thread.currentThread());check(CrashReport.errors.isEmpty(),"early error buffered");
   CrashModule.ready=true;waitFor(1);check(BuglyLog.last.contains("native details")&&BuglyLog.last.contains("[nTvPlayer:1]"),"correlated official SDK log attachment");

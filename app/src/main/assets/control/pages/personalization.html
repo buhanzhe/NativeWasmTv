@@ -54,7 +54,11 @@
     </section>
     <section>
       <h2>播放器</h2>
-      <div class="switch-row"><div class="switch-copy"><b>播放器音量均衡</b><div class="hint">首帧后根据最近三次 TS 分片的实际响度调整，每次切台仅一次；手动调节后记住偏好。适用于 IJK 分片播放，默认关闭。</div></div><input id="playerVolumeBalance" aria-label="播放器音量均衡" type="checkbox" disabled onchange="savePlayerVolumeBalance()" /></div>
+      <div class="switch-row"><div class="switch-copy"><b>播放器音量均衡</b><div class="hint">开始播放后约三秒内按实际响度调整；无声时延长探测。每次切台仅调整一次，手动调节后记住偏好。适用于 IJK 播放，默认关闭。</div></div><input id="playerVolumeBalance" aria-label="播放器音量均衡" type="checkbox" disabled onchange="savePlayerVolumeBalance()" /></div>
+    </section>
+    <section>
+      <h2>更新</h2>
+      <div class="switch-row"><div class="switch-copy"><b>更新弹窗</b><div class="hint">启动后提示可选的新版本；关闭后仍检查必须更新的版本。默认关闭。</div></div><input id="updatePopupEnabled" aria-label="更新弹窗" type="checkbox" disabled onchange="saveUpdatePopup()" /></div>
     </section>
     <section id="backgroundSettings">
       <h2>闪屏设置</h2>
@@ -83,7 +87,7 @@
   <div id="message" class="message"></div>
   <script src="/js/navigation.js?v=20261030-ui"></script>
   <script src="/js/common.js?v=20261030-ui"></script>
-  <script src="/js/pages/personalization.js?v=volume-balance1"></script>
+  <script src="/js/pages/personalization.js?v=update-popup1"></script>
 <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>

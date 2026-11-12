@@ -10,7 +10,11 @@ import android.widget.FrameLayout;
 
 /** Direct video surface, preserving native video resolution independently of the UI layer. */
 public final class DirectVideoView extends FrameLayout implements SurfaceHolder.Callback {
+    static final String RENDER_KEY = "video_render_mode";
     private final SurfaceView surfaceView;
+    private final android.view.TextureView textureView;
+    private final android.view.View renderView;
+    private Surface textureSurface;
     private android.view.View frameCover;
     private SurfaceCallback callback;
     private SurfaceHolder activeHolder;
@@ -40,12 +44,70 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     public DirectVideoView(Context context, AttributeSet attrs) {
         super(context, attrs);
         setWillNotDraw(false);
-        surfaceView = new SurfaceView(context);
-        surfaceView.getHolder().setFormat(PixelFormat.OPAQUE);
-        applySurfaceType();
-        surfaceView.getHolder().addCallback(this);
-        addView(surfaceView, new LayoutParams(-1, -1));
+        boolean texture = "texture".equals(context.getSharedPreferences("tv_player", Context.MODE_PRIVATE)
+                .getString(RENDER_KEY, "surface")) && isHardwareAcceleratedWindow(context);
+        surfaceView = texture ? null : new SurfaceView(context);
+        textureView = texture ? new android.view.TextureView(context) : null;
+        renderView = texture ? textureView : surfaceView;
+        if (texture) {
+            textureView.setOpaque(true);
+            textureView.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture source, int width, int height) {
+                    textureSurface = new Surface(source);
+                    updateBufferSize();
+                    if (callback != null) callback.onVideoSurfaceCreated(null, textureSurface);
+                }
+                @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture source, int width, int height) {
+                    if (android.os.Build.VERSION.SDK_INT >= 17) NativeHdrOutput.surfaceSizeChanged(textureSurface);
+                }
+                @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture source) {
+                    blur.clear();
+                    Surface old = textureSurface;
+                    if (callback != null) callback.onVideoSurfaceDestroyed(null, old);
+                    textureSurface = null;
+                    if (old != null) old.release();
+                    gpuBufferWidth = gpuBufferHeight = 0;
+                    return true;
+                }
+                @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture source) { }
+            });
+        } else {
+            surfaceView.getHolder().setFormat(PixelFormat.OPAQUE);
+            applySurfaceType();
+            surfaceView.getHolder().addCallback(this);
+        }
+        addView(renderView, new LayoutParams(-1, -1));
         setKeepScreenOn(true);
+    }
+
+    private static boolean isHardwareAcceleratedWindow(Context context) {
+        while (context instanceof android.content.ContextWrapper) {
+            if (context instanceof android.app.Activity) return (((android.app.Activity) context).getWindow()
+                    .getAttributes().flags & android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED) != 0;
+            Context base = ((android.content.ContextWrapper) context).getBaseContext();
+            if (base == context) break;
+            context = base;
+        }
+        return false;
+    }
+
+    boolean isTextureOutput() { return textureView != null; }
+    android.view.View getRenderView() { return renderView; }
+    interface FrameCopyResult { void done(int result); }
+    void copyVideoFrame(android.graphics.Bitmap bitmap, android.os.Handler handler, FrameCopyResult result) {
+        if (textureView != null) {
+            int status = -1;
+            try { if (textureView.isAvailable() && textureView.getBitmap(bitmap) != null) status = 0; }
+            catch (RuntimeException unavailable) { /* Report unavailable output once. */ }
+            result.done(status);
+        } else if (android.os.Build.VERSION.SDK_INT >= 24) FrameCopy.copy(surfaceView, bitmap, handler, result);
+        else result.done(-1);
+    }
+    @android.annotation.TargetApi(24) private static final class FrameCopy {
+        static void copy(SurfaceView view, android.graphics.Bitmap bitmap, android.os.Handler handler, FrameCopyResult result) {
+            try { android.view.PixelCopy.request(view, bitmap, result::done, handler); }
+            catch (RuntimeException error) { result.done(-1); }
+        }
     }
 
     SurfaceView getSurfaceView() { return surfaceView; }
@@ -94,7 +156,7 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
 
     SurfaceHolder getVideoSurfaceHolder() { return activeHolder; }
     Surface getVideoSurface() {
-        return activeHolder == null ? null : activeHolder.getSurface();
+        return textureView != null ? textureSurface : activeHolder == null ? null : activeHolder.getSurface();
     }
 
     void setStretchVideo(boolean enabled) {
@@ -140,6 +202,11 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
     }
 
     private void updateBufferSize() {
+        if (textureView != null) {
+            // Let TextureView manage its buffer geometry. Decoder size and aspect ratio
+            // are applied by the shared layout path, including crop and letterboxing.
+            return;
+        }
         if(gpuBufferWidth>0&&gpuBufferHeight>0&&!viewportBufferMode) {
             surfaceView.getHolder().setFixedSize(gpuBufferWidth,gpuBufferHeight);
             return;
@@ -161,6 +228,7 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
         // Cropped portrait video can extend far beyond the screen. Limit low-RAM
         // software output independently of the displayed Surface rectangle.
         float ratio = (float) videoWidth * sarNum / ((float) videoHeight * sarDen);
+        if (surfaceView == null) return;
         surfaceView.getHolder().setFixedSize(
                 Math.min(width, Math.max(1, Math.round(height * ratio))),
                 Math.min(height, Math.max(1, Math.round(width / ratio))));
@@ -194,17 +262,17 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
         super.onMeasure(MeasureSpec.makeMeasureSpec(blurBackground ? availableWidth : width, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(blurBackground ? availableHeight : height, MeasureSpec.EXACTLY));
         if (blurBackground)
-            surfaceView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            renderView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
                     MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY));
         if (fillWidth > 0 && fillHeight > 0)
-            surfaceView.measure(MeasureSpec.makeMeasureSpec(fillWidth, MeasureSpec.EXACTLY),
+            renderView.measure(MeasureSpec.makeMeasureSpec(fillWidth, MeasureSpec.EXACTLY),
                     MeasureSpec.makeMeasureSpec(fillHeight, MeasureSpec.EXACTLY));
     }
 
     @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-        int x = (getMeasuredWidth() - surfaceView.getMeasuredWidth()) / 2;
-        int y = (getMeasuredHeight() - surfaceView.getMeasuredHeight()) / 2;
-        surfaceView.layout(x, y, x + surfaceView.getMeasuredWidth(), y + surfaceView.getMeasuredHeight());
+        int x = (getMeasuredWidth() - renderView.getMeasuredWidth()) / 2;
+        int y = (getMeasuredHeight() - renderView.getMeasuredHeight()) / 2;
+        renderView.layout(x, y, x + renderView.getMeasuredWidth(), y + renderView.getMeasuredHeight());
         if (frameCover != null && frameCover.getVisibility() != GONE)
             frameCover.layout(0, 0, getMeasuredWidth(), getMeasuredHeight());
     }
@@ -235,7 +303,8 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
         activeHolder = null;
         // SurfaceView owns its Surface. The caller removes this view on retirement
         // or Activity teardown; do not release a codec's Surface from the UI thread.
-        surfaceView.getHolder().removeCallback(this);
+        if (surfaceView != null) surfaceView.getHolder().removeCallback(this);
+        // TextureView releases its Surface only when detached, after decoder retirement.
     }
 
     interface SurfaceCallback {

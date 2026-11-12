@@ -20,7 +20,8 @@ class Checks {
  static class Sniff {
   interface Host {void failure(String v);} Host host; int failures;
   Sniff(){host=v->{check(closed);failures++;};}
-  boolean closed, finalStream, streamActive, temporary;Object renderedPage;
+  boolean closed, finalStream, streamActive, temporary,preparing;Object renderedPage,context;String profilePage;
+  static class SharedWebProfile{static void beginLite(Object c,String u){}}
   int navigations,generation;double lastPosition,lastDuration;Boolean controlPaused;
   boolean virtualPlayback,liveHlsPlayback;String controlledSource;
   int releases; Object renderFallback=new Object(),progress=new Object();
@@ -29,7 +30,9 @@ class Checks {
    void removeCallbacks(Object r){jobs.remove(r);}
    void advance(long t){now=t;for(Runnable r:new ArrayList<>(jobs.keySet()))if(jobs.containsKey(r)&&jobs.get(r)<=now){jobs.remove(r);r.run();}}
   } Handler handler=new Handler();
+  boolean continueStartup(){return false;} long clock(){return handler.now;}
   void releaseEngine(){releases++;}
+  long foregroundSniffTimeout(String url){return SNIFF_TIMEOUT_MS;}
   void close(){if(closed)return;closed=true;generation++;handler.jobs.clear();releaseEngine();}
   FIELDS
   OPEN

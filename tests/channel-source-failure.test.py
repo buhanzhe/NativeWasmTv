@@ -20,7 +20,7 @@ class ChannelSourceFailureCheck {
  int catchupSource(Channel c,EpgManager.Program p,int preferred,int direction){throw new AssertionError("Live regression entered catchup path");}
  void beginCatchupPlayback(int group,int index,int source,EpgManager.Program p,String url){throw new AssertionError("Live regression entered catchup path");}
  static final String TAG="test";
- static class Log {static void w(String tag,String message){}}
+ static class AppLog {static void w(String tag,String message){}}
  static class ChannelPreparationGate {Runnable pending;boolean opened;boolean defer(Runnable r){if(opened)return false;pending=r;return true;}void open(){opened=true;if(pending!=null)pending.run();}}
  static class CjsSource {String url;}CjsSource activeCjsSource;
  static class Proxy {void setWebRequestHeaders(String r,String a,Object c){}void configureCjsTransformer(String t,String[]a,String[]h){}}
@@ -42,7 +42,7 @@ class ChannelSourceFailureCheck {
  Memory playbackMemory=new Memory();Object currentGroup(){return null;}String playbackMemoryKey(Object group,Channel c){return "key";}
  void recordLoadError(String s){}boolean refreshContinuousHttpPlayback(int id,String s){return false;}boolean refreshYangshipinPlayback(int id,String s){return false;}
  String sourceLineDescription(Channel c,int index){return "";}
- boolean autoSwitchSource,offline,released;
+ boolean autoSwitchSource,neighborProbeEnabled,offline,released;
  Channel channel;int currentGroupIndex,currentChannelIndex=7,currentSourceIndex,triedCustomSources=1,starts;String status="";
  ChannelSourceFailureCheck(int count){channel=new Channel(count);}
  Channel currentChannel(){return channel;}
@@ -66,7 +66,7 @@ class ChannelSourceFailureCheck {
   s=new ChannelSourceFailureCheck(2);s.triedCustomSources=2;
   s.handleUnavailableSource("failed","bad playlist");check(s.currentChannelIndex==7);check(s.starts==0&&s.status.contains("全部"));
   s=new ChannelSourceFailureCheck(2);s.offline=true;
-  s.handleUnavailableSource("failed","network");check(s.currentChannelIndex==7);check(s.starts==0);
+  s.handleUnavailableSource("failed","network");check(s.currentChannelIndex==7);check(s.starts==1&&s.currentSourceIndex==1);
   s=new ChannelSourceFailureCheck(1);
   s.showPlaybackForbidden(s.channel);check(s.currentChannelIndex==7);check(s.starts==0&&s.status.equals("forbidden"));
   s=new ChannelSourceFailureCheck(2);s.autoSwitchSource=true;

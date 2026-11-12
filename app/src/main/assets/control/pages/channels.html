@@ -7,7 +7,7 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <title>频道配置 · nTv</title>
-    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/channels.css?v=20261105-probe-layout">
+    <script src="/js/theme.js?v=20261030-ui"></script><link rel="stylesheet" href="/css/common.css?v=night-hairline1"><link rel="stylesheet" href="/css/night.css?v=night-hairline1"><link rel="stylesheet" href="/css/channels.css?v=20261111-probe-cancel">
 </head>
   <body data-parent="/index.html">
     <main id="channelConfigPage" class="secondary-page channel-config-page">
@@ -52,6 +52,18 @@
           <h2>节目单</h2>
           <input id="epgEnabled" class="source-toggle" aria-label="节目单" type="checkbox" onchange="saveEpgEnabled()" />
         </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>显示台标</b></div>
+          <input id="epgShowLogos" type="checkbox" disabled aria-label="显示台标" onchange="saveEpgDisplayOption('epgShowLogos')" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>日期选择器</b><div class="hint">多日节目单时显示</div></div>
+          <input id="epgDatePicker" type="checkbox" disabled aria-label="日期选择器" onchange="saveEpgDisplayOption('epgDatePicker')" />
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><b>显示收藏按钮</b><div class="hint">关闭后仍可长按频道收藏或取消收藏</div></div>
+          <input id="epgShowFavorite" type="checkbox" disabled aria-label="显示收藏按钮" onchange="saveEpgDisplayOption('epgShowFavorite')" />
+        </div>
         <div id="epgUrls" class="epg-source-list"></div>
         <div class="actions">
           <button onclick="addEpgSource()">添加地址</button
@@ -92,6 +104,7 @@
           <div class="switch-copy"><b>邻台探测</b></div>
           <div class="probe-actions">
             <button id="probeAllButton" onclick="probeAllChannels()">全部探测</button>
+            <button id="cancelProbeButton" onclick="cancelChannelProbe()" style="display:none">取消</button>
             <input id="neighborProbeEnabled" type="checkbox" aria-label="邻台探测" onchange="saveNeighborProbe()" />
           </div>
         </div>
@@ -99,6 +112,8 @@
           <span>自动跳过失效频道</span>
           <span id="channelProbeStatus" aria-live="polite"></span>
         </div>
+        <div id="channelProbeProgress" role="progressbar" aria-label="全部探测进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:none"><div id="channelProbeFill"></div></div>
+        <div id="channelProbeCurrent" class="config-note" aria-live="polite"></div>
       </section>
     </main>
     <div id="message" class="message"></div>
@@ -129,7 +144,7 @@
     />
     <script src="/js/navigation.js?v=20261030-ui"></script>
     <script src="/js/common.js?v=20261103-network"></script>
-    <script src="/js/pages/channels.js?v=20261105-probe-layout"></script>
+    <script src="/js/pages/channels.js?v=20261111-probe-cancel"></script>
   <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>

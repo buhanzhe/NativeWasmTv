@@ -15,7 +15,7 @@ import java.util.HashMap;
 import java.util.UUID;
 import org.json.JSONObject;
 
-/** Player-side facade. No WebView or WebKit singleton is constructed here on API 14-23. */
+/** Player-side facade. No WebView or WebKit singleton is constructed here on API 14-25. */
 final class LegacyWebSession {
     static LegacyWebSession current;
     static final int HELLO = 1, EVENT = 2, HEARTBEAT = 3, COMMAND = 4, RESULT = 5;
@@ -33,20 +33,36 @@ final class LegacyWebSession {
     Messenger browser;
     IBinder.DeathRecipient death;
     long lastBeat, started;
+    private final Runnable retireIdle = () -> stop(false);
     LegacyWebSession(WebSourceView owner) { this.owner = owner; }
     void open(int id, String value, String pageScript, boolean forceHtml,
             String title, String group) {
+        handler.removeCallbacks(retireIdle);
+        // Keep crash isolation, but avoid starting Chromium again for every
+        // healthy API 24/25 web-to-web switch. Older low-memory hosts still retire.
+        boolean reuse = android.os.Build.VERSION.SDK_INT >= 24
+                && android.os.Build.VERSION.SDK_INT <= 25 && active && browser != null
+                && SystemClock.elapsedRealtime() - lastBeat < 3000L
+                && browser.getBinder().isBinderAlive() && isBrowserProcess(pid);
         final int previousPid = pid > 0 ? pid : retiredPid;
-        close();
+        if (reuse) cancelPending();
+        else stop(false);
         current = this;
         request = id; url = value; script = pageScript;
         channelTitle = title; channelGroup = group;
         htmlMimeOverride = forceHtml;
-        token = UUID.randomUUID().toString();
+        if (!reuse) token = UUID.randomUUID().toString();
         active = visible = foreground = true;
         state = new Bundle(); state.putString("url", url);
-        started = lastBeat = SystemClock.elapsedRealtime();
+        started = SystemClock.elapsedRealtime();
+        if (!reuse) lastBeat = started;
         owner.setVisibility(android.view.View.VISIBLE);
+        if (reuse) {
+            sendOpen();
+            try { owner.getContext().startActivity(browserIntent().addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); }
+            catch (RuntimeException error) { fail("无法打开网页进程"); }
+            return;
+        }
         final String generation = token;
         handler.post(new Runnable() {
             @Override public void run() {
@@ -88,15 +104,13 @@ final class LegacyWebSession {
                 send("brightness", bundle("brightness",
                         PlaybackBrightness.percent((android.app.Activity) owner.getContext())));
             }
-            Bundle open = bundle("url", url); open.putInt("request", request); open.putString("script", script);
-            open.putBoolean("htmlMimeOverride", htmlMimeOverride);
-            open.putString("channelTitle", channelTitle); open.putString("channelGroup", channelGroup);
-            send("open", open);
+            sendOpen();
         } else if (message.what == HEARTBEAT) {
             lastBeat = SystemClock.elapsedRealtime();
             String failure = data.getString("failure", "");
             if (failure.length() > 0) { fail(failure); return; }
         } else if (message.what == EVENT) {
+            if (data.getInt("request", -1) != request) return;
             Bundle snapshot = data.getBundle("state");
             if (snapshot != null) {
                 state = snapshot;
@@ -115,6 +129,12 @@ final class LegacyWebSession {
             WebSourceView.SmartContextCallback inspection = inspections.remove(id);
             if (inspection != null) inspection.onResult(json(data.getString("json")));
         }
+    }
+    private void sendOpen() {
+        Bundle open = bundle("url", url); open.putInt("request", request); open.putString("script", script);
+        open.putBoolean("htmlMimeOverride", htmlMimeOverride);
+        open.putString("channelTitle", channelTitle); open.putString("channelGroup", channelGroup);
+        send("open", open);
     }
     boolean isBrowserProcess(int candidate) {
         if (candidate <= 0 || candidate == Process.myPid()) return false;
@@ -151,7 +171,21 @@ final class LegacyWebSession {
     void close() {
         stop(false);
     }
+    void closeForWebSwitch() {
+        if (android.os.Build.VERSION.SDK_INT >= 24 && android.os.Build.VERSION.SDK_INT <= 25
+                && active && browser != null) {
+            // Proxy retirement finishes off the UI thread. Keep this healthy
+            // host briefly for the known web destination; no unbounded warm host.
+            visible = false;
+            owner.setVisibility(android.view.View.GONE);
+            handler.removeCallbacks(retireIdle);
+            handler.postDelayed(retireIdle, 2000L);
+            return;
+        }
+        stop(false);
+    }
     private void stop(boolean emergency) {
+        handler.removeCallbacks(retireIdle);
         if (active && pid == 0) pid = startingBrowserPid();
         Messenger retiringBrowser = browser;
         String retiringToken = token;
@@ -174,13 +208,16 @@ final class LegacyWebSession {
             else handler.postDelayed(() -> { if (isBrowserProcess(retired)) Process.killProcess(retired); }, 300L);
         }
         browser = null; death = null; pid = 0; request = -1;
+        if (current == this) current = null;
+        MainActivity activity = LocalPlayerRegistry.localInputOwner();
+        if (activity != null) activity.reconcilePlaybackVisibility();
+        cancelPending();
+    }
+    private void cancelPending() {
         java.util.ArrayList<WebSourceView.MediaControlResult> pending = new java.util.ArrayList<>(results.values());
         results.clear();
         java.util.ArrayList<WebSourceView.SmartContextCallback> inspecting = new java.util.ArrayList<>(inspections.values());
         inspections.clear();
-        if (current == this) current = null;
-        MainActivity activity = LocalPlayerRegistry.localInputOwner();
-        if (activity != null) activity.reconcilePlaybackVisibility();
         for (WebSourceView.MediaControlResult callback : pending) callback.complete("网页已关闭");
         for (WebSourceView.SmartContextCallback callback : inspecting) callback.onResult(new JSONObject());
     }
@@ -192,6 +229,10 @@ final class LegacyWebSession {
         catch (android.os.RemoteException error) { fail("网页进程通信中断"); }
     }
     void command(String action) { send(action, new Bundle()); }
+    void flushProfile(Runnable done){
+        int id=++sequence;results.put(id,error->done.run());Bundle args=new Bundle();args.putInt("id",id);send("profileFlush",args);
+        handler.postDelayed(()->{WebSourceView.MediaControlResult pending=results.remove(id);if(pending!=null)pending.complete(null);},500);
+    }
     void clearCache(WebSourceView.MediaControlResult callback) {
         int id=++sequence;results.put(id,callback);Bundle data=new Bundle();data.putInt("id",id);send("cache",data);
         handler.postDelayed(()->{WebSourceView.MediaControlResult pending=results.remove(id);if(pending!=null)pending.complete("网页缓存清理超时");},5000L);

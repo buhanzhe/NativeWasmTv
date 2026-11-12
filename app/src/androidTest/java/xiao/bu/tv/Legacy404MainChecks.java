@@ -27,6 +27,7 @@ final class Legacy404MainChecks {
         try {
         preferences.edit()
                 .remove("neighbor_probe_enabled").putString("resolution_mode","low")
+                .putBoolean("continuous_ts_enabled",!"hls".equals(args.getString("transport","ts")))
                 .putBoolean("show_debug_info",true).commit();
         MainActivity activity=(MainActivity)self.startActivitySync(new Intent(self.getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {

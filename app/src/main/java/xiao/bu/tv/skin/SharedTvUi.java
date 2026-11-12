@@ -20,7 +20,7 @@ public abstract class SharedTvUi implements TvUi {
     /** Focusable popups receive input directly, outside Activity.dispatchKeyEvent. */
     public interface InputMode { void themeInputMode(boolean remote); }
     public interface MenuWidth { int preferredWidth(int height); }
-    public interface TitleWidths { float titleWidth(Paint paint,int first,int count); }
+    public interface TitleWidths { float titleWidth(Paint paint,int first,int count); default float leadingWidth(){return 0;} default float trailingWidth(){return 0;} }
     protected abstract int theme();
     private static int accentColor(int theme){return theme==6?0xfff4d63d:theme==5?0xffb8ddff:theme==2?0xff29a6de:theme==3?0xff1c73ee:0xff00d1ff;}
     private static int panelColor(int theme){return theme==1?0xe6000000:theme==6?0xc0282626:theme==5?0xea17212e:theme==2?0xc21a3031:theme==3?0xcc24252d:0xcc313b4a;}
@@ -84,6 +84,7 @@ public abstract class SharedTvUi implements TvUi {
     }
     private abstract class Drawing extends View {
         final Paint p=new Paint(3); final RectF rect=new RectF();
+        final Rect numberBounds=new Rect();
         LinearGradient gradient;float gradientLeft,gradientRight;
         Drawing(Context c){super(c);if(android.os.Build.VERSION.SDK_INT>=16)setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);}
         void box(Canvas c,float l,float t,float r,float b,int color,float radius){p.setColor(color);p.setStyle(Paint.Style.FILL);rect.set(l,t,r,b);c.drawRoundRect(rect,radius,radius,p);}
@@ -102,7 +103,7 @@ public abstract class SharedTvUi implements TvUi {
             if(p.measureText(text)>room){int n=p.breakText(text,true,Math.max(0,room-p.measureText("…")),null);text=text.substring(0,n)+"…";}
             float width=p.measureText(text);text(c,text,l+Math.max(0,(room-width)/2),y,size,color,room);
         }
-        void centerNumber(Canvas c,String value,float l,float r,float y,float size,int color){
+        void centerNumber(Canvas c,String value,float l,float r,float centerY,float size,int color){
             if(value==null||value.isEmpty()||r<=l)return;
             p.setTypeface(Typeface.DEFAULT);p.setFakeBoldText(false);p.setStyle(Paint.Style.FILL);
             p.setColor(color);p.setTextSize(size);
@@ -110,7 +111,11 @@ public abstract class SharedTvUi implements TvUi {
             // Identifiers must remain complete; fit the glyphs instead of using
             // the title helper's ellipsis (four digits have different widths).
             if(width>room){p.setTextSize(size*room/width);width=p.measureText(value);}
-            c.drawText(value,(l+r-width)/2,y,p);
+            // Center the actual digits, after width fitting, inside the badge.
+            // A fixed baseline offset leaves different padding at smaller sizes.
+            p.getTextBounds(value,0,value.length(),numberBounds);
+            float baseline=centerY-(numberBounds.top+numberBounds.bottom)/2f;
+            c.drawText(value,(l+r-width)/2,baseline,p);
         }
         void selected(Canvas c,float l,float t,float r,float b){
             selected(c,l,t,r,b,-1);
@@ -151,20 +156,21 @@ public abstract class SharedTvUi implements TvUi {
             for(int i=0;i<2;i++){ListView list=(ListView)slots[i];list.setPadding(0,0,0,0);list.setDivider(null);list.setSelector(new ColorDrawable(Color.TRANSPARENT));list.setCacheColorHint(Color.TRANSPARENT);}
             TextView epg=(TextView)slots[2];epg.setBackgroundDrawable(new ColorDrawable(theme()==2||theme()==3?Color.TRANSPARENT:0x15000000));epg.setTextSize(TypedValue.COMPLEX_UNIT_PX,13*d);
             if(theme()==6){epg.setText("节目单  ›");epg.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));}
-            if(slots[3] instanceof ViewGroup){ViewGroup column=(ViewGroup)slots[3];for(int i=0;i<column.getChildCount();i++){
-                View child=column.getChildAt(i);
-                if(child instanceof ListView){ListView list=(ListView)child;list.setSelector(new ColorDrawable(Color.TRANSPARENT));list.setDivider(null);list.setPadding(0,0,0,0);}
-                else if(child instanceof TextView){((TextView)child).setTextSize(TypedValue.COMPLEX_UNIT_PX,14*d);int left=Math.round((theme()==2?24:theme()==3?12:16)*d);child.setPadding(left,Math.round(6*d),Math.round(12*d),Math.round(8*d));}
-            }}
+            styleGuide(slots[3]);
+        }
+        private void styleGuide(View child){
+            if(child instanceof ListView){ListView list=(ListView)child;list.setSelector(new ColorDrawable(Color.TRANSPARENT));list.setDivider(null);list.setPadding(0,0,0,0);}
+            else if(child instanceof TextView){((TextView)child).setTextSize(TypedValue.COMPLEX_UNIT_PX,14*d);int left=Math.round((theme()==2?24:theme()==3?12:16)*d);child.setPadding(left,Math.round(6*d),Math.round(12*d),Math.round(8*d));}
+            else if(child instanceof ViewGroup){ViewGroup parent=(ViewGroup)child;for(int i=0;i<parent.getChildCount();i++)styleGuide(parent.getChildAt(i));}
         }
         protected void onMeasure(int ws,int hs){
             int limit=MeasureSpec.getSize(ws),h=MeasureSpec.getSize(hs);
             if(theme()==6){
                 int g=Math.round((titleWidth(slots[0],18,8,90)+110)*d);
-                int channel=Math.round((titleWidth(slots[1],18,xiao.bu.tv.ChannelNameWidth.MAX_CHARS,90)+180)*d);
+                int channel=Math.round((titleWidth(slots[1],18,xiao.bu.tv.ChannelNameWidth.MAX_CHARS,90)+146+channelLeading()+channelTrailing())*d);
                 boolean expanded=slots[3].getVisibility()!=GONE;
-                int w=Math.min(limit,g+channel+Math.round(24*d)+(expanded?Math.round(230*d):0));
-                g=Math.min(g,w/2);int epg=expanded?Math.min(Math.round(230*d),Math.max(0,w-g-Math.round(180*d))):0;
+                int w=Math.min(limit,g+channel+Math.round(24*d)+(expanded?Math.round((230+guideExtra())*d):0));
+                g=Math.min(g,w/2);int epg=expanded?Math.min(Math.round((230+guideExtra())*d),Math.max(0,w-g-Math.round(180*d))):0;
                 channel=Math.max(1,w-g-epg-Math.round(24*d));setMeasuredDimension(w,h);
                 int available=Math.max(1,h-Math.round(124*d));channelPitch=fittedRowHeight(available,Math.round(rowHeight()*d));groupPitch=channelPitch;
                 for(int i=0;i<4;i++)slots[i].measure(MeasureSpec.makeMeasureSpec(i==0?g:i==1?channel:i==2?Math.round(100*d):epg,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(i==2?Math.round(40*d):available,MeasureSpec.EXACTLY));
@@ -178,9 +184,9 @@ public abstract class SharedTvUi implements TvUi {
             int groupDesired=Math.round((groupTitle+36)*d);
             // Width includes trailing breathing room even when the longest title fits exactly.
             float channelChrome=theme()==2?96:theme()==3?63:theme()==4?83:78;
-            int desiredBase=groupDesired+Math.round((channelTitle+channelChrome)*d)+handle;
+            int desiredBase=groupDesired+Math.round((channelTitle+channelChrome+channelLeading()+channelTrailing())*d)+handle;
             boolean expanded=slots[3].getVisibility()!=GONE;
-            int w=Math.min(limit,desiredBase+(expanded?Math.round(246*d):0));setMeasuredDimension(w,h);
+            int w=Math.min(limit,desiredBase+(expanded?Math.round((246+guideExtra())*d):0));setMeasuredDimension(w,h);
             int base=Math.min(w,desiredBase),epg=expanded?Math.max(0,w-base):0;
             int g=Math.min(Math.max(1,base-handle-1),Math.max(Math.round(132*d),Math.min(groupDesired,Math.round(base*.42f))));
             int channel=Math.max(1,base-g-handle),vertical=theme()==4?0:Math.round((theme()==3?20:theme()==2?12:6)*d);
@@ -192,6 +198,9 @@ public abstract class SharedTvUi implements TvUi {
                 slots[i].measure(MeasureSpec.makeMeasureSpec(width,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(Math.max(1,height),MeasureSpec.EXACTLY));
             }
         }
+        float channelLeading(){android.widget.ListAdapter a=((ListView)slots[1]).getAdapter();return a instanceof TitleWidths?((TitleWidths)a).leadingWidth():0;}
+        float channelTrailing(){android.widget.ListAdapter a=((ListView)slots[1]).getAdapter();return a instanceof TitleWidths?((TitleWidths)a).trailingWidth():0;}
+        float guideExtra(){Object width=slots[3].getTag();return width instanceof Number?((Number)width).floatValue():0;}
         protected void onLayout(boolean changed,int l,int t,int r,int b){int x=0,pad=theme()==4?0:Math.round((theme()==3?20:theme()==2?12:6)*d),h=b-t;
             if(theme()==6){
                 x=Math.round(12*d);int top=Math.round(70*d);
@@ -212,7 +221,7 @@ public abstract class SharedTvUi implements TvUi {
                 p.setColor(Color.WHITE);c.drawText(group==null?"频道列表":group.getString("title","频道列表"),slots[1].getLeft()+18*d,42*d,p);
                 p.setTextSize(13*d);p.setColor(0xffbdbdbf);c.drawText(((ListView)slots[1]).getCount()+" 个频道",slots[1].getLeft()+18*d,62*d,p);
                 p.setStrokeWidth(d/2);p.setColor(0x55aaaaaa);c.drawLine(slots[0].getRight(),24*d,slots[0].getRight(),getHeight()-60*d,p);c.drawLine(22*d,getHeight()-48*d,getWidth()-22*d,getHeight()-48*d,p);
-                p.setTextSize(13*d);p.setColor(0xffdddddf);c.drawText("OK 确定 播放    ≡ 长按 ☆ 收藏",24*d,getHeight()-18*d,p);return;
+                p.setTextSize(13*d);p.setColor(0xffdddddf);c.drawText("OK 播放    长按频道 收藏/取消",24*d,getHeight()-18*d,p);return;
             }
             p.setColor(theme()==2?0x6b001c20:theme()==3?0x30202430:theme()==4?0x80000106:0x74141c26);float width=slots[0].getRight(),radius=radius()*d;c.save();c.clipRect(0,0,width,getHeight());shadeBounds.set(0,0,width+radius,getHeight());c.drawRoundRect(shadeBounds,radius,radius,p);c.restore();
             if(theme()==2&&slots[2].getVisibility()!=GONE){
@@ -249,7 +258,7 @@ public abstract class SharedTvUi implements TvUi {
             if(!titleScrollPosted){titleScrollPosted=true;postDelayed(titleTick,delay);}
         }
         final Runnable pulse=new Runnable(){public void run(){pulsePosted=false;if(!canPulse())return;beat=(beat+1)&7;invalidate(0,0,Math.round(70*d),getHeight());schedulePulse();}};
-        boolean canPulse(){return theme()!=6&&attached&&!group&&data!=null&&data.getBoolean("playing")&&getWindowVisibility()==VISIBLE&&isShown();}
+        boolean canPulse(){return attached&&!group&&data!=null&&data.getBoolean("playing")&&getWindowVisibility()==VISIBLE&&isShown();}
         // At most one 10 Hz callback per visible playing row; no per-frame allocations.
         void schedulePulse(){if(pulse==null)return;if(canPulse()){if(!pulsePosted){pulsePosted=true;postDelayed(pulse,100);}}else{removeCallbacks(pulse);pulsePosted=false;}}
         protected void onAttachedToWindow(){super.onAttachedToWindow();attached=true;schedulePulse();}
@@ -274,13 +283,13 @@ public abstract class SharedTvUi implements TvUi {
             for(int i=0;i<3;i++){int phase=(beat+i*3)&7;float height=5+(phase<4?phase:7-phase)*5;box(c,x+i*(width+3),bottom-height,x+i*(width+3)+width,bottom,i==0?first:i==1?second:third,1);}
         }
         protected void onDraw(Canvas canvas){canvas.save();canvas.scale(d,d);float w=getWidth()/d,h=getHeight()/d;
-            if(theme()==6){glassRow(canvas,w,h);canvas.restore();return;}
             boolean sel=data.getBoolean("selected"),playing=data.getBoolean("playing");
-            // Only the column owning navigation focus paints a filled selection.
-            boolean focus=sel&&!data.getBoolean("favoriteFocused")&&(getParent() instanceof ListView?((ListView)getParent()).hasFocus():data.getBoolean("focused",!group));
             // ListView may bind/attach while its drawer is still GONE. The first
             // visible draw also arms the pulse, without starting a second timer.
             if(playing)schedulePulse();
+            if(theme()==6){glassRow(canvas,w,h);canvas.restore();return;}
+            // Only the column owning navigation focus paints a filled selection.
+            boolean focus=sel&&!data.getBoolean("favoriteFocused")&&(getParent() instanceof ListView?((ListView)getParent()).hasFocus():data.getBoolean("focused",!group));
             if(group){
                 if(focus){
                     // A browsed group keeps accent text. Only the column owning
@@ -296,17 +305,18 @@ public abstract class SharedTvUi implements TvUi {
                 if(theme()<=4){referenceRow(canvas,w,h,focus,playing);canvas.restore();return;}
                 if(focus)selected(canvas,0,3,w,h-3);
                 if(playing){int color=focus&&theme()==5?0xff142438:0xffeeeeef;playbackBars(canvas,18,h/2+9,3,color,color,color);}
-                else{p.setColor(0x6485939b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1);rect.set(10,h/2-10,46,h/2+10);canvas.drawRoundRect(rect,2,2,p);p.setStyle(Paint.Style.FILL);centerNumber(canvas,data.getString("number",""),10,46,h/2+6,16,focus&&theme()==5?0xff142438:0xffe1e4e7);}
+                else{p.setColor(0x6485939b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1);rect.set(10,h/2-10,46,h/2+10);canvas.drawRoundRect(rect,2,2,p);p.setStyle(Paint.Style.FILL);centerNumber(canvas,data.getString("number",""),10,46,h/2,16,focus&&theme()==5?0xff142438:0xffe1e4e7);}
                 String program=data.getString("program","");float titleY=program.length()>0?h/2-3:h/2+7;
-                channelTitle(canvas,56,titleY,20,playing?(focus&&theme()==5?0xff1c73ee:focus?0xffeeeeef:accent()):focus&&theme()==5?0xff142438:0xffeeeeef,w-76-(data.getBoolean("favoriteFocused")?26:0));
-                text(canvas,program,56,h/2+17,14,focus&&theme()==5?0xff4b6078:0xffaeb8bf,w-64);
-                if(data.getBoolean("favoriteFocused"))text(canvas,data.getBoolean("favorite")?"★":"☆",w-28,h/2+7,22,accent(),25);
+                float left=channelLogo(canvas,56,h);
+                channelTitle(canvas,left,titleY,20,playing?(focus&&theme()==5?0xff1c73ee:focus?0xffeeeeef:accent()):focus&&theme()==5?0xff142438:0xffeeeeef,w-left-20-(data.getBoolean("showFavorite",true)?34:0));
+                text(canvas,program,left,h/2+17,14,focus&&theme()==5?0xff4b6078:0xffaeb8bf,w-left-8-(data.getBoolean("showFavorite",true)?34:0));
+                favoriteStar(canvas,w,h,focus);
             }canvas.restore();
         }
         private void glassRow(Canvas c,float w,float h){
             boolean playing=data.getBoolean("playing"),chosen=data.getBoolean("selected");
             boolean ownsFocus=!(getParent() instanceof ListView)||((ListView)getParent()).hasFocus();
-            boolean favoriteFocus=!group&&chosen&&ownsFocus&&data.getBoolean("favoriteFocused");
+            boolean favoriteFocus=!group&&data.getBoolean("showFavorite",true)&&chosen&&ownsFocus&&data.getBoolean("favoriteFocused");
             boolean focused=(isPressed()||chosen&&ownsFocus)&&!favoriteFocus;
             if(group){
                 if(focused)selected(c,0,3,w-10,h-3);
@@ -319,20 +329,33 @@ public abstract class SharedTvUi implements TvUi {
             }
             if(focused)selected(c,8,2,w,h-2);
             int ink=focused?0xff101112:0xfff3f3f5,secondary=focused?0xff57585a:0xffbdbdc2;
-            if(playing)text(c,"▶",12,h/2+5,12,ink,12);
+            if(playing)playbackBars(c,10,h/2+9,3,ink,ink,ink);
             String number=data.getString("number","");if(number.length()==1)number="0"+number;
-            centerNumber(c,number,28,68,h/2+5,16,ink);
-            float left=72;
+            centerNumber(c,number,28,68,h/2,16,ink);
+            float left=channelLogo(c,72,h);
             String program=data.getString("program","");
-            p.setFakeBoldText(true);channelTitle(c,left,program.length()>0?h/2-3:h/2+6,18,ink,w-left-100);p.setFakeBoldText(false);
-            text(c,program,left,h/2+17,13,secondary,w-left-100);
+            float trailing=data.getBoolean("showFavorite",true)?100:66;
+            p.setFakeBoldText(true);channelTitle(c,left,program.length()>0?h/2-3:h/2+6,18,ink,w-left-trailing);p.setFakeBoldText(false);
+            text(c,program,left,h/2+17,13,secondary,w-left-trailing);
             int sources=data.getInt("sources",1);
-            center(c,playing?(data.getInt("source",0)+1)+"/"+sources:String.valueOf(sources),w-87,w-46,h/2+5,14,secondary);
+            float sourceRight=data.getBoolean("showFavorite",true)?w-46:w-12;
+            center(c,playing?(data.getInt("source",0)+1)+"/"+sources:String.valueOf(sources),sourceRight-41,sourceRight,h/2+5,14,secondary);
+            if(!data.getBoolean("showFavorite",true))return;
             if(favoriteFocus)selected(c,w-46,h/2-20,w-4,h/2+20);
             String star=data.getBoolean("favorite")?"★":"☆";
             p.setTypeface(Typeface.DEFAULT);p.setTextSize(25);p.getTextBounds(star,0,star.length(),starBounds);
             p.setColor(favoriteFocus?0xff101112:data.getBoolean("favorite")?0xfff4d63d:ink);
             c.drawText(star,w-25-(starBounds.left+starBounds.right)/2f,h/2-(starBounds.top+starBounds.bottom)/2f,p);
+        }
+        private float channelLogo(Canvas c,float left,float h){
+            if(!data.getBoolean("showLogos"))return left;
+            // Every row reserves the same slot while loading or when an icon is
+            // missing. Asynchronous completion must not move channel titles.
+            Bitmap bitmap=data.getParcelable("logo");if(bitmap==null||bitmap.isRecycled())return left+64;
+            float factor=Math.min(56f/bitmap.getWidth(),Math.min(32f,h-8)/bitmap.getHeight());
+            float width=bitmap.getWidth()*factor,height=bitmap.getHeight()*factor;
+            rect.set(left+(56-width)/2,(h-height)/2,left+(56+width)/2,(h+height)/2);
+            p.setColor(Color.WHITE);p.setFilterBitmap(true);c.drawBitmap(bitmap,null,rect,p);return left+64;
         }
         private void referenceRow(Canvas c,float w,float h,boolean sel,boolean playing){
             if(sel)selected(c,theme()==2?8:0,theme()==2?1:0,w-(theme()==2?8:0),h-(theme()==2?1:0));
@@ -344,13 +367,20 @@ public abstract class SharedTvUi implements TvUi {
                 p.setColor(theme()==3?0xffdddddf:0x6485939b);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(theme()==3?.6f:1);
                 rect.set(badgeLeft,h/2-10,badgeLeft+badgeWidth,h/2+10);float r=theme()==2?10:theme()==3?1.5f:0;
                 c.drawRoundRect(rect,r,r,p);p.setStyle(Paint.Style.FILL);
-                centerNumber(c,data.getString("number",""),badgeLeft,badgeLeft+badgeWidth,h/2+6,theme()==3?13:16,0xffe1e4e7);
+                centerNumber(c,data.getString("number",""),badgeLeft,badgeLeft+badgeWidth,h/2,theme()==3?13:16,0xffe1e4e7);
             }
-            float left=theme()==2?82:theme()==3?53:73,available=w-left-(theme()==2?12:8)-(data.getBoolean("favoriteFocused")?26:0);
+            float left=channelLogo(c,theme()==2?82:theme()==3?53:73,h),available=w-left-(theme()==2?12:8)-(data.getBoolean("showFavorite",true)?34:0);
             String program=data.getString("program","");boolean withProgram=program.length()>0;
             channelTitle(c,left,withProgram?h/2-(theme()==2?2:5):h/2+(theme()==4?8:7),20,playing&&!sel?accent():0xffeeeeef,available);
             if(withProgram)text(c,program,left,h/2+(theme()==3?20:17),14,0xffbcbfc3,available);
-            if(data.getBoolean("favoriteFocused"))text(c,data.getBoolean("favorite")?"★":"☆",w-28,h/2+7,22,accent(),25);
+            favoriteStar(c,w,h,sel);
+        }
+        private void favoriteStar(Canvas c,float w,float h,boolean rowFocused){
+            if(!data.getBoolean("showFavorite",true))return;
+            boolean focus=data.getBoolean("favoriteFocused")&&getParent() instanceof ListView&&((ListView)getParent()).hasFocus();
+            if(focus)selected(c,w-34,h/2-18,w-2,h/2+18);
+            int color=(focus||rowFocused)&&theme()==5?0xff142438:data.getBoolean("favorite")?accent():0xffeeeeef;
+            text(c,data.getBoolean("favorite")?"★":"☆",w-29,h/2+7,22,color,27);
         }
     }
     /** Programme rows share channel selection geometry, palette and pitch; no timers. */

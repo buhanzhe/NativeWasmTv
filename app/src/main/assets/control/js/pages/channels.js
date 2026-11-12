@@ -1,4 +1,52 @@
-var neighborProbeSaving=false, probeAllPending=false;
+var neighborProbeSaving=false, probeAllPending=false, probeCancelPending=false;
+var channelProbeTimer=null,channelProbeRequest=null,channelProbeSequence=0,channelProbeSnapshot=null;
+function stopChannelProbePolling(){
+  clearTimeout(channelProbeTimer);channelProbeTimer=null;channelProbeSequence++;
+  var request=channelProbeRequest;channelProbeRequest=null;
+  if(request)request.abort();
+}
+function scheduleChannelProbePolling(delay){
+  if(!pageActive||isPageHidden()||channelProbeTimer!==null||channelProbeRequest)return;
+  channelProbeTimer=setTimeout(function(){channelProbeTimer=null;pollChannelProbe();},delay);
+}
+function pollChannelProbe(){
+  if(!pageActive||isPageHidden()||channelProbeRequest)return;
+  var sequence=++channelProbeSequence;
+  channelProbeRequest=api("/api/channels/probe",null,function(error,probe){
+    if(sequence!==channelProbeSequence||!pageActive)return;
+    channelProbeRequest=null;
+    if(error){document.getElementById("channelProbeCurrent").textContent="进度连接中断，正在重试…";scheduleChannelProbePolling(1500);return;}
+    renderChannelProbe(probe||{});
+  },5000);
+}
+function renderChannelProbe(probe){
+  var old=channelProbeSnapshot;
+  if(old&&old.sessionId!=null&&probe.sessionId!=null&&probe.sessionId<old.sessionId)probe=old;
+  if(old&&(old.sessionId==null||probe.sessionId==null||probe.sessionId===old.sessionId)&&old.scanId!=null&&probe.scanId!=null&&
+      (probe.scanId<old.scanId||probe.scanId===old.scanId&&(probe.revision||0)<(old.revision||0)))probe=old;
+  channelProbeSnapshot=probe;
+  if(state&&state.settings)state.settings.channelProbe=probe;
+  var total=Math.max(0,Number(probe.total)||0),done=Math.max(0,Math.min(total,Number(probe.completed)||0));
+  var percent=total?Math.floor(done*100/total):0;
+  document.getElementById("probeAllButton").disabled=probeAllPending||probeCancelPending||!!probe.running;
+  document.getElementById("probeAllButton").style.display=probe.running?"none":"";
+  var cancel=document.getElementById("cancelProbeButton");
+  cancel.style.display=probe.running||probeCancelPending?"":"none";
+  cancel.disabled=probeAllPending||probeCancelPending;
+  cancel.textContent=probeCancelPending?"取消中…":"取消";
+  document.getElementById("channelProbeStatus").textContent=total?
+    ((probe.running?(probe.phase==="waiting"?"等待播放稳定":"扫描中"):probe.phase==="cancelled"?"已取消":"已完成")+" "+done+" / "+total+"（"+percent+"%）"):
+    (probe.bad?"失效 "+probe.bad+" 项":"");
+  var bar=document.getElementById("channelProbeProgress");
+  bar.style.display=total?"block":"none";bar.setAttribute("aria-valuenow",percent);
+  document.getElementById("channelProbeFill").style.width=percent+"%";
+  document.getElementById("channelProbeCurrent").textContent=probe.running?
+    (probe.phase==="waiting"?"播放稳定后继续扫描":probe.current?"正在探测："+probe.current:"正在检查后续频道…"):
+    (total?"可用 "+(probe.scanGood||0)+" · 失效 "+(probe.scanBad||0)+" · 未确定 "+(probe.scanUnknown||0)+(probe.cached?" · 近期结果 "+probe.cached:""):"");
+  if(probe.running)scheduleChannelProbePolling(500);
+  else if(!probeAllPending){clearTimeout(channelProbeTimer);channelProbeTimer=null;}
+}
+function onPageSuspended(){stopChannelProbePolling();}
 function saveNeighborProbe(){
   if(neighborProbeSaving)return;
   var toggle=document.getElementById("neighborProbeEnabled");
@@ -10,11 +58,22 @@ function saveNeighborProbe(){
   });
 }
 function probeAllChannels(){
-  if(probeAllPending||(state&&state.settings&&state.settings.channelProbe&&state.settings.channelProbe.running))return;
+  if(probeAllPending||probeCancelPending||(state&&state.settings&&state.settings.channelProbe&&state.settings.channelProbe.running))return;
   probeAllPending=true;document.getElementById("probeAllButton").disabled=true;
   api("/api/settings",{probeAllChannels:true},function(error){
     probeAllPending=false;document.getElementById("probeAllButton").disabled=false;
+    if(!error){clearTimeout(channelProbeTimer);channelProbeTimer=null;pollChannelProbe();}
     toast(error?error.message:"已加入探测",!!error);refresh();
+  });
+}
+function cancelChannelProbe(){
+  var probe=channelProbeSnapshot;
+  if(probeCancelPending||probeAllPending||!probe||!probe.running)return;
+  probeCancelPending=true;stopChannelProbePolling();renderChannelProbe(probe);
+  api("/api/settings",{cancelChannelProbe:true,channelProbeScanId:probe.scanId||0},function(error){
+    probeCancelPending=false;stopChannelProbePolling();
+    renderChannelProbe(channelProbeSnapshot||{});pollChannelProbe();
+    toast(error?error.message:"已取消探测，已完成的结果已保留",!!error);
   });
 }
 var recommended = "",
@@ -75,6 +134,20 @@ function saveEpgEnabled() {
   api("/api/settings", {epgEnabled: input.checked}, function(error) {
     if(error){input.checked=!input.checked;toast(error.message,true);return;}
     toast(input.checked ? "已开启节目单" : "已关闭节目单");
+  });
+}
+var epgDisplaySaving = {};
+function saveEpgDisplayOption(key) {
+  if (epgDisplaySaving[key]) return;
+  var input = document.getElementById(key), previous = key === "epgShowFavorite" ? state.settings[key] !== false : state.settings[key] === true;
+  var value = input.checked, request = {};
+  request[key] = value;
+  epgDisplaySaving[key] = true;input.disabled = true;
+  api("/api/settings", request, function(error) {
+    epgDisplaySaving[key] = false;input.disabled = false;
+    if (error) input.checked = previous;
+    else { state.settings[key] = value;input.checked = value; }
+    toast(error ? error.message : "已保存", !!error);
   });
 }
 function saveAutoUpdateChannelList() {
@@ -1323,13 +1396,14 @@ function saveEpg() {
   });
 }
 function renderPageState() {
+  ["epgShowLogos", "epgDatePicker", "epgShowFavorite"].forEach(function(key) {
+    if (!epgDisplaySaving[key]) document.getElementById(key).checked = key === "epgShowFavorite" ? state.settings[key] !== false : state.settings[key] === true;
+    document.getElementById(key).disabled = !!epgDisplaySaving[key];
+  });
   if(state&&state.settings){
     var settings=state.settings,probe=settings.channelProbe||{};
     if(!neighborProbeSaving)document.getElementById("neighborProbeEnabled").checked=settings.neighborProbeEnabled===true;
-    document.getElementById("probeAllButton").disabled=probeAllPending||!!probe.running;
-    document.getElementById("channelProbeStatus").textContent=probe.running?
-      ((probe.completed||0)+" / "+(probe.total||0)):
-      (probe.bad?"失效 "+probe.bad+" 项":"");
+    renderChannelProbe(probe);
   }
 
   if (mergeBusy || playlistFileBusy) return;

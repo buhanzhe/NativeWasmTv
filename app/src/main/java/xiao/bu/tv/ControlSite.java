@@ -15,12 +15,18 @@ final class ControlSite {
         try {
             java.net.URI uri = new java.net.URI(url);
             String host = uri.getHost();
+            if(host!=null&&host.startsWith("[")&&host.endsWith("]"))host=host.substring(1,host.length()-1);
             return "http".equalsIgnoreCase(uri.getScheme()) && uri.getRawUserInfo() == null
                     && uri.getPort() == port && ("127.0.0.1".equals(host)
-                    || (lanAddress != null && lanAddress.equals(host)));
+                    || "::1".equals(host)||(lanAddress != null && sameAddress(lanAddress,host)));
         } catch (java.net.URISyntaxException error) {
             return false;
         }
+    }
+
+    private static boolean sameAddress(String left,String right){
+        if(left.equals(right))return true;if(right==null||left.indexOf(':')<0||right.indexOf(':')<0)return false;
+        try{return java.util.Arrays.equals(java.net.InetAddress.getByName(left).getAddress(),java.net.InetAddress.getByName(right).getAddress());}catch(java.net.UnknownHostException invalid){return false;}
     }
 
     static boolean contains(String path) {

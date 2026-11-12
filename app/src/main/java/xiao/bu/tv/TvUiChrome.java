@@ -44,6 +44,18 @@ final class TvUiChrome {
     }
     TvUiChrome(View panel,View card){originalPanel=panel;originalCard=card;this.panel=panel;this.card=card;panelParams=(FrameLayout.LayoutParams)copyParams(panel.getLayoutParams());cardParams=(FrameLayout.LayoutParams)copyParams(card.getLayoutParams());}
     View originalCard(){return originalCard;}
+    View applyCard(Context context){
+        View previous=card;FrameLayout parent=(FrameLayout)previous.getParent();
+        int index=parent.indexOfChild(previous),visibility=previous.getVisibility();
+        TvUi nextRenderer=TvUiPlugin.provider();View next=originalCard;
+        try{if(nextRenderer!=null)next=nextRenderer.create(context,"card",new Bundle(),null,null);}
+        catch(RuntimeException|LinkageError failure){TvUiPlugin.rejectRenderer(context,failure);nextRenderer=null;}
+        next.setId(originalCard.getId());
+        next.setLayoutParams(nextRenderer==null?copyParams(cardParams)
+                :new FrameLayout.LayoutParams(1,1,Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL));
+        parent.removeView(previous);parent.addView(next,Math.min(index,parent.getChildCount()));
+        next.setVisibility(visibility);card=next;renderer=nextRenderer;return card;
+    }
     View[] apply(Context c,View[] controls){
         int visibility=panel.getVisibility(),cardVisibility=card.getVisibility();
         FrameLayout parent=(FrameLayout)panel.getParent();

@@ -8,8 +8,11 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 main = (root/'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text(encoding='utf8')
 start = main.index('    private void armPlayerStartupWatchdog(')
-end = main.index('\n    private void markAndroidHlsVideoReady(', start)
+end = main.index('\n    private void probeLegacySystemVideoReady(', start)
 watch = main[start:end]
+start=main.index('    private boolean fallbackMissingSystemSource(')
+end=main.index('    private void showPlaybackForbidden(',start)
+watch=main[start:end]+'\n'+watch
 start = main.index('        } else if ("seek".equals(action)) {', main.index('private void applyMediaControl('))
 end = main.index('        } else if ("videoTrack".equals(action)) {', start)
 controls = '        if ("seek".equals(action)) {' + main[start:].split('{', 1)[1][:end-start-(main[start:].index('{')+1)] + '\n        }'
@@ -22,14 +25,15 @@ class StartupCheck {
  interface IMediaPlayer {long getDuration();}
  static class IjkMediaPlayer implements IMediaPlayer {int speeds;public long getDuration(){return 40000;}void setSpeed(float s){speeds++;}}
  static class AndroidMediaPlayer implements IMediaPlayer {public long getDuration(){return 0;}}
- static class Channel {boolean radio;}
- static class Proxy {Throwable lastPlaybackFailure(){return null;}}
+ static class Channel {boolean radio;int count=1;int sourceCount(){return count;}}
+ static class Proxy {Throwable failure;Throwable lastPlaybackFailure(){return failure;}}
  static class Clock {static long now;}
  static class SystemClock {static long elapsedRealtime(){return Clock.now;}}
  static class VideoDecoderSupport {static Boolean supported;static Boolean hasDecoder(String mime){return supported;}}
  static class Queue {Runnable pending;void postDelayed(Runnable r,long delay){pending=r;}void removeCallbacks(Runnable r){if(pending==r)pending=null;}}
  IMediaPlayer player=new IjkMediaPlayer();Channel activePlayerChannel=new Channel();Proxy proxy=new Proxy();
- int playRequestId=1,failures;boolean prepared,audioOnlyPlayback,videoRenderingStarted,windowContentActive=true;String mime="",message;
+ int playRequestId=1,failures,fallbacks;boolean prepared,audioOnlyPlayback,videoRenderingStarted,windowContentActive=true;String mime="",message;
+ void handleUnavailableSource(String label,String detail){fallbacks++;}
  Queue channelBar=new Queue();Runnable playerStartupWatchdog;
  boolean isFinishing(){return false;}String startupVideoMime(){return mime;}
  void failPlayerStartup(int r,IMediaPlayer p,String m,String d){failures++;message=m;}
@@ -70,6 +74,8 @@ class StartupCheck {
   Clock.now=0;c=new StartupCheck();c.prepared=true;c.armPlayerStartupWatchdog(c.player,1);c.tick(25000);check(c.failures==1&&c.message.contains("无法解码"),"Prepared audio clock cannot hide black video");
   Clock.now=0;c=new StartupCheck();c.prepared=true;c.videoRenderingStarted=true;c.armPlayerStartupWatchdog(c.player,1);c.tick(25000);check(c.failures==0,"Healthy video is preserved");
   Clock.now=0;c=new StartupCheck();c.prepared=true;c.audioOnlyPlayback=true;c.armPlayerStartupWatchdog(c.player,1);c.tick(25000);check(c.failures==0,"Real radio is preserved");
+  Clock.now=0;c=new StartupCheck();c.player=new AndroidMediaPlayer();c.activePlayerChannel.count=2;c.proxy.failure=new IOException("Upstream HTTP 404");c.armPlayerStartupWatchdog(c.player,1);c.tick(500);check(c.fallbacks==1&&c.failures==0,"Missing HTTP source does not wait for firmware onError or 25s timeout");
+  Clock.now=0;c=new StartupCheck();c.player=new AndroidMediaPlayer();c.activePlayerChannel.count=2;c.proxy.failure=new IOException("Upstream HTTP 404");c.armPlayerStartupWatchdog(c.player,1);c.playRequestId=2;c.tick(500);check(c.fallbacks==0,"Old HTTP source cannot switch a newer channel");
   Clock.now=0;c=new StartupCheck();c.player=new AndroidMediaPlayer();c.mime="video/hevc";VideoDecoderSupport.supported=false;c.armPlayerStartupWatchdog(c.player,1);c.tick(500);check(c.failures==1&&c.message.contains("H.265"),"Known missing system HEVC decoder fails promptly");
   Clock.now=0;c=new StartupCheck();c.armPlayerStartupWatchdog(c.player,1);c.playRequestId=2;c.tick(25000);check(c.failures==0,"Old channel timeout ignored");
   Clock.now=0;c=new StartupCheck();c.armPlayerStartupWatchdog(c.player,1);c.player=new IjkMediaPlayer();c.tick(25000);check(c.failures==0,"Old backend timeout ignored");
@@ -96,5 +102,6 @@ with tempfile.TemporaryDirectory(prefix='ntv-startup-') as folder:
     jdk=Path(os.environ.get('JAVA_HOME','C:/Users/Administrator/.jdks/jbr-17.0.14'))/'bin'
     subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8','-d',folder,str(file),
                     *[str(source/name) for name in ['PlaybackStartupPolicy.java','MediaPositionClock.java',
-                                                   'HlsVideoCodecProbe.java','ControlRequestException.java']]],check=True)
+                                                   'HlsVideoCodecProbe.java','ControlRequestException.java',
+                                                   'PlaybackHttpError.java','SystemPlaybackError.java']]],check=True)
     subprocess.run([str(jdk/'java.exe'),'-cp',folder,'xiao.bu.tv.StartupCheck',*sys.argv[1:]],check=True)

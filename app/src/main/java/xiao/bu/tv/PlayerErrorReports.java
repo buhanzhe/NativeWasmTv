@@ -148,7 +148,7 @@ final class PlayerErrorReports {
         return false;
     }
     final class Tail {
-        private final int pid;private final String token;private Scene selected;private long nextAttempt;
+        private final int pid;private final String token;private Scene selected;
         Tail(int pid,String token){this.pid=pid;this.token=token;}
         void line(String value){
             Matcher match=LINE.matcher(value);if(!match.matches()||!match.group(1).equals(String.valueOf(pid)))return;
@@ -165,20 +165,12 @@ final class PlayerErrorReports {
                     ||lower.contains("broken pipe")||lower.contains("epipe")
                     ||lower.contains("option ijkiomanager not found")||lower.contains("option live_start_index not found"))return;
             if(lower.contains("option scan_all_pmts not found"))return;
-            boolean app="MainActivity".equals(tag);
-            scene.log(tag+" tid="+match.group(2)+": "+message);
             if(diagnosticOnly(tag,lower))return;
-            if(app&&!(lower.contains("exception")||lower.contains("unable")||lower.contains("failed")))return;
-            if(app&&!(lower.contains("player")||lower.contains("decoder")||lower.contains("codec")
-                    ||lower.contains("playback")||lower.contains("surface")||lower.contains("audio")
-                    ||lower.contains("seek")||lower.contains("track")||lower.contains("stream")||lower.contains("subtitle")))return;
-            if(app&&lower.contains("release old player"))return;
-            if(!app&&!"E".equals(match.group(3))&&!"F".equals(match.group(3)))return;
-            long now=clock.now();if(now<nextAttempt)return;nextAttempt=now+1000;
-            String kind=lower.contains("nal")||lower.contains("pps")||lower.contains("sps")?"InvalidBitstream"
-                    :lower.contains("timestamp")?"TimestampError"
-                    :lower.contains("codec")||lower.contains("decoder")?"DecoderError":"NativeLog";
-            submit(scene,tag,kind,message,null,Thread.currentThread(),false);
+            scene.log(tag+" tid="+match.group(2)+": "+message);
+            // ERROR is also used for successful header-only probes, codec fallback,
+            // stream cancellation and vendor lifecycle messages. Keep this bounded
+            // context for a confirmed player callback; a log line alone is no failure.
+            // Actual native crashes and ANRs remain covered by the SDK monitors.
         }
     }
 }

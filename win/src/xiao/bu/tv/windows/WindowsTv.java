@@ -85,6 +85,7 @@ public final class WindowsTv {
   }
 
   public static void main(String[] args) throws Exception {
+    xiao.bu.tv.WindowsSiteConfiguration.install();
     Path home=Path.of(System.getProperty("ntv.home",".")).toAbsolutePath();
     String suffix=System.getProperty("os.name").startsWith("Windows") ? "ntvLiteDesktop.dll" : "libntvLiteDesktop.so";
     System.setProperty("ntv.library",home.resolve("app").resolve(suffix).toString());

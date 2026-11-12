@@ -17,9 +17,11 @@ final class EpgDisplayCache {
         return programsFor(programs,0);
     }
     List<EpgManager.Program> programsFor(List<EpgManager.Program> programs,double catchupDays) {
+        return programsForDay(programs,EpgManager.dayStart(System.currentTimeMillis()),catchupDays);
+    }
+    List<EpgManager.Program> programsForDay(List<EpgManager.Program> programs,long day,double catchupDays) {
         // EpgManager publishes complete snapshots, never mutating a published list.
         // Identity is an O(1) cache check; a refreshed guide has new list identities.
-        long day = EpgManager.dayStart(System.currentTimeMillis());
         java.util.Calendar end = java.util.Calendar.getInstance();
         end.setTimeInMillis(day);
         end.add(java.util.Calendar.DATE, 1);

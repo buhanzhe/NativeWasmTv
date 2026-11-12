@@ -28,6 +28,22 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
     private int playingSourceIndex;
     private FavoriteListener favoriteListener;
     private EpgManager epgManager;
+    private boolean showLogos;
+    private boolean logosActive = true;
+    private boolean showFavorite=true;
+    public float trailingWidth(){return showFavorite?34f:0f;}
+    void setShowFavorite(boolean enabled){if(showFavorite==enabled)return;showFavorite=enabled;if(!enabled)favoriteFocusIndex=-1;notifyDataSetChanged();}
+    private ChannelLogoLoader logos;
+    public float leadingWidth(){return showLogos?64f:0f;}
+    void setShowLogos(boolean enabled){if(showLogos==enabled)return;showLogos=enabled;if(!enabled&&logos!=null)logos.cancelPending();notifyDataSetChanged();}
+    void close(){if(logos!=null)logos.close();}
+    void setLogosActive(boolean active){if(logosActive==active)return;logosActive=active;if(!active&&logos!=null)logos.cancelPending();if(active)notifyDataSetChanged();}
+    private void bindLogo(ImageView view,Channel channel){
+        if(!showLogos){if(logos!=null)logos.clear(view);else view.setVisibility(View.GONE);return;}
+        if(!logosActive){if(logos!=null)logos.clear(view);view.setVisibility(View.INVISIBLE);return;}
+        if(logos==null)logos=new ChannelLogoLoader();
+        logos.load(view,channel.name,epgManager==null?channel.logoUrl:epgManager.logoFor(channel));
+    }
     private ChannelHealth health;
     void setHealth(ChannelHealth value){health=value;}
     private void healthStyle(View row,Object item){row.setAlpha(item instanceof Channel&&health!=null&&health.bad((Channel)item)?0.4f:1f);}
@@ -220,6 +236,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             holder.favorite = (ImageView) convertView.findViewById(
                     R.id.channel_item_favorite);
             holder.program = (TextView) convertView.findViewById(R.id.channel_item_program);
+            holder.logo = (ImageView) convertView.findViewById(R.id.channel_item_logo);
             convertView.setTag(holder);
         } else {
             holder = (ViewHolder) convertView.getTag();
@@ -251,6 +268,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             holder.count.setText(String.valueOf(group.channels.length));
         } else {
             Channel channel = (Channel) item;
+            if(holder.logo!=null)bindLogo(holder.logo,channel);
             holder.number.setText(ChannelCatalog.displayNumber(
                     channelGroupIndex, position));
             if (!android.text.TextUtils.equals(holder.name.getText(), channel.name)) {
@@ -270,6 +288,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
             }
             boolean favorite = favoriteListener != null
                     && favoriteListener.isFavorite(position);
+            holder.favorite.setVisibility(showFavorite?View.VISIBLE:View.GONE);
             holder.favorite.setImageResource(favorite
                     ? R.drawable.collection_fill : R.drawable.collection);
             holder.favorite.setContentDescription(favorite ? "取消收藏" : "收藏");
@@ -312,15 +331,32 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
         UiRow holder=old!=null&&old.getTag() instanceof UiRow?(UiRow)old.getTag():null;
         if(holder==null||holder.revision!=TvUiPlugin.revision()||holder.group!=groupRow||Math.abs(holder.scale-rowScale)>.001f){holder=new UiRow();holder.scale=rowScale;holder.revision=TvUiPlugin.revision();holder.group=groupRow;holder.state.putBoolean("group",groupRow);old=TvUiPlugin.provider().create(inflater.getContext(),groupRow?"group-row":"channel-row",holder.state,null,null);old.setTag(holder);}
         android.os.Bundle b=holder.state;
-        b.putBoolean("selected",position==selectedIndex);b.putBoolean("favoriteFocused",position==favoriteFocusIndex);b.putBoolean("playing",!groupRow&&position==playingIndex);
+        b.putBoolean("selected",position==selectedIndex);b.putBoolean("showLogos",showLogos);b.putBoolean("showFavorite",showFavorite);b.putBoolean("favoriteFocused",showFavorite&&position==favoriteFocusIndex);b.putBoolean("playing",!groupRow&&position==playingIndex);
         if(groupRow){ChannelCatalog.Group group=(ChannelCatalog.Group)item;b.putString("title",group.displayTitle);b.putString("number",String.valueOf(position+1));b.putInt("count",group.channels.length);b.putBoolean("favoriteGroup",group.source==ChannelCatalog.SOURCE_FAVORITES);}
         else{Channel channel=(Channel)item;b.putString("title",channel.name);b.putString("number",ChannelCatalog.displayNumber(channelGroupIndex,position));
+            if(showLogos&&holder.logo==null){final UiRow bound=holder;final View row=old;
+                holder.logo=new ImageView(inflater.getContext()){
+                    @Override public void setImageBitmap(android.graphics.Bitmap bitmap){super.setImageBitmap(bitmap);bound.state.putParcelable("logo",bitmap);row.invalidate();}
+                    @Override public void setImageDrawable(android.graphics.drawable.Drawable drawable){super.setImageDrawable(drawable);if(drawable==null){bound.state.remove("logo");row.invalidate();}}
+                };
+            }
+            if(holder.logo!=null)bindLogo(holder.logo,channel);
             String title=holder.currentProgram.titleFor(epgManager,channel,System.currentTimeMillis());
             b.putInt("sources",channel.urls.length);b.putInt("source",playingSourceIndex);b.putString("program",title);b.putBoolean("favorite",favoriteListener!=null&&favoriteListener.isFavorite(position));
         }
+        if(!groupRow){
+            old.setOnTouchListener((view,event)->{
+                if(!showFavorite)return false;
+                boolean inside=event.getX()>=view.getWidth()-40*rowScale&&event.getX()<=view.getWidth()&&event.getY()>=0&&event.getY()<view.getHeight();
+                if(event.getActionMasked()==MotionEvent.ACTION_DOWN){if(!inside)return false;view.setPressed(true);return true;}
+                if(event.getActionMasked()==MotionEvent.ACTION_UP){view.setPressed(false);if(inside&&favoriteListener!=null)favoriteListener.onFavoriteClick(position);return true;}
+                if(event.getActionMasked()==MotionEvent.ACTION_CANCEL)view.setPressed(false);
+                return true;
+            });
+        }
         TvUiPlugin.provider().update(old,b);return old;
     }
-    private static final class UiRow{int revision;float scale;boolean group;final android.os.Bundle state=new android.os.Bundle();final EpgManager.CurrentProgram currentProgram=new EpgManager.CurrentProgram();}
+    private static final class UiRow{int revision;float scale;boolean group;ImageView logo;final android.os.Bundle state=new android.os.Bundle();final EpgManager.CurrentProgram currentProgram=new EpgManager.CurrentProgram();}
 
     private static final class ViewHolder {
         final EpgManager.CurrentProgram currentProgram = new EpgManager.CurrentProgram();
@@ -332,6 +368,7 @@ final class ChannelListAdapter extends BaseAdapter implements xiao.bu.tv.skin.Sh
         TextView count;
         ImageView groupFavorite;
         ImageView favorite;
+        ImageView logo;
         TextView program;
     }
 }

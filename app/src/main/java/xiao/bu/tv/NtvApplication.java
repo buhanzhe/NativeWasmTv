@@ -31,6 +31,8 @@ public final class NtvApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        LiteEngine.installDocumentScripts(LitePageScripts::forDocument);
+        LiteEngine.installHostPolicy(new WebSiteCompatibility());
         // Do not load a second crash SDK/ANR watchdog in :crash_watchdog.
         if (isMainProcess()) {
             AppLog.initialize(this);
@@ -44,6 +46,7 @@ public final class NtvApplication extends Application {
                 public void onActivityDestroyed(android.app.Activity activity) { }
             });
             GithubProxy.initialize(this);
+            HardwareDecoderInventory.warm(this);
             CrashReporting.startIfAllowed(this);
             ReceivedApkCleanup.initialize(this);
         }

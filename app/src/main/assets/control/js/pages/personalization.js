@@ -40,7 +40,18 @@ function saveRadioUiStyle() {
   },40000);
 }
 
-var gestureSaving = false, memorySaving=false, volumeBalanceSaving=false;
+var gestureSaving = false, memorySaving=false, volumeBalanceSaving=false, updatePopupSaving=false;
+function saveUpdatePopup(){
+  if(updatePopupSaving||!state||!state.settings)return;
+  var input=document.getElementById("updatePopupEnabled"),value=input.checked;
+  updatePopupSaving=true;input.disabled=true;
+  api("/api/settings",{updatePopupEnabled:value},function(error){
+    updatePopupSaving=false;input.disabled=false;
+    if(error)input.checked=!value;
+    state.settings.updatePopupEnabled=input.checked;
+    toast(error?error.message:"更新弹窗已"+(value?"开启":"关闭"),!!error);refresh();
+  });
+}
 function savePlayerVolumeBalance(){
   var input=document.getElementById("playerVolumeBalance"),value=input.checked;
   volumeBalanceSaving=true;input.disabled=true;
@@ -106,6 +117,7 @@ function gestureInputs(disabled) {
 function renderPageState() {
   if (!state || !state.settings || gestureSaving) return;
   var settings = state.settings;
+  if(!updatePopupSaving){var popup=document.getElementById("updatePopupEnabled");popup.checked=settings.updatePopupEnabled===true;popup.disabled=false;}
   if(!volumeBalanceSaving){var balance=document.getElementById("playerVolumeBalance");balance.checked=settings.playerVolumeBalance===true;balance.disabled=false;}
   if(!groupPasswordSaving){
     var groupInput=document.getElementById("groupPasswordRequired");groupInput.disabled=false;

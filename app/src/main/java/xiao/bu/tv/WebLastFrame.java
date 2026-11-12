@@ -95,6 +95,30 @@ final class WebLastFrame {
         capture(null, navigate);
     }
 
+    void captureVideo(DirectVideoView video, Runnable navigate) {
+        if (!video.isTextureOutput()) { captureSurface(video.getSurfaceView(), navigate); return; }
+        cancelCapture(); request = -1; polls = 0;
+        View output = video.getRenderView();
+        int width = output.getWidth(), height = output.getHeight();
+        if (frame != null || closed || width <= 0 || height <= 0) { navigate.run(); return; }
+        float scale = Math.min(1f, Math.min(1280f / width, 1280f / height));
+        final Bitmap bitmap;
+        try { bitmap = Bitmap.createBitmap(Math.max(1, Math.round(width * scale)),
+                Math.max(1, Math.round(height * scale)), Bitmap.Config.ARGB_8888); }
+        catch (OutOfMemoryError unavailable) { navigate.run(); return; }
+        video.copyVideoFrame(bitmap, ui, result -> {
+            if (result == 0) {
+                frame = bitmap;
+                cover.setScaleType(width > root.getWidth() || height > root.getHeight()
+                        ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+                cover.setBackgroundColor(android.graphics.Color.BLACK);
+                cover.setImageBitmap(bitmap); cover.setVisibility(View.VISIBLE); matte.setVisibility(View.VISIBLE);
+                raise(); ui.removeCallbacks(check); ui.postDelayed(check, 200L);
+            } else bitmap.recycle();
+            navigate.run();
+        });
+    }
+
     void captureSurface(SurfaceView video, Runnable navigate) {
         capture(video, navigate);
     }

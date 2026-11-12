@@ -32,9 +32,11 @@ import java.util.concurrent.TimeUnit;
 
 final class LocalControlServer implements Closeable {
     interface Listener {
+        default String managementAddress(){return null;}
         String multimediaControl(JSONObject request) throws Exception;
 
         String stateJson(String view);
+        default String channelProbeJson(){return "{}";}
         String catalogJson();
         String playbackJson();
         String mediaJson(boolean detailed) throws Exception;
@@ -156,7 +158,8 @@ final class LocalControlServer implements Closeable {
             ServerSocket socket = new ServerSocket();
             try {
                 socket.setReuseAddress(true);
-                socket.bind(new InetSocketAddress(port));
+                try{socket.bind(new InetSocketAddress(InetAddress.getByName("::"),port));}
+                catch(IOException unsupported){socket.close();socket=new ServerSocket();socket.setReuseAddress(true);socket.bind(new InetSocketAddress(port));}
                 serverSocket = socket;
                 if (port != PREFERRED_PORT) {
                     AppLog.w(TAG, "Management port " + PREFERRED_PORT
@@ -193,12 +196,13 @@ final class LocalControlServer implements Closeable {
     String getLanUrl() {
         long now = android.os.SystemClock.elapsedRealtime();
         String address = advertisedLanAddress;
-        if (advertisedLanAddressAt == 0L || now - advertisedLanAddressAt >= 30000L) {
-            address = findLanAddress();
+        if (advertisedLanAddressAt == 0L || now - advertisedLanAddressAt >= (address==null?2000L:30000L)) {
+            try{address=listener.managementAddress();}catch(RuntimeException unavailable){address=null;}
+            if(address==null)address = findLanAddress();
             advertisedLanAddress = address;
             advertisedLanAddressAt = now;
         }
-        return address == null ? null : "http://" + address + ":" + getPort() + "/index.html";
+        return address == null ? null : "http://" + LanAddresses.authority(address) + ":" + getPort() + "/index.html";
     }
 
     /** Select the local interface that can actually reach a particular receiver.
@@ -207,7 +211,7 @@ final class LocalControlServer implements Closeable {
         try {
             InetAddress peer = InetAddress.getByName(new URL(peerUrl).getHost());
             byte[] peerBytes = peer.getAddress();
-            if (peerBytes.length == 4) {
+            if (peerBytes.length == 4||peerBytes.length==16) {
                 Enumeration<NetworkInterface> interfaces = NetworkInterface
                         .getNetworkInterfaces();
                 if (interfaces != null) {
@@ -215,11 +219,11 @@ final class LocalControlServer implements Closeable {
                         if (!network.isUp() || network.isLoopback()) continue;
                         for (InterfaceAddress candidate : network.getInterfaceAddresses()) {
                             InetAddress local = candidate.getAddress();
-                            if (local == null || local.getAddress().length != 4
-                                    || local.isLoopbackAddress()) continue;
+                            if (local == null || local.getAddress().length != peerBytes.length
+                                    || !LanAddresses.usable(local)) continue;
                             if (sameSubnet(local.getAddress(), peerBytes,
                                     candidate.getNetworkPrefixLength())) {
-                                return "http://" + local.getHostAddress() + ":"
+                                return "http://" + LanAddresses.authority(LanAddresses.host(local)) + ":"
                                         + getPort() + "/index.html";
                             }
                         }
@@ -501,6 +505,8 @@ final class LocalControlServer implements Closeable {
             send(socket, 200, "application/json; charset=utf-8",
                     listener.stateJson(queryParameter(requestTarget, "view"))
                             .getBytes("UTF-8"));
+        } else if ("GET".equals(method) && "/api/channels/probe".equals(path)) {
+            send(socket,200,"application/json; charset=utf-8",listener.channelProbeJson().getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/logs".equals(path)) {
             String filter = queryParameter(requestTarget, "filter");
             if ("1".equals(queryParameter(requestTarget, "download"))) {
@@ -908,41 +914,8 @@ final class LocalControlServer implements Closeable {
                 + "Connection: close\r\n\r\n";
     }
 
-    private static String findLanAddress() {
-        String preferred = null;
-        int preferredRank = Integer.MAX_VALUE;
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            if (interfaces == null) {
-                return null;
-            }
-            for (NetworkInterface network : Collections.list(interfaces)) {
-                if (!network.isUp() || network.isLoopback()) {
-                    continue;
-                }
-                String interfaceName = network.getName() == null ? ""
-                        : network.getName().toLowerCase(java.util.Locale.US);
-                for (InetAddress address : Collections.list(network.getInetAddresses())) {
-                    String host = address.getHostAddress();
-                    if (!address.isLoopbackAddress() && host.indexOf(':') < 0
-                            && address.isSiteLocalAddress()) {
-                        int rank = ipv4Preference(host) * 10
-                                + interfacePreference(interfaceName);
-                        if (rank < preferredRank) {
-                            preferred = host;
-                            preferredRank = rank;
-                            if (rank == 0) {
-                                return preferred;
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (SocketException error) {
-            AppLog.w(TAG, "Unable to inspect network interfaces", error);
-        }
-        return preferred;
-    }
+    private static String findLanAddress() {return LanAddresses.preferred(LanAddresses.collect());}
+    void invalidateLanAddress(){advertisedLanAddressAt=0;}
 
     private static boolean sameSubnet(byte[] local, byte[] peer, short prefixLength) {
         if (local.length != peer.length || prefixLength < 0

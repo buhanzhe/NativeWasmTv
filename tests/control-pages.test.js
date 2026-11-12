@@ -6,6 +6,34 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '../app/src/main/assets/control');
 let passed = 0;
 
+test('optional update popup saves independently, keeps its pending value and rolls back failures',()=>{
+ const b=browser('personalization'),c=b.context,get=id=>c.document.getElementById(id);
+ b.requests[0].respond({settings:{updatePopupEnabled:false}});
+ assert.equal(get('updatePopupEnabled').checked,false);
+ get('updatePopupEnabled').checked=true;c.saveUpdatePopup();
+ const save=b.requests.at(-1);assert.deepEqual(JSON.parse(save.body),{updatePopupEnabled:true});
+ assert.equal(get('updatePopupEnabled').disabled,true);c.renderPageState();assert.equal(get('updatePopupEnabled').checked,true);
+ const count=b.requests.length;c.saveUpdatePopup();assert.equal(b.requests.length,count);
+ save.respond({ok:true});assert.equal(c.state.settings.updatePopupEnabled,true);assert.equal(get('updatePopupEnabled').disabled,false);
+ get('updatePopupEnabled').checked=false;c.saveUpdatePopup();b.requests.at(-1).respond({message:'failed'},500);
+ assert.equal(get('updatePopupEnabled').checked,true);assert.equal(c.state.settings.updatePopupEnabled,true);
+});
+
+test('favorite button display saves independently, preserves pending value and rolls back failures',()=>{
+ const b=browser('channels'),c=b.context,get=id=>c.document.getElementById(id);
+ b.requests[0].respond({settings:{epgShowFavorite:true,epgShowLogos:false,epgDatePicker:false}});
+ assert.equal(get('epgShowFavorite').checked,true);
+ get('epgShowFavorite').checked=false;c.saveEpgDisplayOption('epgShowFavorite');
+ const save=b.requests.at(-1);assert.deepEqual(JSON.parse(save.body),{epgShowFavorite:false});
+ assert.equal(get('epgShowFavorite').disabled,true);c.renderPageState();assert.equal(get('epgShowFavorite').checked,false);
+ const count=b.requests.length;c.saveEpgDisplayOption('epgShowFavorite');assert.equal(b.requests.length,count);
+ save.respond({ok:true});assert.equal(c.state.settings.epgShowFavorite,false);assert.equal(get('epgShowFavorite').disabled,false);
+ c.renderPageState();assert.equal(get('epgShowFavorite').checked,false);
+ get('epgShowFavorite').checked=true;c.saveEpgDisplayOption('epgShowFavorite');b.requests.at(-1).respond({message:'failed'},500);
+ assert.equal(get('epgShowFavorite').checked,false);assert.equal(c.state.settings.epgShowFavorite,false);
+ assert.equal(get('epgShowLogos').checked,false);assert.equal(get('epgDatePicker').checked,false);
+});
+
 // The probe controls share polling with catalogue import; pending writes must
 // survive old snapshots and repeated clicks must not restart a long full scan.
 
@@ -109,6 +137,19 @@ test('browser settings save core options without exposing rule details', () => {
   }
   assert.equal('webViewAutoCloseSniffed' in JSON.parse(save.body),false);
   assert.equal('webViewUserScript' in JSON.parse(save.body),false);
+});
+
+test('lite preparse toggle is browser-only, preserves pending edits and rolls back failures', () => {
+ const b=browser('browser'),c=b.context,get=id=>c.document.getElementById(id);
+ b.requests[0].respond({settings:{liteBrowserSupported:false,litePreparseEnabled:false}});
+ assert.equal(get('litePreparseRow').hidden,true);
+ c.state.settings.liteBrowserSupported=true;c.state.settings.litePreparseEnabled=true;c.renderPageState();
+ assert.equal(get('litePreparseRow').hidden,false);assert.equal(get('litePreparseEnabled').checked,true);
+ get('litePreparseEnabled').checked=false;c.saveLitePreparse();const save=b.requests.at(-1);c.saveLitePreparse();assert.equal(b.requests.at(-1),save);
+ c.renderPageState();assert.equal(get('litePreparseEnabled').checked,false);
+ save.respond({message:'failed'},500);assert.equal(get('litePreparseEnabled').checked,true);
+ get('litePreparseEnabled').checked=false;c.saveLitePreparse();b.requests.at(-1).respond({ok:true});
+ assert.equal(c.state.settings.litePreparseEnabled,false);
 });
 
 test('kernel selector is hidden in standard packages and selectable in browser packages', () => {
@@ -1743,4 +1784,87 @@ test('neighbor probe switch preserves pending choice and full scan submits once'
  const active=b.requests.length;c.probeAllChannels();assert.equal(b.requests.length,active);
  c.state.settings.channelProbe={running:false,good:7,bad:1};c.renderPageState();assert.equal(get('probeAllButton').disabled,false);
  const html=fs.readFileSync(path.join(root,'pages/channels.html'),'utf8');assert.ok(html.indexOf('id="probeAllButton"')<html.indexOf('id="neighborProbeEnabled"'));
+});
+
+
+test('full scan polls only small progress snapshots, preserves edits and ignores stale replies',()=>{
+ const b=browser('channels'),c=b.context,get=id=>c.document.getElementById(id);
+ b.requests[0].respond({settings:{channelProbe:{sessionId:10,scanId:20,revision:1,running:true,completed:0,total:8,phase:'waiting'}}});
+ assert.match(get('channelProbeStatus').textContent,/等待播放稳定.*0 \/ 8/);
+ get('epgSourceInput').value='unsaved draft';const before=b.requests.length;
+ b.runTimers(500);const poll=b.requests.at(-1);
+ assert.equal(poll.url,'/api/channels/probe');assert.equal(poll.timeout,5000);
+ c.pollChannelProbe();assert.equal(b.requests.length,before+1);
+ poll.respond({sessionId:10,scanId:20,revision:3,running:true,completed:6,total:8,current:'测试频道',phase:'scanning'});
+ assert.match(get('channelProbeStatus').textContent,/6 \/ 8.*75%/);
+ assert.equal(get('channelProbeFill').style.width,'75%');assert.equal(get('channelProbeProgress').attributes['aria-valuenow'],75);
+ assert.equal(get('channelProbeCurrent').textContent,'正在探测：测试频道');assert.equal(get('epgSourceInput').value,'unsaved draft');
+ c.renderChannelProbe({sessionId:10,scanId:20,revision:2,running:true,completed:2,total:8});
+ assert.equal(c.state.settings.channelProbe.completed,6);
+ b.runTimers(500);b.requests.at(-1).respond({sessionId:10,scanId:20,revision:4,running:false,completed:8,total:8,scanGood:6,scanBad:1,scanUnknown:1});
+ assert.match(get('channelProbeStatus').textContent,/已完成.*100%/);assert.equal(get('probeAllButton').disabled,false);
+ assert.equal(get('channelProbeCurrent').textContent,'可用 6 · 失效 1 · 未确定 1');
+ const finished=b.requests.length;b.runTimers(500);assert.equal(b.requests.length,finished);
+ c.renderChannelProbe({sessionId:11,scanId:0,revision:0,running:false,total:0,completed:0});
+ assert.equal(c.state.settings.channelProbe.scanId,0,'application restart accepts a new session');
+});
+
+test('full scan cancellation stops stale polling, keeps results, retries failures and permits restart',()=>{
+ const b=browser('channels'),c=b.context,get=id=>c.document.getElementById(id);
+ const running={sessionId:1,scanId:2,revision:3,running:true,total:8,completed:3,scanGood:2,scanBad:1,phase:'waiting'};
+ b.requests[0].respond({settings:{neighborProbeEnabled:true,channelProbe:running}});
+ assert.equal(get('cancelProbeButton').style.display,'');assert.equal(get('probeAllButton').style.display,'none');
+ b.runTimers(500);const stale=b.requests.at(-1);c.cancelChannelProbe();const cancel=b.requests.at(-1);
+ assert.equal(stale.aborted,true);assert.deepEqual(JSON.parse(cancel.body),{cancelChannelProbe:true,channelProbeScanId:2});
+ assert.equal(get('cancelProbeButton').disabled,true);const count=b.requests.length;c.cancelChannelProbe();c.probeAllChannels();assert.equal(b.requests.length,count);
+ cancel.respond({message:'offline'},503);assert.equal(get('cancelProbeButton').disabled,false);
+ c.cancelChannelProbe();b.requests.at(-1).respond({ok:true});
+ b.requests.at(-1).respond({...running,revision:4,running:false,phase:'cancelled'});
+ assert.match(get('channelProbeStatus').textContent,/已取消.*3 \/ 8/);assert.equal(get('channelProbeFill').style.width,'37%');
+ assert.equal(get('cancelProbeButton').style.display,'none');assert.equal(get('probeAllButton').disabled,false);
+ assert.equal(get('neighborProbeEnabled').checked,true);assert.equal(get('channelProbeCurrent').textContent,'可用 2 · 失效 1 · 未确定 0');
+ c.renderChannelProbe(running);assert.match(get('channelProbeStatus').textContent,/已取消/);
+ const idle=b.requests.length;b.runTimers(500);assert.equal(b.requests.length,idle);
+ c.probeAllChannels();assert.equal(JSON.parse(b.requests.at(-1).body).probeAllChannels,true);
+});
+
+test('scan progress suspends hidden pages, aborts stale requests and retries a connection failure',()=>{
+ const b=browser('channels'),c=b.context;
+ b.requests[0].respond({settings:{channelProbe:{running:true,total:10,completed:1}}});b.runTimers(500);
+ const request=b.requests.at(-1);b.events.pagehide();assert.equal(request.aborted,true);
+ const count=b.requests.length;b.runTimers(500);assert.equal(b.requests.length,count);
+ c.pageActive=true;c.document.hidden=false;c.pollChannelProbe();const retry=b.requests.at(-1);retry.respond({message:'offline'},503);
+ assert.match(c.document.getElementById('channelProbeCurrent').textContent,/正在重试/);b.runTimers(1500);
+ assert.equal(b.requests.at(-1).url,'/api/channels/probe');
+ b.requests.at(-1).respond({running:false,total:10,completed:10});assert.match(c.document.getElementById('channelProbeStatus').textContent,/100%/);
+});
+
+test('continuous TS switch preserves pending choice, stale polls and failure rollback',()=>{
+ const b=browser('advanced'),c=b.context,get=id=>c.document.getElementById(id);
+ c.state={settings:{continuousTsEnabled:false}};c.renderPageState();assert.equal(get('continuousTsEnabled').value,'false');
+ c.refresh();const stale=b.requests.at(-1);
+ get('continuousTsEnabled').value='true';c.saveContinuousTs();c.saveContinuousTs();
+ const save=b.requests.at(-1);assert.deepEqual(JSON.parse(save.body),{continuousTsEnabled:true});assert.equal(get('continuousTsEnabled').disabled,true);
+ c.renderPageState();assert.equal(get('continuousTsEnabled').value,'true');
+ save.respond({ok:true});stale.respond({settings:{continuousTsEnabled:false}});assert.equal(get('continuousTsEnabled').value,'true');
+ b.requests.at(-1).respond({settings:{continuousTsEnabled:true}});assert.equal(get('continuousTsEnabled').value,'true');
+ get('continuousTsEnabled').value='false';c.saveContinuousTs();b.requests.at(-1).respond({message:'failed'},500);
+ assert.equal(get('continuousTsEnabled').value,'true');
+ c.state.settings={};c.renderPageState();assert.equal(get('continuousTsEnabled').disabled,true);
+ const count=b.requests.length;c.saveContinuousTs();assert.equal(b.requests.length,count);
+});
+
+
+test('render selection saves once, survives stale state and rolls back errors',()=>{
+ const b=browser('advanced'),c=b.context,get=id=>c.document.getElementById(id);
+ c.state={settings:{videoRenderMode:'surface'}};c.renderPageState();assert.equal(get('videoRenderMode').value,'surface');
+ c.refresh();const stale=b.requests.at(-1);
+ get('videoRenderMode').value='texture';c.saveVideoRenderMode();c.saveVideoRenderMode();
+ const save=b.requests.at(-1);assert.deepEqual(JSON.parse(save.body),{videoRenderMode:'texture'});
+ assert.equal(get('videoRenderMode').disabled,true);c.renderPageState();assert.equal(get('videoRenderMode').value,'texture');
+ save.respond({ok:true});assert.equal(get('videoRenderMode').disabled,false);
+ stale.respond({settings:{videoRenderMode:'surface'}});assert.equal(get('videoRenderMode').value,'texture');
+ b.requests.at(-1).respond({settings:{videoRenderMode:'texture'}});
+ get('videoRenderMode').value='surface';c.saveVideoRenderMode();b.requests.at(-1).respond({message:'failed'},500);
+ assert.equal(get('videoRenderMode').value,'texture');
 });

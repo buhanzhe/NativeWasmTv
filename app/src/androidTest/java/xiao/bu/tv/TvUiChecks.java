@@ -858,7 +858,7 @@ final class TvUiChecks {
         String saved=new JSONObject(TvUiPlugin.status(a)).getString("selected");
         File out=new File(a.getExternalFilesDir(null),"playing-icon-cycle");out.mkdirs();JSONArray checks=new JSONArray();
         try {
-            for(String id:new String[]{"ui2","ui3","ui4","ui5"}) {
+            for(String id:new String[]{"ui2","ui3","ui4","ui5","ui6"}) {
                 TvUiPlugin.select(a,id);t.waitForIdleSync();
                 main(t,()->{
                     android.os.Bundle state=new android.os.Bundle();state.putBoolean("playing",true);state.putBoolean("selected",true);state.putString("title","CCTV-1 综合");
@@ -866,7 +866,7 @@ final class TvUiChecks {
                     int height=Math.round(("ui2".equals(id)?70:"ui3".equals(id)?65:"ui4".equals(id)?60:"ui5".equals(id)?46:48)*d);
                     int width=Math.round(252*d);icon.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));icon.layout(0,0,width,height);
                     Field beat=icon.getClass().getDeclaredField("beat");beat.setAccessible(true);
-                    float x="ui2".equals(id)?36:"ui3".equals(id)?16:"ui4".equals(id)?31:18,barWidth="ui5".equals(id)?3:4;
+                    float x="ui2".equals(id)?36:"ui3".equals(id)?16:"ui4".equals(id)?31:"ui6".equals(id)?10:18,barWidth="ui5".equals(id)||"ui6".equals(id)?3:4;
                     float bottom=height/d/2+(barWidth==3?9:11);int left=Math.round((x-3)*d),top=Math.round((bottom-23)*d),right=Math.round((x+2*(barWidth+3)+barWidth+3)*d),end=Math.round((bottom+3)*d);
                     JSONArray frames=new JSONArray();java.util.Set<Integer>[] heights=new java.util.Set[]{new java.util.HashSet<Integer>(),new java.util.HashSet<Integer>(),new java.util.HashSet<Integer>()};
                     for(int frame=0;frame<8;frame++){

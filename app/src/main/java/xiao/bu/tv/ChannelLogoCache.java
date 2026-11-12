@@ -7,9 +7,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.security.MessageDigest;
 
-/** Worker-thread disk cache; filenames depend only on the channel name. */
+/** Worker-thread PNG cache. Callers include the source URL in the identity. */
 final class ChannelLogoCache {
     static final long VALID_MS = 24L * 60L * 60L * 1000L;
+    static final long MAX_BYTES = 4L * 1024L * 1024L;
+    static final int MAX_FILES = 128;
     private final File directory;
 
     static final class Entry {
@@ -41,14 +43,14 @@ final class ChannelLogoCache {
             bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(file.getPath(), bounds);
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0
-                    || bounds.outWidth > 128 || bounds.outHeight > 128
+                    || bounds.outWidth > ChannelLogoLoader.MAX_DIMENSION || bounds.outHeight > ChannelLogoLoader.MAX_DIMENSION
                     || !"image/png".equals(bounds.outMimeType)) return null;
             Bitmap bitmap = BitmapFactory.decodeFile(file.getPath());
             return bitmap == null ? null : new Entry(bitmap, saved);
         } catch (Exception ignored) { return null; }
     }
 
-    void write(String name, Bitmap bitmap, long now) throws IOException {
+    synchronized void write(String name, Bitmap bitmap, long now) throws IOException {
         File target = fileFor(name);
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create logo cache");
         File temporary = File.createTempFile("logo-", ".tmp", directory);
@@ -60,6 +62,30 @@ final class ChannelLogoCache {
             if (!temporary.setLastModified(now) || !temporary.renameTo(target)) {
                 throw new IOException("Cannot publish logo cache");
             }
+            trim(now);
         } finally { if (temporary.exists()) temporary.delete(); }
+    }
+
+    private void trim(long now) {
+        File[] files = directory.listFiles();
+        if (files == null) return;
+        java.util.Arrays.sort(files, new java.util.Comparator<File>() {
+            @Override public int compare(File left, File right) {
+                long a = left.lastModified(), b = right.lastModified();
+                return a < b ? -1 : a == b ? 0 : 1;
+            }
+        });
+        long bytes = 0; int count = 0;
+        for (File file : files) {
+            if (!file.getName().endsWith(".png")) continue;
+            if (now < file.lastModified() || now - file.lastModified() >= VALID_MS) file.delete();
+            if (file.isFile()) { bytes += file.length(); count++; }
+        }
+        for (File file : files) {
+            if (bytes <= MAX_BYTES && count <= MAX_FILES) break;
+            if (!file.getName().endsWith(".png") || !file.isFile()) continue;
+            long length = file.length();
+            if (file.delete()) { bytes -= length; count--; }
+        }
     }
 }

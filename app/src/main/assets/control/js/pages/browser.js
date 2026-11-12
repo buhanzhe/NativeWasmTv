@@ -1,3 +1,14 @@
+var litePreparseSaving=false;
+function saveLitePreparse(){
+  if(litePreparseSaving)return;
+  var toggle=document.getElementById("litePreparseEnabled");litePreparseSaving=true;toggle.disabled=true;
+  api("/api/settings",{litePreparseEnabled:toggle.checked},function(error){
+    litePreparseSaving=false;toggle.disabled=false;
+    if(error){toggle.checked=!!(state&&state.settings&&state.settings.litePreparseEnabled);toast(error.message,true);return;}
+    if(state&&state.settings)state.settings.litePreparseEnabled=toggle.checked;
+    toast("已保存");
+  });
+}
 function clearWebCache() {
   document.getElementById("webCacheSize").textContent = "当前占用：清理中…";
   toast("正在清除网页缓存…");
@@ -74,6 +85,8 @@ function renderPageState() {
   document.getElementById("webSourceEngine").value = s.webSourceEngine || s.defaultWebSourceEngine || "system";
   document.getElementById("webSourceEngine").disabled = false;
   var liteSupported = s.liteBrowserSupported === true;
+  var preparseRow=document.getElementById("litePreparseRow");preparseRow.hidden=!liteSupported;preparseRow.style.display=liteSupported?"":"none";
+  if(!litePreparseSaving)document.getElementById("litePreparseEnabled").checked=s.litePreparseEnabled===true;
   var engineRow = document.getElementById("webSourceEngineRow");
   engineRow.hidden = !liteSupported;
   engineRow.style.display = liteSupported ? "" : "none";
@@ -99,6 +112,6 @@ function renderPageState() {
   document.getElementById("webViewAdBlock").checked = s.webViewAdBlock === true;
   document.getElementById("webViewWebRtcEnabled").checked = s.webViewWebRtcEnabled === true;
   document.getElementById("webCacheSize").textContent =
-    "系统 WebView · 当前占用：" + formatBytes(Number(s.webViewCacheBytes) || 0);
+    "网页缓存 · 当前占用：" + formatBytes(Number(s.webViewCacheBytes) || 0);
 }
 startPage();

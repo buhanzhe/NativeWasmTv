@@ -182,6 +182,16 @@ http://your-iptv-server/channel/index.m3u8
 
 `browser-core/` 已被 Git 忽略。公开的 `.so` 不包含构建所需的 Java 接口和 JS 资源，不能单独替代该本地依赖；当前公开检出仍需要上述授权依赖才能构建。应用业务代码和通用 QuickJS/TLS 库仍在本仓库维护。分发包含内核的 bro 安装包时，完整对应源码的提供义务见 [版权说明](COPYRIGHT.md)，仅提交 `.so` 不代表已满足该义务。
 
+## 站点脚本与通用轻量内核
+
+站点点击、频道选择、播放器私有结构观察由应用内的油猴脚本管理：
+`app/src/main/assets/userscripts/ntv-site-selection.user.js` 和
+`app/src/main/assets/userscripts/ntv-player-compat.user.js`；播放器对象响应化、电视门户组件精简和免费直播续流也分别保存在同一目录的独立脚本中。首次升级会加入现有脚本列表，保留已有脚本及明确关闭的总开关；随后不会覆盖用户编辑或重新添加已删除的脚本。在管理网页的脚本管理中可编辑、停用或删除，按 `@match`、`@exclude-match`、`@run-at` 执行。脚本设置变化会使五分钟预解析结果失效。
+
+轻量内核仅提供通用的文档开始脚本入口、DOM/网络/媒体能力和播放器 SDK 观察接口，不携带业务域名或站点点击表。网页脚本可调用 `ntvBrowser.offerMedia(url)` 提交候选媒体，由既有检测链路验证；需要用户登录或交互时可调用 `ntvBrowser.requestInteraction()`。这两个接口只在轻量页面中提供，系统 WebView 使用其正常页面能力。
+
+必须由宿主处理的站点鉴权、加密播放链路、校时等策略集中在应用的 `WebSiteCompatibility`，通过可选的 `LiteHostPolicy` 接入；独立内核默认不加载这些策略。网站 DOM 或按钮变化优先更新脚本，涉及服务协议的变化仍需更新对应应用策略。
+
 ## Windows 最小版本
 
 `win` 分支的 Windows x64 网页电视位于 [`win/`](win/README.md)：简单播放列表、

@@ -10,6 +10,7 @@ def block(text,signature):
 main=(root/'app/src/main/java/xiao/bu/tv/MainActivity.java').read_text(encoding='utf-8')
 skin=(root/'app/src/main/java/xiao/bu/tv/skin/SharedTvUi.java').read_text(encoding='utf-8')
 files={
+'xiao/bu/tv/AppLog.java':'package xiao.bu.tv;public class AppLog{public static void w(String t,String s,Throwable e){}}',
 'android/media/AudioManager.java':'package android.media;public class AudioManager{public static final int MODE_IN_CALL=2,MODE_IN_COMMUNICATION=3;public int getMode(){return 0;}}',
 'android/os/Looper.java':'package android.os;public class Looper{public static Looper getMainLooper(){return new Looper();}}',
 'android/os/Handler.java':'package android.os;public class Handler{public Handler(Looper l){}public boolean post(Runnable r){r.run();return true;}}',

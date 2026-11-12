@@ -20,7 +20,7 @@ import android.view.WindowManager;
 import java.io.BufferedReader;
 import java.io.FileReader;
 
-/** API 14-23 WebKit runs inside the app process. Give it a disposable process/task. */
+/** API 14-25 cannot handle renderer termination. Keep its browser disposable. */
 public final class LegacyWebActivity extends Activity implements WebSourceView.Listener {
     private final Handler ui = new Handler();
     private final Messenger inbox = new Messenger(new Handler(message -> { command(message.getData()); return true; }));
@@ -131,6 +131,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         try { target.send(message); } catch (android.os.RemoteException ignored) { }
     }
     private void event(String name, Bundle data) {
+        data.putInt("request", request);
         data.putString("event", name);
         Bundle state = new Bundle();
         state.putString("url", source.currentPageUrl()); state.putString("ua", source.activeUserAgent());
@@ -186,6 +187,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
             case "pause": source.setMultimediaPaused(true); break;
             case "play": source.setMultimediaPaused(false); break;
             case "trim": source.trimMemory(); break;
+            case "profileFlush": if(!source.flushSharedProfile(()->result(data.getInt("id"),null,null)))result(data.getInt("id"),null,null);break;
             case "cache": source.clearBrowserCache(error -> result(data.getInt("id"),error,null)); break;
             case "shutdown":
                 if (android.os.Build.VERSION.SDK_INT >= 21) android.webkit.CookieManager.getInstance().flush();
@@ -264,9 +266,9 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         }
         return super.dispatchKeyEvent(event);
     }
-    @Override public void onPageStarted(int id, String url) { rendererBeat = SystemClock.elapsedRealtime(); event("started", LegacyWebSession.bundle("url", url)); }
-    @Override public void onResourcesReset(int id, String url) { event("reset", LegacyWebSession.bundle("url", url)); }
-    @Override public void onPageReady(int id, String url, String title) { event("ready", LegacyWebSession.bundle("url", url)); }
+    @Override public void onPageStarted(int id, String url) { if(id!=request)return; rendererBeat = SystemClock.elapsedRealtime(); event("started", LegacyWebSession.bundle("url", url)); }
+    @Override public void onResourcesReset(int id, String url) { if(id==request)event("reset", LegacyWebSession.bundle("url", url)); }
+    @Override public void onPageReady(int id, String url, String title) { if(id==request)event("ready", LegacyWebSession.bundle("url", url)); }
     @Override public void onPageError(int id, String reason) {
         if (id != request) return;
         // A network/HTTP error is recoverable inside the same browser. Sending
@@ -280,6 +282,7 @@ public final class LegacyWebActivity extends Activity implements WebSourceView.L
         Bundle beat = LegacyWebSession.bundle("failure", "网页不可用: " + reason); send(LegacyWebSession.HEARTBEAT, beat);
     }
     @Override public void onStreamDiscovered(int id, String stream, String page, String ua, String cookies) {
+        if (id != request) return;
         Bundle data = LegacyWebSession.bundle("stream", stream); data.putString("url", page); data.putString("ua", ua); data.putString("cookies", cookies); event("stream", data);
     }
     @Override public void onBrowserChannelList() { showPlayer(); event("channel-list", new Bundle()); }

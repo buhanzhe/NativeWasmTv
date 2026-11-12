@@ -122,8 +122,13 @@ final class VideoScreenshot {
     private byte[] capture(final Source source, final boolean preview) throws IOException {
         acquire(preview);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            try { return captureLegacy(source, preview); }
-            finally { busy.set(false); }
+            boolean texture;
+            try { texture = currentOnMain(source).view.isTextureOutput(); }
+            catch (IOException error) { busy.set(false); throw error; }
+            if (!texture) {
+                try { return captureLegacy(source, preview); }
+                finally { busy.set(false); }
+            }
         }
         final Capture request = new Capture();
         final Handler main = new Handler(Looper.getMainLooper());
@@ -366,8 +371,8 @@ final class VideoScreenshot {
     @TargetApi(24)
     private void requestCopy(final Source source, final Target target, final Bitmap bitmap,
             final Capture request, Handler handler) {
-        PixelCopy.request(target.view.getSurfaceView(), bitmap, new PixelCopy.OnPixelCopyFinishedListener() {
-            @Override public void onPixelCopyFinished(int result) {
+        target.view.copyVideoFrame(bitmap, handler, new DirectVideoView.FrameCopyResult() {
+            @Override public void done(int result) {
                 IOException failure = null;
                 try {
                     if (result != PixelCopy.SUCCESS) {
@@ -384,7 +389,7 @@ final class VideoScreenshot {
                     if (failure != null || request.isAbandoned()) busy.set(false);
                 }
             }
-        }, handler);
+        });
     }
 
     private static final class Capture {

@@ -37,17 +37,17 @@ public class Check {
   check(queue.tasks.isEmpty(),"other PID, compatibility dumps and intentional disconnects filtered");
   tail.line(line(123,"E","IJKMEDIA","PPS id out of range: 0 url=https://cdn.example/secret?token=secret"));
   for(int i=0;i<10000;i++)tail.line(line(123,"E","IJKMEDIA","PPS id out of range: "+i));
-  check(queue.tasks.size()==1,"native error flood coalesced");check(a.logs().length()<=6024,"native context bounded");
+  check(queue.tasks.isEmpty(),"native error flood remains diagnostic until playback fails");check(a.logs().length()<=6024,"native context bounded");
   reports.error(1,"IJK","Error_1_-1007","what=1 extra=-1007",null);
-  check(queue.tasks.size()==2,"callback not suppressed by native log budget");
-  reports.error(0,"IJK","old","wrong channel",null);check(queue.tasks.size()==2,"stale callback ignored");
+  check(queue.tasks.size()==1,"confirmed callback retains native diagnostics");
+  reports.error(0,"IJK","old","wrong channel",null);check(queue.tasks.size()==1,"stale callback ignored");
   PlayerErrorReports.Scene b=reports.begin(2,"SystemPlayer","Channel B","https://other.example/live?auth=secret","hardware",0);
-  queue.flush();check(sent.size()==2,"asynchronous sink");
+  queue.flush();check(sent.size()==1,"asynchronous sink");
   for(Throwable t:sent){String d=details(t);check(d.contains("Channel A")&&!d.contains("Channel B"),"queued context immutable across switch");check(!d.contains("topsecret")&&!d.contains("user:password")&&!d.contains("/path?"),"source credentials/path/query omitted");}
   clock.time=11000;
-  tail.line(line(123,"E","IJKMEDIA","new decoder error"));queue.flush();check(details(sent.get(sent.size()-1)).contains("Channel A"),"ordered native logs retain old scene until marker");
+  tail.line(line(123,"E","IJKMEDIA","new decoder error"));queue.flush();check(sent.size()==1&&a.logs().contains("new decoder error"),"ordered native diagnostics retain old scene without emitting another report");
   tail.line(line(123,"I",PlayerErrorReports.MARKER_TAG,"nonce:"+b.id));clock.time=22000;
-  tail.line(line(123,"E","MediaCodec","decoder configure failed token=abcdef"));queue.flush();
+  tail.line(line(123,"E","MediaCodec","decoder configure failed token=abcdef"));reports.error(2,"SystemPlayer","Error_1_0","decoder failed",null);queue.flush();
   check(details(sent.get(sent.size()-1)).contains("Channel B"),"new native scene restored");
   check(!details(sent.get(sent.size()-1)).contains("abcdef"),"standalone secrets redacted");
   clock.time=24000;RuntimeException caught=new IllegalStateException("failed https://cdn.example/private?signature=abc Authorization=xyz");

@@ -98,6 +98,19 @@
             </select>
 </div>
           <div class="browser-setting-row compact-select-row">
+            <div class="browser-setting-copy"><label for="videoRenderMode">渲染方式</label></div>
+            <select id="videoRenderMode" disabled onchange="saveVideoRenderMode()">
+              <option value="surface">SurfaceView</option>
+              <option value="texture">TextureView</option>
+            </select>
+          </div>
+          <div class="browser-setting-row compact-select-row">
+<div class="browser-setting-copy"><label for="continuousTsEnabled">连续 TS</label></div>
+<select id="continuousTsEnabled" disabled onchange="saveContinuousTs()">
+              <option value="true">开启</option><option value="false">关闭</option>
+            </select>
+</div>
+          <div class="browser-setting-row compact-select-row">
 <div class="browser-setting-copy"><label for="decoder">解码模式</label></div>
 <select id="decoder" onchange="saveDecoder()">
               <option value="auto">自动</option>
@@ -134,14 +147,14 @@
             </select>
 </div>
         </div>
-        <p class="hint">不兼容时可切换播放器或解码模式；更改部分设置后会重新播放。</p>
+        <p class="hint">不兼容时可切换播放器或解码模式；更改部分设置后会重新播放。连续 TS 适用于 TS 格式直播，使用系统播放器，单核设备默认开启。</p>
         <p id="systemPlayerHint" class="hint" style="display:none">系统播放器下，IJK设置不生效。</p>
       </section>
     </main>
     <div id="message" class="message"></div>
     <script src="/js/navigation.js?v=20261030-ui"></script>
     <script src="/js/common.js?v=20261030-ui"></script>
-    <script src="/js/pages/advanced.js?v=fullscreen-startup1"></script>
+    <script src="/js/pages/advanced.js?v=continuous-ts1"></script>
   <script src="/js/ui.js?v=20261030-ui"></script>
 </body>
 </html>

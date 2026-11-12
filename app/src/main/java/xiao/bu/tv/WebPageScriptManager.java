@@ -69,7 +69,7 @@ final class WebPageScriptManager {
         installHandlers();
     }
 
-    private static synchronized List<String> compiledUserScripts(String sources) {
+    static synchronized List<String> compiledUserScripts(String sources) {
         if (sources.equals(sharedSources)) return sharedUserScripts;
         List<String> compiled = new ArrayList<>();
         if (sources.trim().length() > 0) {

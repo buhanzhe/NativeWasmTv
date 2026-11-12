@@ -185,6 +185,7 @@ class NetworkClient {
   public InputStream getInputStream(){return new ByteArrayInputStream(payload){public void close(){closed=true;}};}
  }
 }
+class AppLog {static void w(String a,String b,Throwable c){}}
 class BuildConfig {static final String VERSION_NAME="test";}
 class AllocationCounter {
  final String platform;final java.lang.reflect.Method method;final Object bean;final Object[] args;

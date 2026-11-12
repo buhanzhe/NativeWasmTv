@@ -292,14 +292,14 @@ final class EpgManager {
         // XMLTV IDs are opaque. An explicit tvg-id wins over a display-name alias.
         String exact=channel.epgId==null?"":channel.epgId.trim();
         if(!exact.isEmpty()){
-            if(snapshot.programsByChannel.containsKey(exact))return exact;
+            if(snapshot.programsByChannel.containsKey(exact)||snapshot.logosByChannel.containsKey(exact))return exact;
             String requested=normalize(exact);
             String channelId=snapshot.channelByAlias.get(requested);
             if(channelId!=null)return channelId;
             if(snapshot.programsByChannel.containsKey(requested))return requested;
         }
         String name=channel.name.trim(),requested=normalize(name);
-        if(snapshot.programsByChannel.containsKey(name))return name;
+        if(snapshot.programsByChannel.containsKey(name)||snapshot.logosByChannel.containsKey(name))return name;
         String channelId=snapshot.channelByAlias.get(requested);
         if(channelId!=null)return channelId;
         return snapshot.programsByChannel.containsKey(requested)?requested:null;

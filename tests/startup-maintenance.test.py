@@ -15,7 +15,7 @@ assert '}, 15000L);' in startup
 test = '''import java.util.*;
 class StartupMaintenanceCheck {
 static class SystemClock {static long now;static long elapsedRealtime(){return now;}}
-static class Log {static void i(String tag,String text){}}
+static class AppLog {static void i(String tag,String text){}}
 static final String TAG="test";
 boolean prepared,buffering,videoRenderingStarted,audioOnlyPlayback,playbackProgressObserved;
 boolean startupMaintenanceDestroyed,finishing;int playRequestId=1,calls;long lastStartupMaintenanceAt;
@@ -60,3 +60,24 @@ with tempfile.TemporaryDirectory(prefix='ntv-startup-refresh-') as folder:
     subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8',str(file)],check=True)
     subprocess.run([str(jdk/'java.exe'),'-cp',folder,'StartupMaintenanceCheck'],check=True)
 print('PASS cache-first start, stable playback, request churn, CPU pressure, failed source and teardown')
+
+# Execute the actual delayed management task after its Activity has been replaced.
+begin=source.index('    private final Runnable startManagementServerTask=')
+end=source.index('    private void startManagementServer()',begin)
+task=source[begin:end]
+assert 'root.removeCallbacks(startManagementServerTask)' in source
+code='''class ManagementStartupCheck {
+boolean startupMaintenanceDestroyed,finishing;int starts;
+boolean isFinishing(){return finishing;}void startManagementServer(){starts++;}
+TASK
+public static void main(String[] args){
+ ManagementStartupCheck live=new ManagementStartupCheck();live.startManagementServerTask.run();if(live.starts!=1)throw new AssertionError();
+ ManagementStartupCheck old=new ManagementStartupCheck();old.startupMaintenanceDestroyed=true;old.startManagementServerTask.run();if(old.starts!=0)throw new AssertionError("Old activity rebound port");
+ old.startupMaintenanceDestroyed=false;old.finishing=true;old.startManagementServerTask.run();if(old.starts!=0)throw new AssertionError();
+}}
+'''.replace('TASK',task)
+with tempfile.TemporaryDirectory(prefix='ntv-management-start-') as folder:
+    file=Path(folder)/'ManagementStartupCheck.java';file.write_text(code,encoding='utf8')
+    subprocess.run([str(jdk/'javac.exe'),'-encoding','UTF-8',str(file)],check=True)
+    subprocess.run([str(jdk/'java.exe'),'-cp',folder,'ManagementStartupCheck'],check=True)
+print('PASS destroyed and finishing Activities cannot start a delayed management server')

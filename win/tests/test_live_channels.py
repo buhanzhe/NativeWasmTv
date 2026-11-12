@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from live_decode import observe
 
 HERE=Path(__file__).resolve().parent
 
@@ -36,8 +37,11 @@ def main():
     p.add_argument('--proxy',action='store_true',help='Use inherited platform proxy and CA trust for cloud testing')
     p.add_argument('--seconds',type=int,default=8)
     p.add_argument('--jobs',type=int,default=2)
+    p.add_argument('--actual-ffplay',action='store_true',help='Actual bundled FFplay/SDL and owned-window capture')
+    p.add_argument('--fresh-hls-connections',action='store_true',help='A/B remote HLS connection reuse')
     p.add_argument('--selection',type=Path,default=HERE/'live-ten.json')
     p.add_argument('--fixture',action='store_true',help='Explicitly mark a local fixture run; never a real-channel pass')
+    p.add_argument('--all-sites',action='store_true',help='Run a recorded complete site inventory instead of the ten-channel sample')
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();a.bundle=a.bundle.resolve();a.output=a.output.resolve()
     if a.output.exists() and any(a.output.iterdir()):p.error('Output is not empty; use a new directory')
@@ -48,12 +52,14 @@ def main():
     if hashlib.sha256(raw).hexdigest()!=manifest['playlist_sha256']:p.error('Test selection and bundled playlist snapshots differ')
     selected=manifest['channels']
     if a.fixture and manifest.get('kind')!='local-fixture':p.error('Fixture marker is required')
-    if not a.fixture and (len(selected)!=10 or manifest.get('kind')=='local-fixture'):p.error('Real run requires ten real channels')
+    if a.all_sites and manifest.get('kind')!='site-sweep':p.error('All-sites runs require a site-sweep manifest')
+    if not a.fixture and not a.all_sites and (len(selected)!=10 or manifest.get('kind')=='local-fixture'):p.error('Real run requires ten real channels')
     assert selected and len({x['id'] for x in selected})==len(selected)
     if not a.fixture:
         lines=raw.decode('utf-8-sig').splitlines()
-        if len({x['url'] for x in selected})!=10:p.error('Real selection contains duplicate source URLs')
+        if len({x['url'] for x in selected})!=len(selected):p.error('Real selection contains duplicate source URLs')
         for item in selected:
+            if a.all_sites and item.get('source')=='user-example':continue
             index=item['source_line']-1
             if index<0 or index>=len(lines) or lines[index]!=item['name']+','+item['url']:
                 p.error('Selected channel differs from the exact bundled source line: '+item['id'])
@@ -63,7 +69,7 @@ def main():
     def path(value):
         result=str(Path(value).resolve());return 'Z:'+result.replace('/','\\') if a.windows and os.name!='nt' else result
     cp=(';' if a.windows else os.pathsep).join(path(x) for x in [classes,*jars])
-    options=['-Xmx256m','-Djava.awt.headless=true','-Dntv.library='+path(app/('ntvLiteDesktop.dll' if a.windows else 'libntvLiteDesktop.so'))]
+    options=['-Xmx256m','-Dfile.encoding=UTF-8','-Dsun.stdout.encoding=UTF-8','-Dsun.stderr.encoding=UTF-8','-Djava.awt.headless=true','-Dntv.library='+path(app/('ntvLiteDesktop.dll' if a.windows else 'libntvLiteDesktop.so'))]
     proxy=urllib.parse.urlsplit(os.environ.get('HTTPS_PROXY','')) if a.proxy else None
     if proxy and proxy.hostname:
         for scheme in ['http','https']:options.extend([f'-D{scheme}.proxyHost={proxy.hostname}',f'-D{scheme}.proxyPort={proxy.port or 80}'])
@@ -85,7 +91,7 @@ def main():
                     row.update(status='blocked',page='blocked',reason='platform_proxy_policy_denied');return row
             command=shlex.split(a.java_command)+options+['-cp',cp,'xiao.bu.tv.windows.RealChannelProbe',item['url'],path(folder/'profile')]
             with (folder/'vm.log').open('w',encoding='utf-8') as errors:
-                vm=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=errors,text=True)
+                vm=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=errors,text=True,encoding='utf-8',errors='replace')
                 messages=queue.Queue()
                 def read_vm():
                     for line in vm.stdout:messages.put(line.rstrip())
@@ -99,42 +105,26 @@ def main():
                     if message.startswith('FAILED_JSON '):raise RuntimeError(json.loads(message[12:])['message'])
                     if message.startswith('MEDIA_JSON '):media=json.loads(message[11:]);break
                 if not media:raise RuntimeError('Media handoff timeout')
+                # Private local diagnostics only: never copied by the public report exporter.
+                (folder/'media-private.json').write_text(json.dumps(media,ensure_ascii=False),encoding='utf8')
                 row.update(page='loaded',media='handed_off',handoff_ms=round((time.monotonic()-begin)*1000),header_names=list(media['headers']))
                 frame=folder/'frame.png'
-                cmd=shlex.split(a.decoder_command)+['-v','error','-nostdin','-y','-threads','2','-filter_threads','1','-re','-rw_timeout','12000000','-progress','pipe:1','-stats_period','0.5']
-                if urllib.parse.urlsplit(media['url']).hostname not in ('localhost','127.0.0.1') and proxy and proxy.hostname:
-                    cmd+=['-http_proxy',proxy.geturl(),'-tls_verify','1','-ca_file',path('/etc/ssl/certs/ca-certificates.crt')]
-                headers=''
-                for key,value in media['headers'].items():
-                    if not re.fullmatch('[A-Za-z0-9-]+',key) or '\r' in value or '\n' in value:raise RuntimeError('Invalid media header')
-                    headers+=key+': '+value+'\r\n'
-                if headers:cmd+=['-headers',headers]
-                cmd+=['-i',media['url'],'-t',str(a.seconds),'-map','0:v:0','-map','0:a:0?','-f','null','-','-map','0:v:0','-frames:v','1','-an','-threads','1',path(frame)]
-                with (folder/'decode.log').open('w',encoding='utf-8') as log:
-                    decoder=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=log,text=True)
-                    progress=queue.Queue()
-                    def read_progress():
-                        for line in decoder.stdout:progress.put(line.strip())
-                        progress.put(None)
-                    threading.Thread(target=read_progress,daemon=True).start()
-                    deadline=time.monotonic()+a.seconds+45
-                    finished_output=False
-                    while time.monotonic()<deadline:
-                        try:line=progress.get(timeout=.2)
-                        except queue.Empty:continue
-                        if line is None:finished_output=True;break
-                        if line.startswith('out_time_us='):
-                            try:
-                                seconds=max(0,int(line.split('=',1)[1])/1e6)
-                                row['decoded_seconds']=max(row['decoded_seconds'],seconds)
-                                vm.stdin.write('TIME '+str(seconds)+'\n');vm.stdin.flush()
-                            except (ValueError,BrokenPipeError):pass
-                        elif line.startswith('frame='):
-                            try:row['video_frames']=max(row['video_frames'],int(line.split('=',1)[1]))
-                            except ValueError:pass
-                    if not finished_output:decoder.kill();raise RuntimeError('Decoder timeout')
-                    decoder.wait(timeout=5)
-                    if decoder.returncode!=0:raise RuntimeError('Decoder failed with code '+str(decoder.returncode)+'; see decode.log')
+                def command(chosen,picture,remaining):
+                    cmd=shlex.split(a.decoder_command)+['-v','error','-nostdin','-y','-threads','2','-filter_threads','1','-re','-rw_timeout','12000000','-progress','pipe:1','-stats_period','0.5']
+                    if urllib.parse.urlsplit(chosen['url']).hostname not in ('localhost','127.0.0.1') and proxy and proxy.hostname:
+                        cmd+=['-http_proxy',proxy.geturl(),'-tls_verify','1','-ca_file',path('/etc/ssl/certs/ca-certificates.crt')]
+                    headers=''
+                    for key,value in chosen['headers'].items():
+                        if not re.fullmatch('[A-Za-z0-9-]+',key) or '\r' in value or '\n' in value:raise RuntimeError('Invalid media header')
+                        headers+=key+': '+value+'\r\n'
+                    if headers:cmd+=['-headers',headers]
+                    if chosen.get('virtualMse'):cmd+=['-live_start_index','0']
+                    elif a.fresh_hls_connections and urllib.parse.urlsplit(chosen['url']).path.lower().endswith('.m3u8'):cmd+=['-http_persistent','0']
+                    return cmd+['-i',chosen['url'],'-t',str(remaining),'-map','0:v:0','-map','0:a:0?','-f','null','-','-map','0:v:0','-vf','select=gte(n\\,25)','-frames:v','1','-an','-threads','1',path(picture)]
+                if a.actual_ffplay or media.get("liveHls"):
+                    from live_ffplay import observe as observe_ffplay
+                    observe_ffplay(media,vm,messages,folder,row,a.seconds,a.bundle/'player/ffplay.exe',a.fresh_hls_connections)
+                else:observe(media,vm,messages,folder,row,a.seconds,command)
                 if not frame.exists() or frame.stat().st_size<100 or row['decoded_seconds']<a.seconds-.5 or row['video_frames']<20:
                     raise RuntimeError('Incomplete actual frame/playback clock evidence')
                 row.update(status='passed',decode='passed',frame='frame.png',frame_sha256=hashlib.sha256(frame.read_bytes()).hexdigest())

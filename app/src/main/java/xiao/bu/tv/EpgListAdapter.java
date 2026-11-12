@@ -22,6 +22,15 @@ final class EpgListAdapter extends BaseAdapter {
     private List<EpgManager.Program> programs = Collections.emptyList();
     private float uiScale = 1f;
     private Channel channel;
+    private List<EpgManager.Program> source=Collections.emptyList();
+    private List<Long> days=Collections.emptyList();
+    private boolean datePickerEnabled;
+    private long selectedDay;
+    void setDatePickerEnabled(boolean enabled){datePickerEnabled=enabled;}
+    boolean hasDatePicker(){return datePickerEnabled&&days.size()>1;}
+    List<Long> availableDays(){return days;}
+    long selectedDay(){return selectedDay;}
+    void selectDay(long day){if(!hasDatePicker()||!days.contains(day))return;selectedDay=day;programs=displayCache.programsForDay(source,day,0);notifyDataSetChanged();}
     private int pagedRowHeight;
     int navigationRowHeight(android.widget.ListView list){
         if(TvUiPlugin.current()==null&&pagedRowHeight>0)return pagedRowHeight;
@@ -57,8 +66,16 @@ final class EpgListAdapter extends BaseAdapter {
         showPrograms(programs,null);
     }
     void showPrograms(List<EpgManager.Program> programs,Channel channel){
+        if(this.channel!=channel)selectedDay=0;
         this.channel=channel;
-        this.programs = displayCache.programsFor(programs,channel==null?0:channel.catchupDays());
+        source=programs;
+        double catchup=channel==null?0:channel.catchupDays();
+        days=datePickerEnabled?EpgGuideDays.available(programs,catchup,System.currentTimeMillis()):Collections.<Long>emptyList();
+        if(!days.contains(selectedDay)){
+            long today=EpgManager.dayStart(System.currentTimeMillis());
+            selectedDay=days.contains(today)?today:days.isEmpty()?today:days.get(0);
+        }
+        this.programs = datePickerEnabled&&!days.isEmpty()?displayCache.programsForDay(programs,selectedDay,0):displayCache.programsFor(programs,catchup);
         // Keep time-based highlights fresh even when the cached list is reused.
         notifyDataSetChanged();
     }

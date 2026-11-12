@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory() as folder:
               ok(!SourceSwitchTimeout.valid(-5)&&!SourceSwitchTimeout.valid(31)&&!SourceSwitchTimeout.valid(7));
               menu.action(5,1);ok(h.key.equals("showNetworkSpeed")&&h.value.equals(true));
               menu.action(5,3);ok(h.key.equals("showPlaybackPosition")&&h.value.equals(true));
-              ok(menu.options(5).getStringArray("items").length==7);ok(menu.options(5).getStringArray("items")[4].equals("界面大小"));menu.action(5,4);ok(h.where.equals("ui-size"));menu.action(5,5);ok(h.where.equals("hdr"));menu.action(5,6);ok(h.where.equals("guide"));
+              ok(menu.options(5).getStringArray("items").length==8);ok(menu.options(5).getStringArray("items")[4].equals("界面大小"));menu.action(5,4);ok(h.where.equals("ui-size"));menu.action(5,5);ok(h.where.equals("hdr"));menu.action(5,6);ok(h.where.equals("guide"));menu.action(5,7);ok(h.where.equals("render"));
               Bundle groups=menu.options(4);ok(!groups.getBoolean("openOnClick"));ok(groups.getStringArray("items").length==3);ok(groups.getStringArray("items")[0].equals("我的收藏 ●"));ok(groups.getStringArray("items")[2].endsWith(" ○"));
               int dismisses=window.dismissed;h.where=null;h.groupId=null;menu.action(4,-1);ok(h.groupId==null);menu.action(4,0);ok(h.groupId.equals("favorites")&&!h.visible&&h.where==null&&window.dismissed==dismisses);
               menu.action(4,2);ok(h.groupId.equals("group:b")&&h.visible);
@@ -61,13 +61,14 @@ with tempfile.TemporaryDirectory() as folder:
               ok(!menu.options(6).getBoolean("openOnClick"));menu.action(6,0);ok(h.key.equals("autoStart")&&h.value.equals(true));
               menu.action(6,1);ok(h.key.equals("reverseKeys")&&h.value.equals(true));
               menu.action(6,2);ok(h.where.equals("styles"));menu.action(6,3);ok(h.where.equals("radio-styles"));menu.action(6,4);ok(h.where.equals("manage"));menu.action(6,5);ok(h.where.equals("cache"));
-              ok(menu.options(6).getStringArray("items").length==8);
-              h.key="unchanged";h.where=null;menu.action(6,8);menu.action(6,9);ok(h.key.equals("unchanged")&&h.where==null);
+              ok(menu.options(6).getStringArray("items").length==9);
+              menu.action(6,8);ok(h.key.equals("updatePopupEnabled")&&h.value.equals(true));h.state.putBoolean("updatePopupEnabled",true);menu.action(6,8);ok(h.value.equals(false));
+              h.key="unchanged";h.where=null;menu.action(6,9);menu.action(6,10);ok(h.key.equals("unchanged")&&h.where==null);
               ok(menu.options(7).getStringArray("items")[3].equals("浏览器 UA"));
-              h.state.putBoolean("liteBrowserSupported",true);ok(menu.options(6).getStringArray("items").length==8);
+              h.state.putBoolean("liteBrowserSupported",true);ok(menu.options(6).getStringArray("items").length==9);
               ok(menu.options(7).getStringArray("items").length==10&&menu.options(7).getStringArray("items")[6].equals("网页内核"));
               menu.action(7,3);ok(h.where.equals("browser:3"));menu.action(7,6);ok(h.where.equals("browser:6"));
-              h.state.putBoolean("liteBrowserSupported",false);ok(menu.options(6).getStringArray("items").length==8);
+              h.state.putBoolean("liteBrowserSupported",false);ok(menu.options(6).getStringArray("items").length==9);
               menu.action(6,6);ok(h.key.equals("rememberChannelSource")&&h.value.equals(true));h.state.putBoolean("rememberChannelSource",true);menu.action(6,6);ok(h.value.equals(false));
               menu.action(6,7);ok(h.key.equals("rememberChannelDecode")&&h.value.equals(true));h.state.putBoolean("rememberChannelDecode",true);menu.action(6,7);ok(h.value.equals(false));
               ok(menu.options(6).getStringArray("items")[0].endsWith(" ○"));h.state.putBoolean("boot",true);ok(menu.options(6).getStringArray("items")[0].endsWith(" ●"));

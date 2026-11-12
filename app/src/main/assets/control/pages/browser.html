@@ -38,6 +38,10 @@
               <option value="8">8 倍</option>
             </select>
           </div>
+          <div id="litePreparseRow" class="browser-setting-row" hidden style="display:none">
+            <div class="browser-setting-copy"><b>网页频道预解析</b><span>播放稳定后提前解析一个邻台，成功后保留5分钟，切台时复用；单核或内存不足时不启动</span></div>
+            <input id="litePreparseEnabled" class="source-toggle" type="checkbox" aria-label="网页频道预解析" onchange="saveLitePreparse()" />
+          </div>
           <div class="browser-setting-row">
             <div class="browser-setting-copy">
               <b>网页遮罩</b><span>只覆盖网页画面，脚本和嗅探持续运行；频道列表和弹窗保持在上方</span>
