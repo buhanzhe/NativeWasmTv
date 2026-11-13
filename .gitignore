@@ -333,5 +333,5 @@ tools/
 !/tests/startup-pipeline.test.py
 
 # Local browser evaluation output, not source files.
-/({id
-/x.textContent.includes(最近：)).length})
+/([{]id
+/x.textContent.includes(最近：)).length[}])
