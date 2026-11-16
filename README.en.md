@@ -1,50 +1,31 @@
 # nTv
 
-Original project code is licensed under [GNU GPL version 3 only](LICENSE)
-(`GPL-3.0-only`). Copyright (C) 2026 buhanzhe and contributors.
-Redistributors must retain applicable notices, identify modifications and provide
-the complete corresponding source under the license. Compliant commercial use is
-allowed. See [copyright and use notes](COPYRIGHT.md), including the source obligations
-for browser editions containing private submodules and the separate third-party licenses.
+A landscape live-TV player for Android TVs, boxes, tablets and phones, supporting Android 4.0 and later.
 
-[简体中文](README.md)
-
-`nTv` is a landscape live-TV player for Android TVs, boxes, tablets, and phones. It focuses on remote-control operation, compatibility with older Android devices, and stable CCTV playback.
+[简体中文](README.md) · [GitHub Releases](https://github.com/buhanzhe/NativeWasmTv/releases) · [Quark download](https://pan.quark.cn/s/a0395f56abae)
 
 ## Features
 
-- Built-in CCTV and Yangshipin channels with automatic source selection.
-- High, medium, and low quality preferences.
-- Stable, balanced, and low-latency live modes.
-- IJK playback with hardware-decoder selection and software fallback.
-- Remote control, touch gestures, web management, and phone air mouse.
-- Online M3U, M3U8, and TXT playlists.
-- Optional clock, date, network-speed, and playback information overlays.
-- Auto start, online updates, and crash recovery.
-- Android 4.0 or later.
+- IJK playback, multiple sources, quality selection and hardware/software decoding.
+- Remote control, touch gestures, web management and phone air mouse.
+- M3U/M3U8/TXT playlists, programme guides and IPTV catch-up.
+- System WebView, media sniffing and user scripts; browser editions also include the lightweight engine.
+- Cast reception, themes, auto start and online updates.
 
 ## Install
 
-- [GitHub Releases](https://github.com/buhanzhe/NativeWasmTv/releases)
-- [Quark cloud drive](https://pan.quark.cn/s/e4db1433c7bb?pwd=KDmk), access code: `KDmk`
+Download the APK for your device. An in-place upgrade preserves channels and settings.
 
-Install the downloaded APK directly. Use an in-place upgrade to preserve settings.
+Standard editions cover ARM32, ARM64 and x86. `ntv_bro.apk` is the ARM32 browser edition; `ntv_bro64.apk` is ARM64. `ntv_full.apk` includes all three supported architectures and the lightweight browser. All release editions exclude H5E. ARM64 requires Android 5.0 or later.
 
-## Remote control
+## Documentation
 
-- Up/Down: change channel.
-- OK/Menu: open the channel list.
-- Back/Menu: close the channel list.
-- Play/Pause: pause or resume playback.
-- Number keys: select a channel by number.
-- Press Back twice to exit when the channel list is closed.
+- [User guide](docs/user-guide.en.md): installation, remote controls, web management and air mouse.
+- [Build guide](docs/building.en.md): dependencies, editions, signing, update manifests and site scripts.
+- [完整中文指南](docs/user-guide.md) · [Receiver scope](docs/receiver-only.md) · [CJS plugins](docs/cjs-plugin.md).
 
-## Web management and air mouse
+Public standard editions build without `browser-core`; Windows users can run `build-release.bat`. Browser/full editions are skipped when the authorized private core or matching signing certificate is unavailable.
 
-Connect the TV and phone to the same local network, then open the address or QR code shown by the app. The management port starts at `9966` and automatically advances when occupied.
+## License
 
-The air-mouse page supports phone motion sensors, a touchpad, click, back, and pointer reset. Allow motion and orientation access when prompted, and turn the sensor off after use to reduce battery use.
-
-## Notes
-
-Stream availability, quality, and source count can change with upstream services. Only play content you are authorized to access.
+Copyright (C) 2026 buhanzhe and contributors. Original code is licensed under [GPL-3.0-only](LICENSE). Redistribution requires applicable notices and complete corresponding source; see [copyright and use notes](COPYRIGHT.md). Only play content you are authorized to access.

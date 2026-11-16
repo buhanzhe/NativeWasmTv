@@ -58,7 +58,7 @@ final class WebRenderDiagnostics {
                 try { provider = Api26.provider(); }
                 catch (RuntimeException | LinkageError ignored) { provider = "unavailable"; }
             }
-            String bits = BuildConfig.CJS_PLUGIN_ABI;
+            String bits = RuntimeAbi.current();
             if (Build.VERSION.SDK_INT >= 23) bits = Api23.is64Bit() ? "64" : "32";
             CrashReporting.putDiagnostic(context, "web_environment",
                     "sdk=" + Build.VERSION.SDK_INT + " process=" + bits + " provider=" + provider);

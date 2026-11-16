@@ -18,7 +18,7 @@ def method(signature):
     return source[start:end]
 
 methods = '\n'.join(method(s) for s in [
-    '    void dismiss()', '    boolean visible()', '    boolean confirmExitFromBack()',
+    '    void dismiss()', '    boolean visible()', '    View contentView()', '    boolean confirmExitFromBack()',
     '    boolean dispatchKeyEvent(', '    void show(View anchor,',
     '    private static Activity findActivity(', '    private static boolean canShow('])
 methods = methods.replace('android.util.Log', 'Log').replace('xiao.bu.tv.AppLog', 'Log').replace('android.os.Build', 'Build')
@@ -55,6 +55,8 @@ public class Check {
  static class TvUiPlugin {static TvUiStyle style=new TvUiStyle();static int rejected;static TvUiStyle current(){return style;}static void rejectRenderer(Context c,Throwable t){rejected++;}}
  static class TvUiChrome {static float scale(View v){return 1;}}
  static void inheritWindow(Activity a,View v){}
+ static class LegacyMenuOverlay {void dismiss(){}boolean visible(){return false;}View contentView(){return null;}boolean show(View a,View b,int w,int h,int x,int y,boolean menu){return false;}}
+ private final LegacyMenuOverlay legacy=new LegacyMenuOverlay();
  private PopupWindow popup;private TvUi.Events exitEvents;
  METHODS
  static void ok(boolean value,String message){if(!value)throw new AssertionError(message);}

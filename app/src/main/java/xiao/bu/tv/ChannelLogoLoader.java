@@ -114,8 +114,8 @@ final class ChannelLogoLoader {
         }
         clear(view);
         if (closed || name.length() == 0) return;
-        // Keep every title in one column, including pending/missing logos.
-        view.setVisibility(View.INVISIBLE);
+        // Only a real decoded logo takes horizontal space in a channel row.
+        view.setVisibility(View.GONE);
         Request request = new Request(this, view, name, key); view.setTag(request);
         if (hit != null && hit.fresh(now)) { show(request, hit); return; }
         cache.remove(key);

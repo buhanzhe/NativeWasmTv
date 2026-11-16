@@ -30,8 +30,13 @@ scripts/*
 !scripts/build-tv-banner.py
 !scripts/build-video-frame.ps1
 !scripts/build-hdr-test.ps1
-/docs
+/docs/*
+!/docs/user-guide.md
+!/docs/user-guide.en.md
+!/docs/building.md
+!/docs/building.en.md
 /tests/*
+!/tests/guangdian-legacy-hls.test.py
 !/tests/lite-worker-budget.test.py
 !/tests/lite-fetch-streams.test.py
 !/tests/lite-media-reactivity.test.js
@@ -331,7 +336,18 @@ tools/
 !/tests/system-source-fallback.test.py
 !/tests/legacy-system-first-frame.test.py
 !/tests/startup-pipeline.test.py
+!/tests/legacy-menu-overlay.test.py
 
 # Local browser evaluation output, not source files.
 /([{]id
 /x.textContent.includes(最近：)).length[}])
+
+
+!/tests/webview-sweep-report.test.py
+!/tests/webview-sweep-curate.test.py
+!/tests/lite-document-domain.test.js
+!/tests/legacy-flv-routing.test.py
+
+!/tests/userscript-request-policy.test.py
+
+!/tests/runtime-abi.test.py

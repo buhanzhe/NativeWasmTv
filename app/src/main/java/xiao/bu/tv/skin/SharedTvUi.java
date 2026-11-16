@@ -349,9 +349,8 @@ public abstract class SharedTvUi implements TvUi {
         }
         private float channelLogo(Canvas c,float left,float h){
             if(!data.getBoolean("showLogos"))return left;
-            // Every row reserves the same slot while loading or when an icon is
-            // missing. Asynchronous completion must not move channel titles.
-            Bitmap bitmap=data.getParcelable("logo");if(bitmap==null||bitmap.isRecycled())return left+64;
+            // Missing/failed logos do not leave an empty column before the title.
+            Bitmap bitmap=data.getParcelable("logo");if(bitmap==null||bitmap.isRecycled())return left;
             float factor=Math.min(56f/bitmap.getWidth(),Math.min(32f,h-8)/bitmap.getHeight());
             float width=bitmap.getWidth()*factor,height=bitmap.getHeight()*factor;
             rect.set(left+(56-width)/2,(h-height)/2,left+(56+width)/2,(h+height)/2);

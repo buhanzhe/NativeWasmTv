@@ -6,6 +6,7 @@ cache=Path.home()/'.gradle/caches/modules-2/files-2.1'
 def jar(group,name):return next(p for p in (cache/group/name).rglob('*.jar') if not p.name.endswith(('-sources.jar','-javadoc.jar')))
 cp=os.pathsep.join(map(str,[jar('org.json','json'),jar('com.squareup.okhttp3','okhttp'),jar('com.squareup.okio','okio')]))
 files={
+'xiao/bu/tv/MainActivity.java':'package xiao.bu.tv;class MainActivity {static final String PREFERENCES="main";}',
 'android/content/SharedPreferences.java':r'''package android.content;import java.util.*;public interface SharedPreferences{String getString(String k,String d);boolean getBoolean(String k,boolean d);long getLong(String k,long d);boolean contains(String k);Map<String,?> getAll();Editor edit();interface Editor{Editor putString(String k,String v);Editor putBoolean(String k,boolean v);Editor putLong(String k,long v);Editor remove(String k);void apply();}}''',
 'android/content/Context.java':r'''package android.content;public abstract class Context{public static final int MODE_PRIVATE=0;public Context getApplicationContext(){return this;}public abstract SharedPreferences getSharedPreferences(String n,int m);public String getPackageName(){return "fixture";}public ContentResolver getContentResolver(){return new ContentResolver();}}''',
 'android/content/ContentResolver.java':r'''package android.content;import android.net.Uri;import android.os.Bundle;public class ContentResolver{public Bundle call(Uri u,String m,String a,Bundle b){return null;}}''',
@@ -42,6 +43,16 @@ public class Check {
   pending.storage(context,origin,new JSONObject().put("action","remove").put("key","auth"));ok(!new JSONObject(context.getSharedPreferences("lite-storage",0).getString(origin,"{}")).has("auth"),"Promoted storage remained isolated");
   put(pending.cookies,page,"a=live; Path=/");ok(named(LiteCookies.PROFILE,page,"a").value().equals("live"),"Promoted cookie jar remained isolated");
   Bundle ua=args(page.toString());ua.putString("config","windows:native");ua.putString("ua","first-browser");ua.putBoolean("pin",true);ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("first-browser"),"Initial UA failed");ua.putString("ua","other-browser");ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("first-browser"),"UA changed with the renderer");ua.putString("config","windows:128");ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("other-browser"),"Explicit UA ignored");
+  SharedPreferences scripts=context.getSharedPreferences(MainActivity.PREFERENCES,0);
+  String source="// ==UserScript==\n// @match https://site.example/account/*\n// @user-agent script-UA\n// ==/UserScript==";
+  scripts.edit().putBoolean("web_view_user_script_enabled",true).putString("web_view_user_scripts_v2",new JSONArray().put(new JSONObject().put("source",source)).toString()).apply();
+  ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("script-UA"),"Script did not override pinned UA before GET");
+  scripts.edit().putString("web_view_user_scripts_v2",new JSONArray().put(new JSONObject().put("source",source.replace("script-UA","edited-UA"))).toString()).apply();
+  ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("edited-UA"),"Edited script retained stale pinned UA");
+  Bundle other=args("https://site.example/outside");other.putString("config","windows:128");other.putString("ua","outside-UA");other.putBoolean("pin",true);
+  ok(SharedWebProfile.handle(context,"ua",other).getString("ua").equals("outside-UA"),"Script UA leaked to unmatched same-host path");
+  scripts.edit().putBoolean("web_view_user_script_enabled",false).apply();
+  ok(SharedWebProfile.handle(context,"ua",ua).getString("ua").equals("outside-UA"),"Disabling script retained custom UA");
   Bundle open=SharedWebProfile.handle(context,"open",args(page.toString()));ok(open.getBoolean("ok"),"Owner open failed");JSONObject snapshot=new JSONObject(SharedWebProfile.unpack(open,"state"));ok(snapshot.getJSONArray("cookies").length()>0&&snapshot.getBoolean("storageKnown"),"Owner snapshot failed");
   Bundle signature=SharedWebProfile.handle(context,"signature",args(page.toString()));LiteWebStorage.perform(context,origin,new JSONObject().put("action","set").put("key","auth").put("value","changed"));ok(!signature.getString("signature").equals(SharedWebProfile.handle(context,"signature",args(page.toString())).getString("signature")),"Changed profile retained preparse identity");
   SharedWebProfile.handle(context,"lite",args(page.toString()));Bundle capture=args(page.toString());capture.putString("lease",open.getString("lease"));capture.putString("cookies","stale=bad");SharedWebProfile.pack(capture,"state",new JSONObject().put("storage",new JSONObject().put("bad","bad")).toString());ok(!SharedWebProfile.handle(context,"capture",capture).getBoolean("ok"),"Stale WebView could overwrite a new owner");
@@ -53,7 +64,7 @@ with tempfile.TemporaryDirectory() as tmp:
     paths=[]
     for name,content in files.items():
         p=Path(tmp)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf8');paths.append(str(p))
-    sources=[root/'app/src/main/java/xiao/bu/tv/SharedWebProfile.java']+[root/'browser-core/litebrowser/src/main/java/xiao/bu/tv'/name for name in ['LiteCookies.java','LiteWebStorage.java','LitePreparseProfile.java']]
+    sources=[root/'app/src/main/java/xiao/bu/tv/SharedWebProfile.java',root/'app/src/main/java/xiao/bu/tv/UserScriptRequestPolicy.java']+[root/'browser-core/litebrowser/src/main/java/xiao/bu/tv'/name for name in ['LiteCookies.java','LiteWebStorage.java','LitePreparseProfile.java']]
     jdk=Path(os.environ['JAVA_HOME'])/'bin'
     subprocess.run([str(jdk/'javac'),'-encoding','UTF-8','-cp',cp,'-d',tmp,*paths,*map(str,sources)],check=True)
     subprocess.run([str(jdk/'java'),'-cp',tmp+os.pathsep+cp,'xiao.bu.tv.Check'],check=True)

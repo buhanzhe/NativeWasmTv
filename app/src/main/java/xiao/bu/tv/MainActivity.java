@@ -2648,20 +2648,27 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 stream(url,temporary,false);
             }
             public void stream(String url,boolean temporary,boolean localMse) {
+                stream(url,temporary,localMse,java.util.Collections.emptyMap());
+            }
+            public void stream(String url,boolean temporary,boolean localMse,java.util.Map<String,String> headers) {
                 if(!current())return;
                 liteMsePlaybackUrl=localMse?url:null;
                 cancelCustomSourceTimeout();
-                webStreamHeaders="";
+                StringBuilder inherited=new StringBuilder();if(headers!=null)for(java.util.Map.Entry<String,String> header:headers.entrySet())appendWebHeader(inherited,header.getKey(),header.getValue());
+                webStreamHeaders=inherited.toString();
                 videoView.setVisibility(View.VISIBLE);
                 showLoading(channel.name,temporary?"正在播放网页前置视频":"轻量内核已嗅探，正在连接视频");
-                startResolvedPlayer(channel,url,localMse||isDirectHttpMediaSource(url));
+                // This selected slow manifest is already served by our owned
+                // relay. A second HTTP proxy times it out before it can reply.
+                boolean directLocalHls=liteWebPlayback!=null&&liteWebPlayback.prefersDirectLocalHls(url);
+                startResolvedPlayer(channel,url,localMse||directLocalHls||isDirectHttpMediaSource(url));
                 cancelSniffedOpenTimeout();
                 sniffedOpenTimeout = () -> {
                     sniffedOpenTimeout = null;
                     if (current() && (!prepared || !audioOnlyPlayback && !videoRenderingStarted))
                         returnFromFailedSniffedPlayback("资源打开超时");
                 };
-                channelBar.postDelayed(sniffedOpenTimeout, 30000L);
+                channelBar.postDelayed(sniffedOpenTimeout, directLocalHls?60000L:30000L);
             }
             public boolean playing() { return current() && player!=null && prepared && player.isPlaying(); }
             public Object playerIdentity(){return player;}
@@ -9532,6 +9539,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // as FLV. Its supported HLS/MP4 paths are selected separately above.
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN
                 && !channel.radio && !software && !DECODE_MODE_SOFTWARE.equals(decodeMode)
+                && !useLegacyX86SoftwareDecode()
                 && !isNtVCastSource(streamUrl);
     }
 
@@ -9541,6 +9549,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 && streamUrl.equals(systemCodecFallbackUrl)) return true;
         // Enumerated once, normally during settings initialization. A query
         // failure stays unknown; an empty AVC-only list is not enough evidence.
+        availableHardwareDecoderNames();
+        return Boolean.FALSE.equals(hardwareVideoDecoderAvailable);
+    }
+
+    private boolean useLegacyX86SoftwareDecode() {
+        if (Build.VERSION.SDK_INT != Build.VERSION_CODES.KITKAT || !"x86".equals(Build.CPU_ABI)
+                || !DECODE_MODE_AUTO.equals(decodeMode)) return false;
         availableHardwareDecoderNames();
         return Boolean.FALSE.equals(hardwareVideoDecoderAvailable);
     }
@@ -10127,6 +10142,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         boolean hintedSoftware = usePreparsedSoftwareDecode(channel, streamUrl);
         final boolean softwareDecode = DECODE_MODE_SOFTWARE.equals(decodeMode)
                 || Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN
+                || useLegacyX86SoftwareDecode()
                 || forceSoftwareDecode && missingCodecSoftwareRetryRequestId == sourceRequestId
                 || Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT
                 && (forceSoftwareDecode || hintedSoftware || shouldUseSoftwareDecode());
@@ -10356,6 +10372,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // executes the clear and prevents reuse across ephemeral proxy ports.
         if (proxy != null) nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "dns_cache_timeout", 1);
         nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "http-detect-range-support", 0);
+        if(liteWebPlayback!=null&&liteWebPlayback.isLocalLiveHlsSource(streamUrl)){
+            // The relay's bounded upstream manifest request can legitimately
+            // wait over IJK's six-second default. Let that request finish;
+            // upstream fragment idle limits and channel cancellation remain.
+            nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,"rw_timeout",25000000);
+            nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT,"timeout",25000000);
+        }
         boolean genericThirdPartySource = customSource && !cctvSource && !yangshipinSource
                 && !realtimeCastSource && !remoteCatalogPlayback;
         if (bufferedHttpMedia || broadcastStartup) {
@@ -11049,7 +11072,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private boolean shouldUseSoftwareDecode() {
-        if (DECODE_MODE_SOFTWARE.equals(decodeMode)) {
+        if (DECODE_MODE_SOFTWARE.equals(decodeMode) || useLegacyX86SoftwareDecode()) {
             return true;
         }
         return Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT

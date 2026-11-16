@@ -9,7 +9,7 @@ param(
     [string]$NdkRoot,
     [switch]$RebuildQuickJs,
     [switch]$RebuildTls,
-    [switch]$DisableH5eStreaming # Compatibility: release APKs no longer bundle H5E streaming.
+    [switch]$DisableH5eStreaming # Compatibility: every release edition excludes H5E streaming.
 )
 
 $ErrorActionPreference = 'Stop'
@@ -176,8 +176,17 @@ foreach ($abi in @('armeabi-v7a','x86')) {
     }
 }
 if ($Clean -and -not $SkipClean) { $gradleTasks += 'clean' }
-$gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release',
-    ':app:assembleX86Release', ':app:assembleNtvBroRelease', '--no-daemon')
+Push-Location $repoRoot
+try {
+    & (Join-Path $repoRoot 'gradlew.bat') ':app:writeBuildCapabilities' '--console=plain'
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect browser build authorization.' }
+} finally { Pop-Location }
+$capabilities = Get-Content -LiteralPath (Join-Path $repoRoot 'app/build/outputs/build-capabilities.json') -Raw | ConvertFrom-Json
+$gradleTasks += @(':app:assembleArm32Release', ':app:assembleArm64Release', ':app:assembleX86Release')
+if ($capabilities.browserEnabled) {
+    $gradleTasks += @(':app:assembleNtvBroRelease', ':app:assembleNtvBro64Release', ':app:assembleNtvFullRelease')
+} else { Write-Host "Skipping bro/full: $($capabilities.reason)" }
+$gradleTasks += '--no-daemon'
 
 Push-Location $repoRoot
 try {
@@ -195,6 +204,20 @@ $artifacts = @(
         CopyAs = 'nTv-bro-v7a-电视盒子专用-含轻量内核-v{0}.apk'
         Source = Join-Path $repoRoot 'app\build\outputs\apk\ntvBro\release\app-ntvBro-release.apk'
         ExpectedAbi = 'armeabi-v7a'
+    },
+    [pscustomobject]@{
+        Name = 'ntv_bro64.apk'
+        Flavor = 'ntvBro64'
+        CopyAs = 'nTv-bro-v8a-含轻量内核-v{0}.apk'
+        Source = Join-Path $repoRoot 'app/build/outputs/apk/ntvBro64/release/app-ntvBro64-release.apk'
+        ExpectedAbi = 'arm64-v8a'
+    },
+    [pscustomobject]@{
+        Name = 'ntv_full.apk'
+        Flavor = 'ntvFull'
+        CopyAs = 'nTv-全量-全架构全内核-v{0}.apk'
+        Source = Join-Path $repoRoot 'app/build/outputs/apk/ntvFull/release/app-ntvFull-release.apk'
+        ExpectedAbi = @('armeabi-v7a', 'arm64-v8a', 'x86')
     },
     [pscustomobject]@{
         Name = 'nTv.apk'
@@ -219,6 +242,7 @@ $artifacts = @(
     }
 )
 
+if (-not $capabilities.browserEnabled) { $artifacts = @($artifacts | Where-Object { $_.Flavor -notin @('ntvBro', 'ntvBro64', 'ntvFull') }) }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $results = foreach ($artifact in $artifacts) {
     if (-not (Test-Path -LiteralPath $artifact.Source)) {
@@ -232,15 +256,18 @@ $results = foreach ($artifact in $artifacts) {
     # Validate an ABI entry point that must retain its name even in an obfuscated APK.
     $archive = [System.IO.Compression.ZipFile]::OpenRead($artifact.Source)
     try {
-        if ($null -ne $archive.GetEntry("lib/$($artifact.ExpectedAbi)/libh5estream.so")) {
-            throw "Release APK unexpectedly bundles H5E streaming: $($artifact.Source)"
-        }
-        $liteLibrary = $archive.GetEntry("lib/$($artifact.ExpectedAbi)/libntvLitebro.so")
+        $isBrowser = $artifact.Flavor -in @('ntvBro', 'ntvBro64', 'ntvFull')
         $hasLiteAssets = $null -ne $archive.GetEntry('assets/browser.js')
-        if ($artifact.Flavor -eq 'ntvBro') {
-            if ($null -eq $liteLibrary -or -not $hasLiteAssets) { throw "Browser edition is missing its lightweight core: $($artifact.Source)" }
-        } elseif ($null -ne $liteLibrary -or $hasLiteAssets) {
-            throw "Standard APK unexpectedly bundles the lightweight core: $($artifact.Source)"
+        if ($hasLiteAssets -ne $isBrowser) { throw "Unexpected browser assets: $($artifact.Source)" }
+        foreach ($abi in @($artifact.ExpectedAbi)) {
+            foreach ($library in @('libijkffmpeg.so', 'libijkplayer.so', 'libijksdl.so', 'libntvquickjs.so', 'libntvtls.so')) {
+                if ($null -eq $archive.GetEntry("lib/$abi/$library")) { throw "Missing $abi/$library" }
+            }
+            $hasLite = $null -ne $archive.GetEntry("lib/$abi/libntvLitebro.so")
+            $hasH5e = $null -ne $archive.GetEntry("lib/$abi/libh5estream.so")
+            if ($hasLite -ne $isBrowser -or $hasH5e) {
+                throw "Unexpected kernel libraries for $($artifact.Flavor)/$abi"
+            }
         }
         $nativeBridge = $false
         foreach ($entry in $archive.Entries) {
@@ -262,7 +289,7 @@ $results = foreach ($artifact in $artifacts) {
     if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $destination" }
 
     $architectures = @(Get-ApkArchitectures $destination)
-    if ($architectures.Count -ne 1 -or $architectures[0] -ne $artifact.ExpectedAbi) {
+    if (@(Compare-Object @($artifact.ExpectedAbi) $architectures).Count -ne 0) {
         throw "Unexpected native architectures in $($artifact.Name): $($architectures -join ', ')"
     }
 
@@ -296,14 +323,14 @@ $results = foreach ($artifact in $artifacts) {
     [pscustomobject]@{
         APK = $artifact.Name
         Flavor = $artifact.Flavor
-        ABI = $architectures[0]
+        ABI = $architectures -join ','
         SizeMB = [math]::Round($file.Length / 1MB, 2)
         SHA256 = $hash
         VersionName = $apkVersionName
         VersionCode = $apkVersionCode
         Obfuscation = 'R8 enabled'
         H5eStreaming = $false
-        LightweightBrowser = $artifact.Flavor -eq 'ntvBro'
+        LightweightBrowser = $artifact.Flavor -in @('ntvBro', 'ntvBro64', 'ntvFull')
         Mapping = $mappingDestination
         Metadata = $badging
         Path = $file.FullName
@@ -312,11 +339,10 @@ $results = foreach ($artifact in $artifacts) {
 }
 
 $arm32Result = $results | Where-Object { $_.Flavor -eq 'arm32' } | Select-Object -First 1
-$arm64Result = $results | Where-Object { $_.ABI -eq 'arm64-v8a' } | Select-Object -First 1
-$broResult = $results | Where-Object { $_.Flavor -eq 'ntvBro' } | Select-Object -First 1
-$x86Result = $results | Where-Object { $_.ABI -eq 'x86' } | Select-Object -First 1
-if (-not $arm32Result -or -not $arm64Result -or -not $x86Result -or -not $broResult) {
-    throw 'ARM32, ARM64, x86 and ARM32 browser artifacts are required to generate update metadata.'
+$arm64Result = $results | Where-Object { $_.Flavor -eq 'arm64' } | Select-Object -First 1
+$x86Result = $results | Where-Object { $_.Flavor -eq 'x86' } | Select-Object -First 1
+if (-not $arm32Result -or -not $arm64Result -or -not $x86Result) {
+    throw 'ARM32, ARM64 and x86 artifacts are required to generate update metadata.'
 }
 
 # Package only this build's mappings; retain the hash archives across releases.
@@ -362,10 +388,14 @@ $manifestTasks = @(
     "-PupdateApk32=$($arm32Result.Path)",
     "-PupdateApk64=$($arm64Result.Path)",
     "-PupdateApkX86=$($x86Result.Path)",
-    "-PupdateApkBro=$($broResult.Path)",
     "-PreleaseNotes=$ReleaseNotes",
     '--no-daemon'
 )
+foreach ($pair in @(@('ntvBro','Bro'), @('ntvBro64','Bro64'), @('ntvFull','Full'))) {
+    $item = $results | Where-Object { $_.Flavor -eq $pair[0] } | Select-Object -First 1
+    if ($item) { $manifestTasks += "-PupdateApk$($pair[1])=$($item.Path)" }
+}
+$manifestTasks += "-PversionOutputDir=$OutputDirectory"
 Push-Location $repoRoot
 try {
     & (Join-Path $repoRoot 'gradlew.bat') @manifestTasks
@@ -376,9 +406,9 @@ try {
     Pop-Location
 }
 
-$liteVersionPath = Join-Path $repoRoot 'version-lite.json'
-$versionPath = Join-Path $repoRoot 'version.json'
-$legacyVersionPath = Join-Path $repoRoot 'version-iptv.json'
+$liteVersionPath = Join-Path $OutputDirectory 'version-lite.json'
+$versionPath = Join-Path $OutputDirectory 'version.json'
+$legacyVersionPath = Join-Path $OutputDirectory 'version-iptv.json'
 foreach ($manifestPath in @($liteVersionPath, $versionPath, $legacyVersionPath)) {
     $version = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($artifactResult in @($arm32Result, $arm64Result, $x86Result)) {
@@ -391,17 +421,25 @@ foreach ($manifestPath in @($liteVersionPath, $versionPath, $legacyVersionPath))
     if ($version.sha256 -ne $arm32Result.SHA256 -or
             $version.sha25632 -ne $arm32Result.SHA256 -or
             $version.sha25664 -ne $arm64Result.SHA256 -or
-            $version.sha256X86 -ne $x86Result.SHA256 -or
-            $version.sha256Bro -ne $broResult.SHA256) {
+            $version.sha256X86 -ne $x86Result.SHA256) {
         throw "Generated update metadata does not match the release APK hashes: $manifestPath"
     }
     if ($manifestPath -ne $liteVersionPath -and $version.versionCode -ne 6) {
         throw "Startup update versionCode must stay at 6: $manifestPath"
     }
 }
-Copy-Item -LiteralPath $liteVersionPath -Destination (Join-Path $OutputDirectory 'version-lite.json') -Force
-Copy-Item -LiteralPath $legacyVersionPath -Destination (Join-Path $OutputDirectory 'version-iptv.json') -Force
-Copy-Item -LiteralPath $versionPath -Destination (Join-Path $OutputDirectory 'version.json') -Force
+foreach ($pair in @(@('ntvBro','Bro'), @('ntvBro64','Bro64'), @('ntvFull','Full'))) {
+    $item = $results | Where-Object { $_.Flavor -eq $pair[0] } | Select-Object -First 1
+    foreach ($path in @($liteVersionPath, $versionPath, $legacyVersionPath)) {
+        $metadata = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $field = $metadata.PSObject.Properties['sha256' + $pair[1]]
+        if ($item) {
+            if (-not $field -or $field.Value -ne $item.SHA256) { throw "Incorrect optional APK hash: $path" }
+        } elseif ($field) { throw "Skipped browser APK still advertised: $path" }
+    }
+}
+[ordered]@{ capabilities = $capabilities; artifacts = @($results) } |
+    ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'build-summary.json') -Encoding UTF8
 
 Write-Host ''
 Write-Host 'Release artifacts:'

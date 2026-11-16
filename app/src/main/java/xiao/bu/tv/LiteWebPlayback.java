@@ -12,6 +12,7 @@ final class LiteWebPlayback implements Closeable {
     interface Host {
         void stream(String url, boolean temporary);
         default void stream(String url,boolean temporary,boolean localMse){stream(url,temporary);}
+        default void stream(String url,boolean temporary,boolean localMse,Map<String,String> headers){stream(url,temporary,localMse);}
         default void prepared() { }
         void status(String value);
         void failure(String value);
@@ -31,6 +32,7 @@ final class LiteWebPlayback implements Closeable {
     private Host host;
     private boolean preparing;
     private String preparedStream,profilePage="";
+    private Map<String,String> preparedHeaders=java.util.Collections.emptyMap();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private LiteEngine engine;
     private LiteEngine.PlaybackTransport transport;
@@ -68,6 +70,8 @@ final class LiteWebPlayback implements Closeable {
     private String coverStyle="status";
     boolean isRendering(){return renderedPage!=null;}
     boolean isVirtualMseSource(String source){return !closed&&streamActive&&virtualPlayback&&controlledSource.equals(source);}
+    boolean isLocalLiveHlsSource(String source){return !closed&&liveHlsPlayback&&!virtualPlayback&&transport!=null&&transport.url().equals(source);}
+    boolean prefersDirectLocalHls(String source){return isLocalLiveHlsSource(source)&&LiteLiveMediaPolicy.legacySnrtvHls(android.os.Build.VERSION.SDK_INT,profilePage,controlledSource);}
     void applyPageCover(boolean enabled,String style){
         pageCovered=enabled;coverStyle=style;
         if(renderedPage==null)return;
@@ -135,7 +139,7 @@ final class LiteWebPlayback implements Closeable {
         preparing=false;host=foreground;SharedWebProfile.beginLite(context,profilePage);
         if(engine!=null){host.userAgent(profilePage,engine.userAgent());engine.promotePreparse();}
         String stream=preparedStream;preparedStream=null;
-        host.stream(stream,false);
+        host.stream(stream,false,false,preparedHeaders);preparedHeaders=java.util.Collections.emptyMap();
         if(liveHlsPlayback)handler.post(progress);
         return true;
     }
@@ -175,22 +179,24 @@ final class LiteWebPlayback implements Closeable {
                 public void textInput(JSONObject state){if(current()){pendingInput=state;if(canvas!=null)canvas.textInput(state);}}
                 public void message(String value) {
                     if(auditEnabled&&value.startsWith("NTV_AUDIT "))try{synchronized(auditMessages){auditPage=new JSONObject(value.substring(10));}}catch(Exception ignored){}
-                    if(auditEnabled&&(value.startsWith("JS：")||value.startsWith("Promise rejection: "))){
-                        java.util.regex.Matcher kind=java.util.regex.Pattern.compile("(?:Type|Reference|Range|Syntax|Internal|Eval|URI)?Error").matcher(value);
-                        synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();String detail=value.split("\\r?\\n",2)[0].replaceAll("https?://[^\\s]+","[URL]").replaceAll("[A-Za-z0-9_=-]{64,}","[opaque]");auditMessages.addLast("JS exception: "+(kind.find()?kind.group():"unclassified")+" "+detail.substring(0,Math.min(detail.length(),240)));}
+                    String observed=value.replaceFirst("^(?:iframe [0-9]+: )+", "");
+                    String frameLabel=value.substring(0,value.length()-observed.length());
+                    if(auditEnabled&&(observed.startsWith("JS：")||observed.startsWith("Promise rejection: "))){
+                        java.util.regex.Matcher kind=java.util.regex.Pattern.compile("(?:Type|Reference|Range|Syntax|Internal|Eval|URI)?Error").matcher(observed);
+                        synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();String detail=observed.split("\\r?\\n",2)[0].replaceAll("https?://[^\\s]+","[URL]").replaceAll("[A-Za-z0-9_=-]{64,}","[opaque]");auditMessages.addLast(frameLabel+"JS exception: "+(kind.find()?kind.group():"unclassified")+" "+detail.substring(0,Math.min(detail.length(),240)));}
                     }
-                    if(auditEnabled&&(value.startsWith("站点直播回退：")||value.startsWith("WebSocket metadata ")||value.startsWith("Document clock metadata ")||value.startsWith("HTTP ")||value.startsWith("API metadata ")||value.startsWith("CORS rejected metadata ")||value.startsWith("SCRIPT ")||value.startsWith("MSE ")||value.startsWith("候选校验")||value.startsWith("捕获候选")||value.startsWith("观察播放器")||value.startsWith("播放器实例")||value.startsWith("Original player API status ")||value.startsWith("虚拟 MSE")||value.startsWith("运行错误：")||value.startsWith("加载失败："))){
+                    if(auditEnabled&&(observed.startsWith("站点直播回退：")||observed.startsWith("WebSocket metadata ")||observed.startsWith("Document clock metadata ")||observed.startsWith("Selected document source metadata ")||observed.startsWith("HTTP ")||observed.startsWith("API metadata ")||observed.startsWith("CORS rejected metadata ")||observed.startsWith("SCRIPT ")||observed.startsWith("MSE ")||observed.startsWith("候选校验")||observed.startsWith("捕获候选")||observed.startsWith("观察播放器")||observed.startsWith("播放器实例")||observed.startsWith("Original player API status ")||observed.startsWith("虚拟 MSE")||observed.startsWith("运行错误：")||observed.startsWith("加载失败："))){
                         String safe=value.replaceAll("https?://[^\\s]+","[URL]");
                         synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();auditMessages.addLast(safe.substring(0,Math.min(safe.length(),800)));}
                     }
-                    if(current()&&value.startsWith("UserScript ")){
+                    if(current()&&observed.startsWith("UserScript ")){
                         String safe=value.replaceAll("https?://[^\\s]+","[URL]");
                         synchronized(auditMessages){if(auditMessages.size()>=96)auditMessages.removeFirst();auditMessages.addLast(safe.substring(0,Math.min(safe.length(),800)));}
                     }
                     if (!current()) return;
                     if(LiteWebStartupPolicy.retryDependency(value,dependencyRetries,engine==null?null:engine.startupState(),preparing,finalStream||streamActive,pendingInput!=null)){
                         dependencyRetries++;
-                        AppLog.i("LiteWebPlayback","Retrying initial page after dependency loader timeout");
+                        AppLog.i("LiteWebPlayback","Retrying initial page after incomplete startup dependency");
                         handler.postDelayed(()->{if(current()&&!closed&&!finalStream&&!streamActive&&pendingInput==null){clearRenderedPage();open(url,script);}},100);
                         return;
                     }
@@ -236,7 +242,10 @@ final class LiteWebPlayback implements Closeable {
                         if(replacement)staleNativePlayer=host.playerIdentity();
                         virtualPlayback=virtualMse;controlledSource=source;controlPaused=null;
                         liveHlsPlayback=!virtualMse&&engine.keepsMediaSession(source);
-                        if(!virtualMse) {
+                        // KitKat's native reader handles this selected clear HLS
+                        // without duplicating TLS/segment buffering in Java.
+                        boolean nativeTransport=!virtualMse&&!preroll&&(LiteLiveMediaPolicy.legacyGuangdianHls(android.os.Build.VERSION.SDK_INT,profilePage,source)||LiteLiveMediaPolicy.legacyCctvNewsHls(android.os.Build.VERSION.SDK_INT,profilePage,source));
+                        if(!virtualMse&&!nativeTransport) {
                             transport=engine.playbackTransport(source,headers);target=transport.url();
                         }
                         if(canvas!=null)canvas.endTextInput();pendingInput=null;
@@ -247,7 +256,7 @@ final class LiteWebPlayback implements Closeable {
                         // with rendering disabled while native video is visible.
                         if(!preroll&&!virtualMse&&!liveHlsPlayback)engine.close();
                         else engine.setRendering(false);
-                        if(preparing){engine.parkPreparse();preparedStream=target;host.prepared();}else host.stream(target,preroll,virtualMse);
+                        if(preparing){engine.parkPreparse();preparedStream=target;preparedHeaders=nativeTransport&&headers!=null?new java.util.LinkedHashMap<>(headers):java.util.Collections.emptyMap();host.prepared();}else host.stream(target,preroll,virtualMse,nativeTransport?headers:java.util.Collections.emptyMap());
                         handler.removeCallbacks(progress);if(!preparing&&(preroll||virtualMse||liveHlsPlayback))handler.post(progress);
                     } catch(Exception error) { fail("轻量媒体通道创建失败"); }
                 }
@@ -261,7 +270,11 @@ final class LiteWebPlayback implements Closeable {
             if(android.os.Build.VERSION.SDK_INT==19&&(LiteEngine.keepsOriginalMediaPipeline(url)
                     ||desktopPage!=null&&desktopPage.host().equals("www.mgtv.com")))engine.viewport(1280,720,0);
             engine.setHeadless(true);engine.loadImages(host.loadImages());
-            engine.userAgentOverride(host.userAgent(url,LiteEngine.defaultUserAgent(url)));
+            String browserAgent=host.userAgent(url,LiteEngine.defaultUserAgent(url));
+            // This SDK's desktop branch requires a continuously fed MSE queue.
+            // Its iPad branch keeps the real HTML video/heartbeat on native HLS.
+            if(LiteLiveMediaPolicy.legacyGuangdianPage(android.os.Build.VERSION.SDK_INT,url))browserAgent=DesktopWebProfile.ipadUserAgent(browserAgent,"native");
+            engine.userAgentOverride(browserAgent);
             // Keep catalogue selection code separate from diagnostic bootstrap.
             // The engine's existing ujs path executes it through the normal page flow.
             WebSourceOptions options=WebSourceOptions.parse(url,script);

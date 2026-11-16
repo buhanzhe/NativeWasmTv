@@ -10,7 +10,8 @@ final class LiteWebStartupPolicy {
     static boolean retryDependency(String message,int attempts,LiteStartupState state,boolean preparing,boolean published,boolean interacting){
         return attempts==0&&!preparing&&!published&&!interacting&&state!=null&&!state.interactionRequired
             &&state.documentStatus>=200&&state.documentStatus<300&&message!=null
-            &&message.contains("Promise rejection: Error: Loader timeout");
+            &&(message.contains("Promise rejection: Error: Loader timeout")
+                ||!state.mediaIntent&&message.contains("Script ")&&message.contains("java.io.EOFException: Incomplete web resource"));
     }
     static Decision render(long started,long now,LiteStartupState s,boolean interactive){
         if(s==null||s.documentReadyAt<=0)return Decision.WAIT;

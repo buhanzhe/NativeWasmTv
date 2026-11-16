@@ -1,8 +1,11 @@
 """Real drawable and async apply paths: landscape-only crop, one startup, late callback safety."""
 from pathlib import Path
-import os, subprocess, tempfile
+import os, re, subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 source=(root/'app/src/main/java/xiao/bu/tv/PersonalBackground.java').read_text(encoding='utf8')
+deadline=re.search(r'private static final long MAXIMUM_STARTUP_MS=(\d+)L;',source).group(1)
+assert int(deadline)==10000, 'Unavailable startup channel must uncover controls after ten seconds'
+assert 'ui.postDelayed(expireStartup,MAXIMUM_STARTUP_MS);' in source, 'Configured wallpaper duration must not extend the startup deadline'
 def extract(signature):
     start=source.index(signature);at=source.index('{',start)+1;depth=1
     while depth:
@@ -23,7 +26,7 @@ class StartupCheck {
  static class Handler {List<Task> q=new ArrayList<>();void post(Runnable r){postDelayed(r,0);}void postDelayed(Runnable r,long n){q.add(new Task(r,Clock.now+n));}void removeCallbacks(Runnable r){q.removeIf(t->t.r==r);}void flush(){for(int i=0;i<1000;i++){Task ready=null;for(Task t:q)if(t.due<=Clock.now){ready=t;break;}if(ready==null)return;q.remove(ready);ready.r.run();}throw new AssertionError("busy loop");}void advance(long n){Clock.now+=n;flush();}}
  static class Worker {void shutdownNow(){}}
  boolean bingAutoUpdate=true;boolean closed,startupFinished,playbackReady,imageLoading,deferredBingUpdate,startupExpired;long firstDrawAt=-1;int generation=1;String mode="bing",status="",bingChoice="";int refreshCalls;void refresh(boolean cachedStartup){refreshCalls++;}View root=new View();Handler ui=new Handler();Worker worker=new Worker();
- long minimumDisplayMs=1000;static final long MAXIMUM_STARTUP_MS=30000;
+ long minimumDisplayMs=1000;static final long MAXIMUM_STARTUP_MS=DEADLINE;
  final Runnable expireStartup=()->{startupExpired=true;completeStartupIfReady();};
  final Runnable removeStartup=this::completeStartupIfReady;
  void draw(int w,int h){root.background.setBounds(w,h);root.background.draw(new Canvas());ui.flush();}
@@ -58,6 +61,10 @@ class StartupCheck {
   a=new StartupCheck();a.imageLoading=true;a.finishStartup();a.ui.postDelayed(a.expireStartup,MAXIMUM_STARTUP_MS);a.ui.advance(MAXIMUM_STARTUP_MS);check(a.startupFinished,"Hung image load cannot cover ready playback forever");
   a=new StartupCheck();a.apply(1,new Bitmap(1280,720));a.ui.flush();a.draw(1080,1920);a.finishStartup();a.ui.postDelayed(a.expireStartup,MAXIMUM_STARTUP_MS);a.ui.advance(MAXIMUM_STARTUP_MS);check(a.startupFinished,"Missing landscape draw is bounded");
   a=new StartupCheck();a.ui.postDelayed(a.expireStartup,MAXIMUM_STARTUP_MS);a.close();a.ui.advance(MAXIMUM_STARTUP_MS);check(!a.startupExpired&&a.ui.q.isEmpty(),"Close cancels startup deadline");
+  a=new StartupCheck();a.minimumDisplayMs=120000;a.imageLoading=true;a.ui.postDelayed(a.expireStartup,MAXIMUM_STARTUP_MS);a.ui.advance(9000);
+  a.apply(1,new Bitmap(1280,720));a.ui.flush();a.draw(1920,1080);a.ui.advance(999);check(!a.startupFinished,"Late wallpaper load does not shorten ten-second channel deadline");
+  a.ui.advance(1);check(a.startupFinished&&a.startupExpired&&!a.playbackReady&&a.root.visibility==View.GONE&&a.root.background==null,"IPTV unavailable on ordinary network uncovers controls at ten seconds despite 120s display setting");
+  a.finishStartup();check(a.startupFinished&&a.root.visibility==View.GONE,"Late channel first frame after timeout keeps wallpaper removed");
   for(int seconds:new int[]{1,3,5,17,120}){
    a=new StartupCheck();a.minimumDisplayMs=seconds*1000L;a.apply(1,new Bitmap(1280,720));a.ui.flush();a.draw(1920,1080);a.finishStartup();
    a.ui.advance(seconds*1000L-1);check(!a.startupFinished,"Configured display duration retained");a.ui.advance(1);check(a.startupFinished,"Configured duration expires after first frame");
@@ -71,7 +78,7 @@ class StartupCheck {
   System.out.println("PASS actual-draw minimum 1 s, playback independent, portrait crop, slow/fast/late video, off/failure/close, layer ordering");
  }
 }'''
-java=java.replace('METHODS','\n'.join(extract(s) for s in ('    private void apply(', '    private String appliedStatus(', '    void finishStartup(', '    private void completeStartupIfReady(', '    @Override public synchronized void close(')))
+java=java.replace('DEADLINE',deadline).replace('METHODS','\n'.join(extract(s) for s in ('    private void apply(', '    private String appliedStatus(', '    void finishStartup(', '    private void completeStartupIfReady(', '    @Override public synchronized void close(')))
 java=java.replace('WALLPAPER',extract('    private static final class Wallpaper'))
 layer_source=(root/'app/src/main/java/xiao/bu/tv/PlayerRootLayout.java').read_text(encoding='utf8')
 at=layer_source.index('    @Override protected int getChildDrawingOrder(');end=layer_source.index('\n    }',at)+6

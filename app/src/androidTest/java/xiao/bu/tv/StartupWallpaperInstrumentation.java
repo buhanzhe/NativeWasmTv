@@ -31,7 +31,7 @@ public final class StartupWallpaperInstrumentation extends Instrumentation {
                     check(overlay[0].getVisibility()==View.VISIBLE,"Wallpaper visible while awaiting frame");
                 } catch(Exception e) { throw new RuntimeException(e); }
             });
-            android.os.SystemClock.sleep(29500);
+            android.os.SystemClock.sleep(9000);
             runOnMainSync(()->{
                 try {
                     JSONObject state=backdrop[0].state();
@@ -44,7 +44,7 @@ public final class StartupWallpaperInstrumentation extends Instrumentation {
                     ((FrameLayout)activity.findViewById(R.id.root)).removeView(overlay[0]);
                 } catch(Exception e) { throw new RuntimeException(e); }
             });
-            result.putString("result","PASS: real cached image drawn, missing first-frame reproduced, 30s deadline removes overlay, late callback safe");
+            result.putString("result","PASS: real cached image drawn, missing first-frame reproduced, 10s deadline removes overlay, late callback safe");
             finish(-1,result);
         } catch(Throwable e) {
             if(backdrop[0]!=null)runOnMainSync(()->backdrop[0].close());

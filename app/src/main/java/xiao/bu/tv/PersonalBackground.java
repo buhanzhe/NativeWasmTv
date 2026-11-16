@@ -60,8 +60,9 @@ final class PersonalBackground implements Closeable {
         refresh(false);
     }
     // A failed stream, missing first-frame callback or image download must never
-    // keep a decorative layer above the controls indefinitely.
-    private static final long MAXIMUM_STARTUP_MS=30000L;
+    // keep a decorative layer above the controls for more than ten seconds,
+    // even when a longer wallpaper display duration has been configured.
+    private static final long MAXIMUM_STARTUP_MS=10000L;
     private boolean startupExpired;
     private final Runnable expireStartup=()->{startupExpired=true;completeStartupIfReady();};
     private volatile boolean playbackReady;
@@ -80,7 +81,7 @@ final class PersonalBackground implements Closeable {
         bingAutoUpdate=prefs.getBoolean("background_bing_auto_update",true);
         if(!bingChoice.isEmpty()&&!validBingId(bingChoice))bingChoice="";
         copyright=prefs.getString(bingChoice.isEmpty()?"background_copyright":"background_bing_choice_copyright","");
-        ui.postDelayed(expireStartup,Math.max(MAXIMUM_STARTUP_MS,minimumDisplayMs+10000L));
+        ui.postDelayed(expireStartup,MAXIMUM_STARTUP_MS);
         refresh(true);
     }
     static boolean validMode(String value){return "off".equals(value)||"bing".equals(value)||"custom".equals(value)||"url".equals(value);}

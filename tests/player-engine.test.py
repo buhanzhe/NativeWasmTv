@@ -12,14 +12,14 @@ audio_end=source.index('\n    private void prefetchAdjacentArtwork(',audio_start
 method+='\n'+source[audio_start:audio_end]
 java = '''import java.util.Locale;class PlayerEngineCheck {
  static class Uri {static java.net.URI parse(String value){return java.net.URI.create(value);}}
- static final String PLAYER_ENGINE_SYSTEM="system",DECODE_MODE_SOFTWARE="software";
+ static final String PLAYER_ENGINE_SYSTEM="system",DECODE_MODE_SOFTWARE="software",DECODE_MODE_AUTO="auto";
  String playerEngine="ijk",decodeMode="auto";int androidMp3FallbackRequestId=-1,playRequestId=1;
  int systemCodecFallbackRequestId=-1;String systemCodecFallbackUrl;
  Boolean hardwareVideoDecoderAvailable=true;boolean continuousTsEnabled;Object catchupProgram;
  static class Proxy {boolean finite;boolean finiteMedia(){return finite;}} Proxy proxy=new Proxy();
  boolean isHttpHlsSource(String u){return hls;}
  void availableHardwareDecoderNames(){}
- static class Build {static class VERSION {static int SDK_INT=16;}static class VERSION_CODES {static final int JELLY_BEAN=16;}}
+ static class Build {static String CPU_ABI="armeabi-v7a";static class VERSION {static int SDK_INT=16;}static class VERSION_CODES {static final int JELLY_BEAN=16,KITKAT=19;}}
  static class Channel {boolean radio;Channel(boolean r){radio=r;}}
  boolean hls,mp4,mp3,vision,atmos,cast;
  boolean isNtVCastSource(String u){return cast;}

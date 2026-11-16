@@ -1,15 +1,19 @@
 {
-  "versionCode": 10,
-  "versionName": "1.8.2",
+  "versionCode": 11,
+  "versionName": "1.8.3",
   "apkUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
   "apk32Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv.apk",
   "apk64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTv64.apk",
   "apkX86Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/nTvX86.apk",
+  "sha256": "a076f23e75df37ff6c77d13b950b589482ba81fd768dce80b46f75e4645f050f",
+  "sha25632": "a076f23e75df37ff6c77d13b950b589482ba81fd768dce80b46f75e4645f050f",
+  "sha25664": "3fb52fb9d4495f687efd23545d47cb5ef9f9bfaf42ffbdd34a87db8c5090c8f0",
+  "sha256X86": "38cff9639d7c50ce575e8f87150c4b6ec57a86f938154c79e20ab5bdaf773d70",
+  "releaseNotes": "修复问题并提升播放体验。",
   "apkBroUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/ntv_bro.apk",
-  "sha256Bro": "4ede234d5e9a0f9927e5150db0a0978f1c67d5ed08658b00aa0b01981593b17b",
-  "sha256": "78fdfa266d093d0eca4106cc5b0dfaeddd276587eb66ee9c9d62a135d29ecdea",
-  "sha25632": "78fdfa266d093d0eca4106cc5b0dfaeddd276587eb66ee9c9d62a135d29ecdea",
-  "sha25664": "2ecceb66720fdafe68268c1132b9852c5d0ed02e6c0cc172e60dac0fe0897447",
-  "sha256X86": "6cb822b3feb47e4b2147c4b1fa8ec60fe56398db964fd68cc492a2d1754215f8",
-  "releaseNotes": "修复问题并提升播放体验。"
+  "sha256Bro": "72e4e08c0c8dd670a0393c996cceafab57065fdfaf31fc3bb2e536426cd77ac8",
+  "apkBro64Url": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/ntv_bro64.apk",
+  "sha256Bro64": "6f927f362e06c91ed0dd8e57727822baa2c6afc81dc444eec561e19f050f8ae8",
+  "apkFullUrl": "https://github.com/buhanzhe/NativeWasmTv/releases/latest/download/ntv_full.apk",
+  "sha256Full": "af5f890cbd358f7e7db58150384c85bbc29f0cdc4ff1999554a74a5ea34b4932"
 }

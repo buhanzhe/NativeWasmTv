@@ -48,6 +48,12 @@ final class SharedWebProfile {
         try{
             if(action.equals("ua")){
                 String key="ua:"+page.host(),config=args.getString("config",""),proposed=args.getString("ua","");JSONObject saved=new JSONObject(metadata.getString(key,"{}"));
+                SharedPreferences scripts=c.getSharedPreferences(MainActivity.PREFERENCES,0);
+                String override=scripts.getBoolean("web_view_user_script_enabled",false)?UserScriptRequestPolicy.userAgent(scripts.getString("web_view_user_scripts_v2","[]"),page.toString()):"";
+                // Include the matched policy in the lease so editing/disabling a script
+                // cannot reuse a previously pinned identity, including on the same host.
+                config+=":userscript:"+override;
+                if(!override.isEmpty())proposed=override;
                 String chosen=config.equals(saved.optString("config"))?saved.optString("ua",proposed):proposed;
                 if(args.getBoolean("pin")&&!chosen.isEmpty()&&!saved.toString().equals(new JSONObject().put("config",config).put("ua",chosen).toString()))metadata.edit().putString(key,new JSONObject().put("config",config).put("ua",chosen).toString()).apply();
                 reply.putString("ua",chosen);return reply;

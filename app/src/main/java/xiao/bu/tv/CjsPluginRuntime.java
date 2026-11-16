@@ -76,7 +76,7 @@ public final class CjsPluginRuntime {
         return value;
     }
     private static File root() { return new File(requireContext().getFilesDir(), "cjs-sites-v5"); }
-    private static String currentAbi() { return BuildConfig.CJS_PLUGIN_ABI; }
+    private static String currentAbi() { return RuntimeAbi.current(); }
     static String currentProfile() { return CjsNativeProfile.select(currentAbi(), Build.VERSION.SDK_INT); }
     private static String pref(State s, String key) { return s.id + ":" + currentProfile() + ":" + key; }
     private static File siteRoot(State s) { return new File(new File(root(), s.id), currentProfile()); }

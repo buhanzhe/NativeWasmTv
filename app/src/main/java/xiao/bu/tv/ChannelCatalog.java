@@ -107,7 +107,7 @@ final class ChannelCatalog {
             yangshipinChannel("30", "青海卫视", "600190406", "2025559103"),
             yangshipinChannel("31", "西藏卫视", "600190403", "2025558003"),
             yangshipinChannel("32", "中国教育电视台1频道", "600171827", "2022823801"),
-            yangshipinChannel("33", "新疆卫视", "600152138", "2019927403")
+            yangshipinChannel("33", "新疆卫视", "600152138", "2050898603")
     };
 
     // Keep resolver lookup tables above unchanged: their .url is the CCTV CDN

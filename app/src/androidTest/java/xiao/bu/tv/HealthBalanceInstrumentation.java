@@ -553,10 +553,78 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
         }
         report.put("builtinScriptsMatchAssets",matches);
     }
+    private static final class HlsProbeSelection{
+        final okhttp3.HttpUrl manifest;final Map<String,String> headers;final okhttp3.OkHttpClient client;
+        HlsProbeSelection(okhttp3.HttpUrl m,Map<String,String> h,okhttp3.OkHttpClient c){manifest=m;headers=h;client=c;}
+    }
+    private HlsProbeSelection selectedHlsSnapshot(LiteWebPlayback lite)throws Exception{
+        if(lite==null)return null;
+        String selected=(String)field(lite,"controlledSource");okhttp3.HttpUrl manifest=selected==null?null:okhttp3.HttpUrl.parse(selected);
+        if(manifest==null||!manifest.encodedPath().endsWith(".m3u8"))return null;
+        LiteEngine engine=(LiteEngine)field(lite,"engine");if(engine==null)return null;
+        java.util.ArrayDeque<LiteEngine> pending=new java.util.ArrayDeque<>();pending.add(engine);
+        while(!pending.isEmpty()){LiteEngine candidate=pending.removeFirst();if(selected.equals(field(candidate,"publishedNativeSource"))){engine=candidate;break;}pending.addAll(((Map<Integer,LiteEngine>)field(candidate,"childFrames")).values());}
+        Map<String,String> headers=new HashMap<>((Map<String,String>)field(engine,"publishedNativeHeaders"));
+        if(!headers.containsKey("User-Agent"))headers.put("User-Agent",engine.userAgent());if(!headers.containsKey("Referer"))headers.put("Referer",String.valueOf(field(engine,"pageUrl")));
+        okhttp3.OkHttpClient client=((okhttp3.OkHttpClient)field(engine,"readClient")).newBuilder().dispatcher(new okhttp3.Dispatcher()).connectionPool(new okhttp3.ConnectionPool()).callTimeout(20000,java.util.concurrent.TimeUnit.MILLISECONDS).readTimeout(8000,java.util.concurrent.TimeUnit.MILLISECONDS).build();
+        return new HlsProbeSelection(manifest,headers,client);
+    }
+    private void probeSelectedHls(JSONObject row,int trial,HlsProbeSelection selection)throws Exception{
+        if(selection==null){row.put("selectedHlsProbeSkipped","No selected HLS source captured before playback ended");save();return;}
+        okhttp3.HttpUrl manifest=selection.manifest;Map<String,String> headers=selection.headers;okhttp3.OkHttpClient client=selection.client;
+        if(Boolean.parseBoolean(args.getString("probeOrigin","false"))){
+            okhttp3.HttpUrl page=okhttp3.HttpUrl.parse(headers.get("Referer"));if(page!=null){String origin=page.scheme()+"://"+page.host()+(page.port()==okhttp3.HttpUrl.defaultPort(page.scheme())?"":":"+page.port());headers.put("Origin",origin);}
+        }
+        JSONObject probe=new JSONObject();row.put("selectedHlsProbe",probe);long begin=SystemClock.elapsedRealtime(),bytes=0;
+        File sample=new File(getTargetContext().getExternalFilesDir(null),"hls-probe-"+(Boolean.parseBoolean(args.getString("probeOrigin","false"))?"origin-":"")+trial+".ts");
+        // The playback verdict is already recorded. Stop its competing readers
+        // before independently checking an actual URI from the selected manifest.
+        main(()->call("stopCurrentChannelLoad"));
+        try{
+            okhttp3.Request.Builder request=new okhttp3.Request.Builder().url(manifest);for(Map.Entry<String,String> header:headers.entrySet())if(!header.getKey().equalsIgnoreCase("Range"))request.header(header.getKey(),header.getValue());
+            okhttp3.HttpUrl media=null;
+            try(okhttp3.Response response=client.newCall(request.build()).execute()){
+                probe.put("manifestStatus",response.code());check(response.isSuccessful()&&response.body()!=null,"Probe manifest unavailable");
+                String text=response.peekBody(65536).string();check(text.startsWith("#EXTM3U"),"Probe response is not HLS");
+                for(String line:text.split("\\r?\\n")){if(line.startsWith("#EXT-X-KEY:")&&!line.contains("METHOD=NONE"))throw new IOException("Encrypted manifest: leave original SDK responsible");if(!line.isEmpty()&&!line.startsWith("#"))media=response.request().url().resolve(line.trim());}
+                check(media!=null&&media.encodedPath().endsWith(".ts"),"Probe needs an actual TS media playlist");
+            }
+            request=new okhttp3.Request.Builder().url(media);for(Map.Entry<String,String> header:headers.entrySet())if(!header.getKey().equalsIgnoreCase("Range")&&!header.getKey().equalsIgnoreCase("Host")&&(!(header.getKey().equalsIgnoreCase("Authorization")||header.getKey().equalsIgnoreCase("Cookie"))||media.host().equals(manifest.host())))request.header(header.getKey(),header.getValue());
+            JSONArray addresses=new JSONArray();for(java.net.InetAddress address:client.dns().lookup(media.host()))addresses.put(address.getHostAddress());
+            probe.put("mediaScheme",media.scheme()).put("mediaHost",media.host()).put("mediaPath",media.encodedPath()).put("addresses",addresses).put("file",sample.getName());
+            if(Boolean.parseBoolean(args.getString("probePairedOrigin","false"))){
+                final okhttp3.HttpUrl actual=media;java.util.concurrent.ExecutorService executor=java.util.concurrent.Executors.newFixedThreadPool(2);JSONArray comparison=new JSONArray();
+                try{java.util.List<java.util.concurrent.Future<JSONObject>> futures=new java.util.ArrayList<>();for(boolean origin:new boolean[]{false,true}){final boolean include=origin;futures.add(executor.submit(()->readProbeVariant(client,actual,headers,trial,include)));}for(java.util.concurrent.Future<JSONObject> future:futures)comparison.put(future.get(25000,java.util.concurrent.TimeUnit.MILLISECONDS));probe.put("sameSegmentOriginComparison",comparison);}finally{executor.shutdownNow();}return;
+            }
+            try(okhttp3.Response response=client.newCall(request.build()).execute()){
+                probe.put("mediaStatus",response.code()).put("declaredBytes",response.body()==null?-1:response.body().contentLength()).put("contentType",response.header("Content-Type",""));check(response.isSuccessful()&&response.body()!=null,"Probe segment unavailable");
+                try(InputStream input=response.body().byteStream();FileOutputStream output=new FileOutputStream(sample)){byte[] buffer=new byte[32768];int count;while(bytes<4*1024*1024&&(count=input.read(buffer,0,(int)Math.min(buffer.length,4*1024*1024-bytes)))>0){output.write(buffer,0,count);bytes+=count;}}
+            }
+        }catch(Exception error){probe.put("error",error.toString());}
+        finally{probe.put("bytes",bytes).put("elapsedMs",SystemClock.elapsedRealtime()-begin);client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();save();}
+    }
+    private JSONObject readProbeVariant(okhttp3.OkHttpClient client,okhttp3.HttpUrl media,Map<String,String> inherited,int trial,boolean origin)throws Exception{
+        JSONObject result=new JSONObject().put("originHeader",origin);long begin=SystemClock.elapsedRealtime(),bytes=0;Map<String,String> headers=new HashMap<>(inherited);headers.remove("Origin");
+        if(origin){okhttp3.HttpUrl page=okhttp3.HttpUrl.parse(headers.get("Referer"));if(page!=null)headers.put("Origin",page.scheme()+"://"+page.host()+(page.port()==okhttp3.HttpUrl.defaultPort(page.scheme())?"":":"+page.port()));}
+        File sample=new File(getTargetContext().getExternalFilesDir(null),"hls-paired-"+trial+"-"+(origin?"origin":"base")+".ts");result.put("file",sample.getName());
+        okhttp3.Request.Builder request=new okhttp3.Request.Builder().url(media);for(Map.Entry<String,String> header:headers.entrySet())if(!header.getKey().equalsIgnoreCase("Host")&&!header.getKey().equalsIgnoreCase("Range"))request.header(header.getKey(),header.getValue());
+        try(okhttp3.Response response=client.newCall(request.build()).execute()){
+            result.put("status",response.code()).put("declaredBytes",response.body()==null?-1:response.body().contentLength());check(response.isSuccessful()&&response.body()!=null,"Paired segment unavailable");
+            try(InputStream input=response.body().byteStream();FileOutputStream output=new FileOutputStream(sample)){byte[] buffer=new byte[32768];int count;while(bytes<4*1024*1024&&(count=input.read(buffer,0,(int)Math.min(buffer.length,4*1024*1024-bytes)))>0){output.write(buffer,0,count);bytes+=count;}}
+        }catch(Exception error){result.put("error",error.toString());}
+        return result.put("bytes",bytes).put("elapsedMs",SystemClock.elapsedRealtime()-begin);
+    }
     private void imageBenchmark()throws Exception{
-        NetworkClient.setDnsMode("system");
+        NetworkClient.setDnsMode(args.getString("imageDns","system"));report.put("diagnosticDns",NetworkClient.getDnsMode());
         main(()->{AutoUpdater updater=(AutoUpdater)field(activity,"autoUpdater");if(updater!=null)updater.destroy();});
         report.put("backgroundUpdateDisabledForBenchmark",true);
+        if(args.containsKey("currentBuiltinAsset")){
+            String asset=args.getString("currentBuiltinAsset");check("ntv-site-selection.user.js".equals(asset),"Unsupported diagnostic asset override");
+            SharedPreferences prefs=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0);JSONArray scripts=new JSONArray(prefs.getString("web_view_user_scripts_v2","[]"));boolean replaced=false;
+            String source=new String(read(getTargetContext().getAssets().open("userscripts/"+asset)),"UTF-8");
+            for(int i=0;i<scripts.length();i++)if("ntv-site-selection".equals(scripts.getJSONObject(i).optString("id"))){scripts.getJSONObject(i).put("source",source);replaced=true;}
+            check(replaced,"Diagnostic bundled script entry missing");prefs.edit().putString("web_view_user_scripts_v2",scripts.toString()).commit();report.put("diagnosticBuiltinAssetOverride",asset);snapshotBuiltinScripts(prefs);
+        }
         String traceScript=args.getString("traceScriptBase64","");
         if(args.containsKey("traceScriptPath"))traceScript=android.util.Base64.encodeToString(read(new FileInputStream(args.getString("traceScriptPath"))),android.util.Base64.NO_WRAP);
         if(!traceScript.isEmpty()){
@@ -570,16 +638,20 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
         String[] imageOrder=args.getString("imageOrder","true,false,false,true").split(",");long deadline=Long.parseLong(args.getString("imageTimeoutMs","30000")),hold=Long.parseLong(args.getString("imageHoldMs","2500"));boolean auditSites=Boolean.parseBoolean(args.getString("auditSites","false"));
         for(String site:sites)for(String imageOption:imageOrder){boolean images=Boolean.parseBoolean(imageOption);
             main(()->call("stopCurrentChannelLoad"));SharedWebResources.clear(activity);System.gc();
-            settings(new JSONObject().put("webSourceEngine","lite").put("webViewLoadImages",images).put("webViewUserAgent","windows").put("webViewBrowserVersion","native").put("litePreparseEnabled",false));
+            String diagnosticUa=args.getString("imageUserAgent","windows");
+            settings(new JSONObject().put("webSourceEngine","lite").put("webViewLoadImages",images).put("webViewUserAgent",diagnosticUa).put("webViewBrowserVersion","native").put("litePreparseEnabled",false));
+            settings(new JSONObject().put("webPreferenceScope","domain").put("webPreferenceDomain",WebDomainSettings.key(site)).put("webSourceEngine","lite").put("webViewUserAgent",diagnosticUa).put("webViewBrowserVersion","native"));
             Channel channel=channel("真实网页验证",site.startsWith("webview://")?site:"webview://"+site);long begin=SystemClock.elapsedRealtime();JSONObject row=new JSONObject().put("site",site).put("images",images);trials.put(row);save();
             main(()->{ChannelCatalog.GROUPS=new ChannelCatalog.Group[]{new ChannelCatalog.Group("图片对比",ChannelCatalog.SOURCE_CUSTOM,new Channel[]{channel})};set("currentGroupIndex",0);set("quickChannel",null);
                 if(Boolean.parseBoolean(args.getString("directLite","false"))){set("quickChannel",channel);call("openLiteWebSource",new Class<?>[]{Channel.class,String.class,int.class,String.class},channel,channel.sourceUrl(0),(Integer)field(activity,"playRequestId"),"");}
                 else call("startChannel",new Class<?>[]{int.class},0);
             });
             long first=0,positionAtFirst=0,initialFrames=-1,latestFrames=-1,lastSample=0,previousPosition=-1,advanced=0,lastAdvance=0,maxStall=0;JSONObject timing=new JSONObject();String error="";JSONArray captures=new JSONArray(),playbackSamples=new JSONArray();
-            IMediaPlayer frameOwner=null;long previousFrames=-1,decodedFrames=0;
+            IMediaPlayer frameOwner=null;long previousFrames=-1,decodedFrames=0;HlsProbeSelection probeSelection=null;
             while(SystemClock.elapsedRealtime()-begin<(first==0?deadline:first+hold)){
-                LiteWebPlayback lite=(LiteWebPlayback)field(activity,"liteWebPlayback");if(lite!=null){if(auditSites)lite.enableAudit();timing=lite.startupTimings();JSONObject audit=lite.auditSnapshot();row.put("audit",audit);if(audit.optJSONArray("messages")!=null)row.put("diagnostics",audit.optJSONArray("messages"));}
+                LiteWebPlayback lite=(LiteWebPlayback)field(activity,"liteWebPlayback");if(lite!=null){if(auditSites)lite.enableAudit();timing=lite.startupTimings();JSONObject audit=lite.auditSnapshot();row.put("audit",audit);LiteEngine diagnosticEngine=(LiteEngine)field(lite,"engine");if(diagnosticEngine!=null)row.put("effectiveUserAgent",diagnosticEngine.userAgent());if(audit.optJSONArray("messages")!=null)row.put("diagnostics",audit.optJSONArray("messages"));}
+                if(probeSelection==null&&lite!=null&&Boolean.parseBoolean(args.getString("probeSelectedHls","false")))try{probeSelection=selectedHlsSnapshot(lite);}catch(Exception ignored){}
+                if(auditSites&&lite!=null)try{Object activeMse=field(field(lite,"engine"),"mse");if(activeMse!=null)row.put("diagnosticMseVideoRequired",field(activeMse,"requireVideo"));}catch(Exception ignored){}
                 if(first==0&&ready()){first=SystemClock.elapsedRealtime()-begin;positionAtFirst=player().getCurrentPosition();}
                 if(first>0&&SystemClock.elapsedRealtime()-lastSample>=500){
                     lastSample=SystemClock.elapsedRealtime();IMediaPlayer active=player();long position=active==null?-1:active.getCurrentPosition();
@@ -626,8 +698,162 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
             row.put("playbackSamples",playbackSamples).put("advancedMs",advanced).put("outputFramesAdvanced",initialFrames<0?-1:latestFrames-initialFrames).put("maxStallMs",maxStall);
             row.put("elapsedMs",SystemClock.elapsedRealtime()-begin).put("firstFrameMs",first>0?first:JSONObject.NULL).put("timing",timing).put("error",error).put("playable",playingAtEnd).put("playingAtEnd",playingAtEnd).put("positionAtFirstMs",positionAtFirst).put("positionAtEndMs",playingAtEnd?player().getCurrentPosition():JSONObject.NULL).put("holdMs",hold);save();
             if(playingAtEnd){IMediaPlayer active=player();row.put("videoWidth",active.getVideoWidth()).put("videoHeight",active.getVideoHeight());if(active instanceof IjkMediaPlayer)row.put("videoOutputFps",((IjkMediaPlayer)active).getVideoOutputFramesPerSecond());save();}
+            if(Boolean.parseBoolean(args.getString("probeSelectedHls","false")))probeSelectedHls(row,trials.length(),probeSelection);
             if(Boolean.parseBoolean(args.getString("stopOnFailure","false")))check(playingAtEnd,"Real channel failed: "+site+" images="+images+" "+error);
         }
+    }
+    private void guangdianRegression()throws Exception{
+        JSONArray rows=new JSONArray();report.put("guangdian",rows);boolean allPassed=true;
+        for(String[] site:new String[][]{{"信宜","https://web.guangdianyun.tv/tv/643?uin=1629"},{"开平","https://web.guangdianyun.tv/tv/1434?uin=1132"}}){
+            if("query".equals(args.getString("gdyRoute")))site[1]=site[1].replace("/tv/643?","/tv/?id=643&").replace("/tv/1434?","/tv/?id=1434&");
+            JSONObject row=new JSONObject().put("name",site[0]);rows.put(row);
+            row.put("url",site[1]);
+            settings(new JSONObject().put("webPreferenceScope","domain").put("webPreferenceDomain",WebDomainSettings.key("webview://"+site[1])).put("webSourceEngine","lite"));
+            if(args.containsKey("gdyUserAgent"))settings(new JSONObject().put("webPreferenceScope","domain").put("webPreferenceDomain",WebDomainSettings.key("webview://"+site[1])).put("webViewUserAgent",args.getString("gdyUserAgent")));
+            Channel target=channel(site[0],"webview://"+site[1]);long begin=SystemClock.elapsedRealtime();
+            try{start(target);row.put("firstFrameMs",SystemClock.elapsedRealtime()-begin);}catch(Exception|AssertionError error){row.put("startupError",error.toString());}
+            Object diagnosticLite=field(activity,"liteWebPlayback");if(diagnosticLite instanceof LiteWebPlayback){
+                LiteWebPlayback lite=(LiteWebPlayback)diagnosticLite;lite.enableAudit();LiteEngine engine=(LiteEngine)field(lite,"engine");String selected=(String)field(lite,"controlledSource");
+                if(engine!=null)engine.evaluate("(function(selected){console.log('UserScript Native source audit '+JSON.stringify(document.querySelectorAll('video,audio').map(function(v){var direct=typeof __directMediaSource==='function'?__directMediaSource(v):'',src=v.src;return {direct:!!direct,exact:direct===selected,srcExact:src===selected,hasFragment:!!(direct&&new URL(direct).hash),queryKeys:direct?Array.from(new URL(direct).searchParams.keys()):[],paused:v.paused,nativePaused:v._nativePaused}})))})("+JSONObject.quote(selected)+")");
+            }
+            JSONArray samples=new JSONArray();row.put("samples",samples);
+            long hold=Math.max(16000,Math.min(180000,Long.parseLong(args.getString("holdMs","60000"))));
+            long watch=SystemClock.elapsedRealtime(),lastOutput=watch,maxStall=0,previousFrames=-1,advancedFrames=0,previousPower=-1;IMediaPlayer owner=null;
+            int audibleSamples=0,audioChanges=0,restarts=0;JSONArray captures=new JSONArray();
+            for(int i=0;SystemClock.elapsedRealtime()-watch<hold;i++){
+                SystemClock.sleep(1000);JSONObject sample=new JSONObject().put("elapsedMs",SystemClock.elapsedRealtime()-begin);
+                IMediaPlayer nativePlayer=player();if(nativePlayer!=null){sample.put("playing",nativePlayer.isPlaying()).put("positionMs",nativePlayer.getCurrentPosition());if(nativePlayer instanceof IjkMediaPlayer)sample.put("fps",((IjkMediaPlayer)nativePlayer).getVideoOutputFramesPerSecond());}
+                if(nativePlayer!=owner&&owner!=null)restarts++;
+                if(nativePlayer instanceof IjkMediaPlayer){
+                    IjkMediaPlayer ijk=(IjkMediaPlayer)nativePlayer;if(nativePlayer!=owner)IjkStreamMetrics.measureAudio(ijk,true);
+                    long power=IjkStreamMetrics.audioPower(ijk);sample.put("audioPower",power);
+                    if(power>10737){audibleSamples++;if(previousPower>=0&&power!=previousPower)audioChanges++;}previousPower=power;
+                }
+                long frames=nativePlayer instanceof IjkMediaPlayer?IjkStreamMetrics.outputFrameCount((IjkMediaPlayer)nativePlayer):-1;
+                if(frames>=0&&owner==nativePlayer&&previousFrames>=0&&frames>previousFrames){advancedFrames+=frames-previousFrames;lastOutput=SystemClock.elapsedRealtime();}
+                sample.put("outputFrames",frames);previousFrames=frames;owner=nativePlayer;maxStall=Math.max(maxStall,SystemClock.elapsedRealtime()-lastOutput);
+                Object lite=field(activity,"liteWebPlayback");if(lite instanceof LiteWebPlayback){((LiteWebPlayback)lite).enableAudit();row.put("latestLiteAudit",((LiteWebPlayback)lite).auditSnapshot());}
+                if(Build.VERSION.SDK_INT>=18&&Boolean.parseBoolean(args.getString("captureFrames","false"))&&captures.length()<2&&SystemClock.elapsedRealtime()-watch>(captures.length()==0?5000:30000)){
+                    android.graphics.Bitmap picture=getUiAutomation().takeScreenshot();check(picture!=null,"No screenshot from device");
+                    File file=new File(getTargetContext().getExternalFilesDir(null),"gdy-"+begin+"-"+captures.length()+".png");
+                    try(FileOutputStream out=new FileOutputStream(file)){picture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}finally{picture.recycle();}captures.put(file.getName());row.put("frames",captures);
+                }
+                samples.put(sample);save();
+                if(maxStall>=10000)break;
+            }
+            boolean passed=!row.has("startupError")&&advancedFrames>=hold/100&&maxStall<5000&&restarts==0&&audibleSamples>=3&&audioChanges>=2;
+            row.put("passed",passed).put("outputFramesAdvanced",advancedFrames).put("maxVideoStallMs",maxStall).put("observedMs",SystemClock.elapsedRealtime()-watch).put("playerRestarts",restarts).put("audibleSamples",audibleSamples).put("audioPowerChanges",audioChanges);allPassed&=passed;save();
+        }
+        check(allPassed,"Guangdian continuous video output failed; inspect per-channel samples");
+    }
+    private void sweepWrite(File file,JSONObject value)throws Exception{
+        File temporary=new File(file.getPath()+".tmp");try(FileOutputStream out=new FileOutputStream(temporary)){out.write(value.toString(2).getBytes("UTF-8"));out.getFD().sync();}
+        check(temporary.renameTo(file),"Cannot atomically save sweep evidence");
+    }
+    private void sweepBaseline()throws Exception{
+        if(!args.getString("mode","").startsWith("webview-sweep"))return;
+        String run=args.getString("sweepRun");check(run!=null&&run.matches("[A-Za-z0-9_-]+"),"Invalid baseline run ID");
+        File file=new File(getTargetContext().getExternalFilesDir(null),"sweep-baseline-"+run+".json");
+        AudioManager audio=(AudioManager)getTargetContext().getSystemService(Context.AUDIO_SERVICE);
+        if(file.isFile()){
+            JSONObject root=new JSONObject(new String(read(new FileInputStream(file)),"UTF-8")),profiles=root.getJSONObject("profiles");java.util.Iterator<String> names=profiles.keys();
+            while(names.hasNext()){
+                String name=names.next();JSONObject encoded=profiles.getJSONObject(name);Map<String,Object> values=new HashMap<>();java.util.Iterator<String> keys=encoded.keys();
+                while(keys.hasNext()){String key=keys.next();JSONObject item=encoded.getJSONObject(key);String type=item.getString("type");Object value;
+                    if(type.equals("Boolean"))value=item.getBoolean("value");else if(type.equals("Integer"))value=item.getInt("value");else if(type.equals("Long"))value=item.getLong("value");else if(type.equals("Float"))value=(float)item.getDouble("value");else if(type.equals("Set")){Set<String> set=new HashSet<>();JSONArray array=item.getJSONArray("value");for(int i=0;i<array.length();i++)set.add(array.getString(i));value=set;}else value=item.getString("value");values.put(key,value);
+                }
+                restore(getTargetContext().getSharedPreferences(name,0),values);
+            }
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC,root.getInt("volume"),0);
+        }else{
+            JSONObject profiles=new JSONObject();for(String name:new String[]{MainActivity.PREFERENCES,"tv_ui","lite-cookie-profile","lite-storage","lite-storage-access","cjs_sites_v5","shared-web-profile"}){
+                JSONObject values=new JSONObject();for(Map.Entry<String,?> entry:getTargetContext().getSharedPreferences(name,0).getAll().entrySet()){Object value=entry.getValue();values.put(entry.getKey(),new JSONObject().put("type",value instanceof Set?"Set":value.getClass().getSimpleName()).put("value",value instanceof Set?new JSONArray((Set<?>)value):value));}profiles.put(name,values);
+            }
+            sweepWrite(file,new JSONObject().put("profiles",profiles).put("volume",audio.getStreamVolume(AudioManager.STREAM_MUSIC)));
+        }
+    }
+    private android.graphics.Bitmap sweepPicture(){android.graphics.Bitmap full=getUiAutomation().takeScreenshot();if(full==null)return null;android.graphics.Bitmap crop=android.graphics.Bitmap.createBitmap(full,full.getWidth()/5,full.getHeight()/5,full.getWidth()*3/5,full.getHeight()*3/5);android.graphics.Bitmap small=android.graphics.Bitmap.createScaledBitmap(crop,96,54,false);if(crop!=small)crop.recycle();if(full!=crop)full.recycle();return small;}
+    private void sweepErrorAudit(LiteWebPlayback lite)throws Exception{
+        LiteEngine engine=(LiteEngine)field(lite,"engine");if(engine==null)return;
+        engine.evaluate(new String(read(getContext().getAssets().open("webview-sweep-audit.js")),"UTF-8"));
+    }
+    private void sweepFailedManifest(JSONObject row){
+        try{
+            IMediaPlayer active=player();String source=active==null?null:active.getDataSource();
+            if(source==null||!source.startsWith("http://127.")||!source.endsWith(".m3u8"))return;
+            // Read only after the playback verdict, so the diagnostic GET cannot
+            // refresh a stalled relay and turn the measured attempt into a pass.
+            HttpURLConnection connection=(HttpURLConnection)new URL(source).openConnection();connection.setConnectTimeout(1000);connection.setReadTimeout(1000);
+            try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
+                byte[] block=new byte[1024];int count;while((count=in.read(block))!=-1&&out.size()+count<=16384)out.write(block,0,count);
+                row.put("decoderManifest",out.toString("UTF-8")).put("decoderManifestRequestId",field(activity,"playRequestId"));
+            }finally{connection.disconnect();}
+        }catch(Exception error){try{row.put("decoderManifestError",error.getClass().getSimpleName());}catch(Exception ignored){}}
+    }
+    private void webviewSweep()throws Exception{
+        check(Build.VERSION.SDK_INT==19,"Full webview sweep requires Android API19");
+        JSONArray cases=new JSONArray(new String(read(new FileInputStream(args.getString("sweepCases"))),"UTF-8"));
+        String run=args.getString("sweepRun");check(run!=null&&run.matches("[A-Za-z0-9_-]+"),"Invalid sweep run ID");
+        File directory=new File(getTargetContext().getExternalFilesDir(null),"webview-sweep/"+run);check(directory.isDirectory()||directory.mkdirs(),"Cannot create sweep directory");
+        int from=Integer.parseInt(args.getString("sweepFrom","0")),to=Math.min(cases.length(),Integer.parseInt(args.getString("sweepTo",""+cases.length()))),passed=0;
+        long startup=Long.parseLong(args.getString("sweepStartupMs","45000")),hold=Long.parseLong(args.getString("sweepHoldMs","10000"));
+        check(hold>=10000,"Stable playback observation must be at least ten seconds");
+        settings(new JSONObject().put("webSourceEngine","lite").put("litePreparseEnabled",false).put("autoSwitchSource",false).put("neighborProbeEnabled",false).put("webViewUserAgent","windows"));
+        main(()->{AutoUpdater updater=(AutoUpdater)field(activity,"autoUpdater");if(updater!=null)updater.destroy();});
+        report.put("sweepFrom",from).put("sweepTo",to).put("sweepRun",run);
+        for(int index=from;index<to;index++){
+            JSONObject item=cases.getJSONObject(index);int caseId=item.optInt("index",index);JSONObject row=new JSONObject().put("index",caseId).put("name",item.getString("name")).put("source",item.getString("source")).put("line",item.getInt("line")).put("status","RUNNING");
+            File file=new File(directory,String.format(Locale.US,"%04d.json",caseId));sweepWrite(file,row);
+            Bundle phase=new Bundle();phase.putString("phase","sweep_case");phase.putInt("index",caseId);sendStatus(0,phase);
+            long begin=SystemClock.elapsedRealtime(),first=0,watch=0,lastClock=0,lastOutput=0,previousPosition=-1,previousFrames=-1,clockAdvanced=0,framesAdvanced=0,maxClockStall=0,maxVideoStall=0;int request=-1;
+            IMediaPlayer owner=null;LiteWebPlayback auditedLite=null;boolean web=false,audio=false,stable=false;int stabilityResets=0;String error="";JSONArray samples=new JSONArray();row.put("samples",samples);android.graphics.Bitmap initialPicture=null;
+            try{
+                String source=item.getString("source");check(source.startsWith("webview://"),"Non-webview source in sweep inventory");
+                settings(new JSONObject().put("webPreferenceScope","domain").put("webPreferenceDomain",WebDomainSettings.key(source)).put("webSourceEngine","lite").put("webViewUserAgent","windows"));
+                Channel target=channel(item.getString("name"),source);
+                main(()->{call("stopCurrentChannelLoad");ChannelCatalog.GROUPS=new ChannelCatalog.Group[]{new ChannelCatalog.Group("4.4 WebView sweep",ChannelCatalog.SOURCE_CUSTOM,new Channel[]{target})};set("currentGroupIndex",0);set("currentChannelIndex",0);set("quickChannel",null);call("startChannel",new Class<?>[]{int.class},0);});
+                while(SystemClock.elapsedRealtime()-begin<startup+hold){
+                    long now=SystemClock.elapsedRealtime();IMediaPlayer active=player();boolean nativeReady=ready()&&field(activity,"activePlayerChannel")==target;JSONObject media=new JSONObject();
+                    if(Boolean.parseBoolean(args.getString("sweepAudit","false"))){Object currentLite=field(activity,"liteWebPlayback");if(currentLite instanceof LiteWebPlayback){LiteWebPlayback lite=(LiteWebPlayback)currentLite;lite.enableAudit();if(auditedLite!=lite){sweepErrorAudit(lite);auditedLite=lite;}row.put("audit",lite.auditSnapshot());try{Object activeMse=field(field(lite,"engine"),"mse");if(activeMse!=null)row.put("diagnosticMseVideoRequired",field(activeMse,"requireVideo"));}catch(Exception ignored){}}}
+                    if(!nativeReady){main(()->{WebSourceView view=(WebSourceView)field(activity,"webSourceView");JSONObject state=view.currentWebMediaState();java.util.Iterator<String> keys=state.keys();while(keys.hasNext()){String key=keys.next();media.put(key,state.get(key));}});}
+                    boolean webReady=!nativeReady&&readyWeb(target);
+                    if((nativeReady||webReady)&&(watch==0||web!=webReady||!web&&owner!=active||request!=(Integer)field(activity,"playRequestId"))){
+                        if(first==0)first=now-begin;
+                        watch=lastClock=lastOutput=now;previousPosition=previousFrames=-1;clockAdvanced=framesAdvanced=maxClockStall=maxVideoStall=0;web=webReady;audio=nativeReady&&target.radio&&(Boolean)field(activity,"audioOnlyPlayback");owner=active;request=(Integer)field(activity,"playRequestId");
+                        row.put("firstFrameMs",first).put("path",web?"original-webview":field(activity,"liteWebPlayback")!=null?"lite-native":"system-sniffed-native").put("backend",active==null?"WebView":active.getClass().getSimpleName());
+                        if(nativeReady){row.put("videoWidth",active.getVideoWidth()).put("videoHeight",active.getVideoHeight());if(active instanceof IjkMediaPlayer){int decoder=((IjkMediaPlayer)active).getVideoDecoder();row.put("decoder",decoder==IjkMediaPlayer.FFP_PROPV_DECODER_MEDIACODEC?"hardware":decoder==IjkMediaPlayer.FFP_PROPV_DECODER_AVCODEC?"software":"unknown").put("decoderName",IjkStreamMetrics.videoDecoderName((IjkMediaPlayer)active));}}
+                        if(initialPicture!=null){initialPicture.recycle();initialPicture=null;}
+                        if(!audio&&(web?media.optLong("videoFrames",-1)<=0:!(active instanceof IjkMediaPlayer)))initialPicture=sweepPicture();
+                        row.put("frameEvidence",audio?"audio-clock":initialPicture!=null?"video-area-pixel-change":web?"web-decoder-counter":"native-decoder-counter");
+                    }
+                    if(watch>0&&(nativeReady||webReady)){
+                        check(activity.hasWindowFocus(),"Device foreground/focus changed");
+                        long position=web?media.optLong("mediaTimeMs",0):active.getCurrentPosition(),frames=web?media.optLong("videoFrames",-1):active instanceof IjkMediaPlayer?IjkStreamMetrics.outputFrameCount((IjkMediaPlayer)active):-1;
+                        if(previousPosition>=0&&position!=previousPosition){clockAdvanced+=Math.min(1000,Math.max(0,position-previousPosition));lastClock=now;}
+                        if(previousFrames>=0&&frames>previousFrames){framesAdvanced+=frames-previousFrames;lastOutput=now;}
+                        maxClockStall=Math.max(maxClockStall,now-lastClock);maxVideoStall=Math.max(maxVideoStall,now-lastOutput);previousPosition=position;previousFrames=frames;
+                        samples.put(new JSONObject().put("atMs",now-begin).put("positionMs",position).put("frames",frames).put("playing",true));
+                        if(maxClockStall>=1500||!audio&&frames>=0&&initialPicture==null&&maxVideoStall>=1500){watch=0;stabilityResets++;}
+                        else if(now-watch>=hold&&clockAdvanced>=hold*.8&&(audio||initialPicture!=null||framesAdvanced>=20)){stable=true;break;}
+                    }else if(watch>0){watch=0;stabilityResets++;}
+                    if(first==0&&now-begin>=startup){boolean currentError=field(activity,"loadErrorRequestId").equals(field(activity,"playRequestId"));row.put("loadErrorRequestMatches",currentError).put("lastLoadError",currentError?String.valueOf(field(activity,"loadError")):"");break;}
+                    SystemClock.sleep(500);
+                }
+                check(first>0,"No first frame within "+startup+"ms");check(stable,"No continuous ten-second playback window before deadline");check(clockAdvanced>=hold*.8,"Playback clock advanced less than eight seconds");
+                if(!audio&&initialPicture==null)check(framesAdvanced>=20,"Insufficient actual decoder output");
+                if(initialPicture!=null){android.graphics.Bitmap ending=sweepPicture();check(ending!=null,"Cannot verify original WebView moving pictures");int changed=0;for(int y=0;y<54;y++)for(int x=0;x<96;x++)if(initialPicture.getPixel(x,y)!=ending.getPixel(x,y))changed++;ending.recycle();row.put("changedVideoPixels",changed);check(changed>96*54/100,"Original WebView picture did not change");}
+                row.put("status","PASS");passed++;
+            }catch(Throwable failure){error=failure.toString();row.put("status","FAIL").put("error",error);
+                if(Boolean.parseBoolean(args.getString("sweepAudit","false")))try{android.graphics.Bitmap picture=getUiAutomation().takeScreenshot();if(picture!=null){File screenshot=new File(directory,String.format(Locale.US,"%04d.png",caseId));try(FileOutputStream out=new FileOutputStream(screenshot)){picture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}picture.recycle();row.put("screenshot",screenshot.getName());}}catch(Throwable capture){row.put("screenshotError",capture.toString());}
+            }
+            finally{
+                if("FAIL".equals(row.optString("status"))&&Boolean.parseBoolean(args.getString("sweepAudit","false")))sweepFailedManifest(row);
+                if(Boolean.parseBoolean(args.getString("sweepAudit","false"))&&!row.has("screenshot"))try{android.graphics.Bitmap picture=getUiAutomation().takeScreenshot();if(picture!=null){File screenshot=new File(directory,String.format(Locale.US,"%04d.png",caseId));try(FileOutputStream out=new FileOutputStream(screenshot)){picture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}picture.recycle();row.put("screenshot",screenshot.getName());}}catch(Throwable capture){row.put("screenshotError",capture.toString());}
+                if(initialPicture!=null)initialPicture.recycle();row.put("elapsedMs",SystemClock.elapsedRealtime()-begin).put("observedMs",watch==0||samples.length()==0?0:Math.max(0,begin+samples.getJSONObject(samples.length()-1).getLong("atMs")-watch)).put("clockAdvancedMs",clockAdvanced).put("framesAdvanced",framesAdvanced).put("maxClockStallMs",maxClockStall).put("maxVideoStallMs",maxVideoStall).put("audioOnly",audio).put("stabilityResets",stabilityResets);
+                sweepWrite(file,row);main(()->call("stopCurrentChannelLoad"));SystemClock.sleep(150);System.gc();
+            }
+        }
+        report.put("sweepCompleted",to-from).put("sweepPassed",passed).put("passed",passed==to-from);save();
     }
     private void litePublic(Channel current)throws Exception{
         CjsPluginRuntime.setManifestUrl(current.sourceUrl(0).replace("/live.m3u8","/catalog.json"));CjsPluginRuntime.ensureCatalog();
@@ -794,7 +1020,7 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
     private void audioMuteForSpeed(){((AudioManager)getTargetContext().getSystemService(Context.AUDIO_SERVICE)).setStreamVolume(AudioManager.STREAM_MUSIC,0,0);}
 
     private void datagrams(boolean rtp){try(DatagramSocket socket=new DatagramSocket()){int seq=0;byte[] packet=new byte[1328];while(!networkClosed)for(int i=0;i<6&&!networkClosed;i++){byte[] ts=files.get("/seg"+i+".ts");for(int at=0;at<ts.length&&!networkClosed;at+=1316){int length=Math.min(1316,ts.length-at),offset=rtp?12:0;if(rtp){packet[0]=(byte)0x80;packet[1]=33;packet[2]=(byte)(seq>>8);packet[3]=(byte)seq++;long time=SystemClock.elapsedRealtime()*90;for(int b=0;b<4;b++)packet[4+b]=(byte)(time>>(24-b*8));packet[11]=1;}System.arraycopy(ts,at,packet,offset,length);socket.send(new DatagramPacket(packet,offset+length,InetAddress.getByName("127.0.0.1"),rtp?18560:18562));SystemClock.sleep(12);}}}catch(Exception error){android.util.Log.e("HealthBalanceFixture","Datagram fixture failed",error);}}
-    @Override public void onStart(){Bundle result=new Bundle();int code=-1;SharedPreferences prefs=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0);Map<String,?> saved=new HashMap<>(prefs.getAll());ChannelCatalog.Group[] groups=ChannelCatalog.GROUPS;AudioManager audio=(AudioManager)getTargetContext().getSystemService(Context.AUDIO_SERVICE);int originalVolume=audio.getStreamVolume(AudioManager.STREAM_MUSIC);Map<String,Map<String,?>> profiles=new HashMap<>();for(String name:new String[]{"tv_ui","lite-cookie-profile","lite-storage","lite-storage-access","cjs_sites_v5","shared-web-profile"})profiles.put(name,new HashMap<>(getTargetContext().getSharedPreferences(name,0).getAll()));try{
+    @Override public void onStart(){Bundle result=new Bundle();int code=-1;try{sweepBaseline();if("webview-sweep-restore".equals(args.getString("mode"))){result.putString("stream","Sweep baseline restored");finish(-1,result);return;}}catch(Throwable failure){result.putString("stream",failure.toString());finish(0,result);return;}SharedPreferences prefs=getTargetContext().getSharedPreferences(MainActivity.PREFERENCES,0);Map<String,?> saved=new HashMap<>(prefs.getAll());ChannelCatalog.Group[] groups=ChannelCatalog.GROUPS;AudioManager audio=(AudioManager)getTargetContext().getSystemService(Context.AUDIO_SERVICE);int originalVolume=audio.getStreamVolume(AudioManager.STREAM_MUSIC);Map<String,Map<String,?>> profiles=new HashMap<>();for(String name:new String[]{"tv_ui","lite-cookie-profile","lite-storage","lite-storage-access","cjs_sites_v5","shared-web-profile"})profiles.put(name,new HashMap<>(getTargetContext().getSharedPreferences(name,0).getAll()));try{
         report.put("sdk",Build.VERSION.SDK_INT).put("model",Build.MODEL);
         for(int i=0;i<6;i++)files.put("/seg"+i+".ts",read(getContext().getAssets().open("mse/seg"+i+".ts")));
         for(String name:new String[]{"fixture.mp4","fixture.mp3","fixture.flv","loud.mp3","quiet.mp3","delayed.mp3","silent.mp3"})files.put("/"+name,read(getContext().getAssets().open(name)));
@@ -810,6 +1036,7 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
         if("logos".equals(args.getString("mode"))){audio.setStreamVolume(AudioManager.STREAM_MUSIC,0,0);logoChecks(base);report.put("passed",true);return;}
         if("speed".equals(args.getString("mode"))){speedChecks(base);return;}
         audio.setStreamVolume(AudioManager.STREAM_MUSIC,"1".equals(args.getString("muteFixture"))?0:Math.min(3,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)),0);
+        if("webview-sweep".equals(args.getString("mode"))){webviewSweep();return;}
         Channel current=channel("当前视频",base+"/live.m3u8");start(current);IMediaPlayer before=player();long position=before.getCurrentPosition();
         health=(ChannelHealth)field(activity,"channelHealth");
         if("frame-check".equals(args.getString("mode"))){
@@ -842,6 +1069,7 @@ public final class HealthBalanceInstrumentation extends WebTaskNavigationInstrum
         if("firstFrames".equals(args.getString("mode"))){firstFrames(base);report.put("passed",true);return;}
         if("scan".equals(args.getString("mode"))){scanSpeed(base,current);report.put("passed",true);return;}
         if("lite".equals(args.getString("mode"))){litePreparse(base,current);report.put("passed",true);return;}
+        if("gdy-regression".equals(args.getString("mode"))){guangdianRegression();report.put("passed",true);return;}
         if("lite-public".equals(args.getString("mode"))){litePublic(current);report.put("passed",true);return;}
         if("resources".equals(args.getString("mode"))){sharedResources(base);report.put("passed",true);return;}
         if("profile".equals(args.getString("mode"))){sharedProfile(base);report.put("passed",true);return;}

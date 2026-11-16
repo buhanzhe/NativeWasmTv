@@ -40,7 +40,7 @@ final class TvbusBundle {
         return incoming.version;
     }
     private static Installed unpack(Context context, byte[] bytes, String digest) throws Exception {
-        String entryName = "native/" + BuildConfig.CJS_PLUGIN_ABI + "/libtvcore.so";
+        String entryName = "native/" + RuntimeAbi.current() + "/libtvcore.so";
         byte[] nativeBytes = null, dex = null, metadata = null;
         Set<String> names = new HashSet<>(); int totalBytes=0;
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
@@ -55,14 +55,14 @@ final class TvbusBundle {
                 else if (entry.getName().equals("tvbus-plugin.json")) metadata=data;
             }
         }
-        if (nativeBytes==null) throw new IOException("TVBus 插件不支持当前设备架构 " + BuildConfig.CJS_PLUGIN_ABI);
+        if (nativeBytes==null) throw new IOException("TVBus 插件不支持当前设备架构 " + RuntimeAbi.current());
         if (dex==null || dex.length<112 || dex[0]!='d' || dex[1]!='e' || dex[2]!='x' || metadata==null)
             throw new IOException("不是有效 TVBus JAR 插件");
         TvbusPlugin.validate(nativeBytes);
         JSONObject info = new JSONObject(new String(metadata,"UTF-8"));
         if (info.optInt("api",0)!=1 || !"tvbus".equals(info.optString("type",""))) throw new IOException("TVBus JAR 接口不兼容");
         String nativeSha=sha(nativeBytes);
-        if (!nativeSha.equals(info.getJSONObject("engines").optString(BuildConfig.CJS_PLUGIN_ABI,"")))
+        if (!nativeSha.equals(info.getJSONObject("engines").optString(RuntimeAbi.current(),"")))
             throw new IOException("TVBus JAR 引擎校验失败");
         if (!sha(dex).equals(info.optString("dexSha256",""))) throw new IOException("TVBus JAR DEX 校验失败");
         File dir=new File(context.getFilesDir(),"tvbus-bundles/"+digest);
@@ -71,7 +71,7 @@ final class TvbusBundle {
         save(jar,bytes,false); save(nativeFile,nativeBytes,true);
         JSONObject defaults=info.optJSONObject("defaults");
         JSONObject urls=info.optJSONObject("engineUrls");
-        String origin=urls==null?"":urls.optString(BuildConfig.CJS_PLUGIN_ABI,"");
+        String origin=urls==null?"":urls.optString(RuntimeAbi.current(),"");
         if(!origin.isEmpty())TvbusLiveConfig.online(origin);
         return new Installed(jar,nativeFile,digest,info.optString("version","1"),defaults==null?new JSONObject():defaults,origin);
     }

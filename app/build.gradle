@@ -3,6 +3,10 @@ apply plugin: 'com.android.application'
 import groovy.json.JsonOutput
 import java.security.MessageDigest
 
+def browserBuild = gradle.ext.ntvBrowserBuild
+def browserEnabled = browserBuild.browserEnabled
+if (project.hasProperty('liteKernelFixtures') && !browserEnabled) throw new GradleException('liteKernelFixtures requires the authorized browser-core: ' + browserBuild.reason)
+
 def releaseSigningDirectory = rootProject.file('.signing')
 def releaseKeystore = new File(releaseSigningDirectory, 'iptv-release.jks')
 def releaseSigningInfo = new File(releaseSigningDirectory, 'keystore-info.properties')
@@ -115,6 +119,26 @@ android {
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256Bro"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"ntv_bro.apk"'
         }
+        ntvBro64 {
+            dimension 'architecture'
+            minSdkVersion 21
+            ndk { abiFilters 'arm64-v8a' }
+            buildConfigField 'boolean', 'BUNDLED_LITE_BROWSER', 'true'
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"arm64-v8a"'
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apkBro64Url"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256Bro64"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"ntv_bro64.apk"'
+        }
+        ntvFull {
+            dimension 'architecture'
+            minSdkVersion 14
+            ndk { abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86' }
+            buildConfigField 'boolean', 'BUNDLED_LITE_BROWSER', 'true'
+            buildConfigField 'String', 'CJS_PLUGIN_ABI', '"universal"'
+            buildConfigField 'String', 'UPDATE_APK_URL_FIELD', '"apkFullUrl"'
+            buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256Full"'
+            buildConfigField 'String', 'UPDATE_APK_ASSET', '"ntv_full.apk"'
+        }
         arm32 {
             dimension 'architecture'
             minSdkVersion 14
@@ -144,6 +168,10 @@ android {
             buildConfigField 'String', 'UPDATE_SHA256_FIELD', '"sha256X86"'
             buildConfigField 'String', 'UPDATE_APK_ASSET', '"nTvX86.apk"'
         }
+    }
+
+    variantFilter { variant ->
+        if (!browserEnabled && variant.flavors.any { it.name in ['ntvBro', 'ntvBro64', 'ntvFull'] }) setIgnore(true)
     }
 
     buildTypes {
@@ -218,6 +246,9 @@ android {
     }
 
     sourceSets {
+        arm32.java.srcDir 'src/browserUnavailable/java'
+        arm64.java.srcDir 'src/browserUnavailable/java'
+        if (!project.hasProperty('liteKernelFixtures')) x86.java.srcDir 'src/browserUnavailable/java'
         main {
             jni.srcDirs = []
             jniLibs.srcDirs = ['src/main/libs']
@@ -267,30 +298,14 @@ task packageWebkitCorePair(type: Jar) {
     }
 }
 
-// Standard packages only compile the browser Java bridge. No browser assets or
-// native library enter these APKs; the browser edition retains the full AAR.
-task packageLiteCoreBridge {
-    dependsOn ':litecore:bundleReleaseAar'
-    def aar = project(':litecore').layout.buildDirectory.file('outputs/aar/litecore-release.aar')
-    def bridge = layout.buildDirectory.file('generated/litecore/litecore-bridge.jar')
-    inputs.file aar
-    outputs.file bridge
-    doLast {
-        copy {
-            from zipTree(aar.get().asFile)
-            include 'classes.jar'
-            into bridge.get().asFile.parentFile
-            rename 'classes.jar', 'litecore-bridge.jar'
-        }
-    }
-}
-
+// Public editions compile independently of the protected browser project.
 dependencies {
-    ntvBroImplementation project(':litecore')
-    arm32Implementation files(packageLiteCoreBridge)
-    arm64Implementation files(packageLiteCoreBridge)
-    if (project.hasProperty('liteKernelFixtures')) x86Implementation project(':litecore')
-    else x86Implementation files(packageLiteCoreBridge)
+    if (browserEnabled) {
+        ntvBroImplementation project(':litecore')
+        ntvBro64Implementation project(':litecore')
+        ntvFullImplementation project(':litecore')
+        if (project.hasProperty('liteKernelFixtures')) x86Implementation project(':litecore')
+    }
     implementation 'tv.danmaku.ijk.media:ijkplayer-java:0.8.8'
     // All ABIs use the patched local libraries, including Dolby audio and metrics.
     implementation('androidx.webkit:webkit:1.9.0') {
@@ -339,7 +354,6 @@ task generateVersionFile {
         String apk32Asset = 'nTv.apk'
         String apk64Asset = 'nTv64.apk'
         String apkX86Asset = 'nTvX86.apk'
-        String sha256Bro = fileSha256('updateApkBro')
 
         def manifest = [
                 versionCode : android.defaultConfig.versionCode,
@@ -349,26 +363,44 @@ task generateVersionFile {
                 apk32Url    : releaseBase + apk32Asset,
                 apk64Url    : releaseBase + apk64Asset,
                 apkX86Url   : releaseBase + apkX86Asset,
-                apkBroUrl   : releaseBase + 'ntv_bro.apk',
-                sha256Bro   : sha256Bro,
                 sha256      : sha25632,
                 sha25632    : sha25632,
                 sha25664    : sha25664,
                 sha256X86   : sha256X86,
                 releaseNotes: project.findProperty('releaseNotes') ?: '修复问题并提升播放体验。'
         ]
+        [Bro: 'ntv_bro.apk', Bro64: 'ntv_bro64.apk', Full: 'ntv_full.apk'].each { suffix, asset ->
+            String hash = fileSha256('updateApk' + suffix)
+            if (hash) {
+                if (!browserEnabled) throw new GradleException('Cannot publish protected browser APKs: ' + browserBuild.reason)
+                manifest['apk' + suffix + 'Url'] = releaseBase + asset
+                manifest['sha256' + suffix] = hash
+            }
+        }
+        File manifestDirectory = rootProject.file(project.findProperty('versionOutputDir') ?: '.')
+        manifestDirectory.mkdirs()
         String manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + '\n'
-        File liteOutput = rootProject.file('version-lite.json')
+        File liteOutput = new File(manifestDirectory, 'version-lite.json')
         liteOutput.setText(manifestJson, 'UTF-8')
         // Legacy clients (< 1.6) read this file from master. Keep the threshold
         // at 6 while refreshing the target APK and hashes on every build.
         def legacyManifest = new LinkedHashMap(manifest)
         legacyManifest.versionCode = 6
         String startupManifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(legacyManifest)) + '\n'
-        rootProject.file('version-iptv.json').setText(startupManifestJson, 'UTF-8')
-        rootProject.file('version.json').setText(startupManifestJson, 'UTF-8')
+        new File(manifestDirectory, 'version-iptv.json').setText(startupManifestJson, 'UTF-8')
+        new File(manifestDirectory, 'version.json').setText(startupManifestJson, 'UTF-8')
         logger.lifecycle("Generated ${liteOutput} (arm32=${sha25632 ?: 'unset'}, "
                 + "arm64=${sha25664 ?: 'unset'}, x86=${sha256X86 ?: 'unset'}, "
                 + 'startupVersionCode=6)')
+    }
+}
+
+tasks.register('writeBuildCapabilities') {
+    def output = layout.buildDirectory.file('outputs/build-capabilities.json')
+    outputs.file output
+    outputs.upToDateWhen { false }
+    doLast {
+        output.get().asFile.parentFile.mkdirs()
+        output.get().asFile.setText(JsonOutput.prettyPrint(JsonOutput.toJson(browserBuild)) + '\n', 'UTF-8')
     }
 }

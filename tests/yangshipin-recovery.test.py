@@ -18,6 +18,7 @@ sync = method(main, '    private void syncPlaybackRecoveryTarget(')
 cache_start = ysp.index('                String cacheKey = pendingRequest.cacheKey();')
 cache_end = ysp.index('                if (!keepTracePage)', cache_start)
 ysp_lookup = ysp[cache_start:cache_end]
+cache_identity = method(ysp, '        String cacheKey()')
 cjs_start = method(cjs, '    private void start(Pending request)').replace('android.content.SharedPreferences', 'Prefs')
 timeout_guard = method(main, '        if (!freshYangshipin && !refreshingHttpSource')
 
@@ -28,7 +29,7 @@ public class YangshipinRecoveryCheck {
  static void check(boolean ok){if(!ok)throw new AssertionError();}
  static class SystemClock {static long elapsedRealtime(){return 1000;}}
  static class AppLog {static void w(String a,String b){}static void i(String a,String b){}}
- static class Channel {String name="CCTV-1";int sourceCount(){return 2;}}
+ static class Channel {String name="CCTV-1",yangshipinPid="channel",yangshipinStreamId="old-stream";int sourceCount(){return 2;}}
  static class ChannelCatalog {static final int SOURCE_YSP_CCTV=1,SOURCE_YSP_SATELLITE=2,SOURCE_CUSTOM=3;}
  static class Queue {Runnable next;long delay;void postDelayed(Runnable r,long d){next=r;delay=d;}void run(){Runnable r=next;next=null;r.run();}}
  static class Warmup {int clears;void foreground(String s){check(s.isEmpty());clears++;}}
@@ -71,7 +72,12 @@ public class YangshipinRecoveryCheck {
  void complete(Pending p,String u){cacheHits++;check(u.equals("cached"));}
  void execute(Pending p){network++;}
  CJS_START
+ static class CacheIdentity {Channel channel=new Channel();String definition="hd";CACHE_IDENTITY_METHOD}
  public static void main(String[] args){
+  CacheIdentity identity=new CacheIdentity();String prior=identity.cacheKey();Map<String,String> oldCache=new HashMap<>();oldCache.put(prior,"stale-address");
+  check(prior.equals(new CacheIdentity().cacheKey()));identity.channel.yangshipinStreamId="new-stream";check(!oldCache.containsKey(identity.cacheKey()));
+  identity.channel.yangshipinStreamId="old-stream";identity.definition="fhd";check(!oldCache.containsKey(identity.cacheKey()));
+  identity.definition="hd";identity.channel.yangshipinPid="other-channel";check(!oldCache.containsKey(identity.cacheKey()));
   YangshipinRecoveryCheck a=new YangshipinRecoveryCheck();
   check(a.refreshYangshipinPlayback(7,"clock stopped"));check(a.playbackRecoveryAttempts==1&&a.starts==0&&a.channelBar.delay==500&&a.channelNetworkWarmup.clears==1);
   check(a.refreshYangshipinPlayback(7,"duplicate 403"));check(a.playbackRecoveryAttempts==1);
@@ -104,7 +110,7 @@ public class YangshipinRecoveryCheck {
   System.out.println("PASS fresh YSP/CJS resolution, exact cache eviction, duplicate/stale callbacks, channel-switch/exit cancellation, three-attempt limit and unaffected other sources");
  }
 }
-'''.replace('\n REFRESH\n','\n'+refresh+'\n').replace('\n SYNC\n','\n'+sync+'\n').replace('YSP_LOOKUP',ysp_lookup).replace('CJS_START',cjs_start).replace('TIMEOUT_GUARD',timeout_guard)
+'''.replace('\n REFRESH\n','\n'+refresh+'\n').replace('\n SYNC\n','\n'+sync+'\n').replace('YSP_LOOKUP',ysp_lookup).replace('CJS_START',cjs_start).replace('TIMEOUT_GUARD',timeout_guard).replace('CACHE_IDENTITY_METHOD',cache_identity)
 with tempfile.TemporaryDirectory(prefix='ntv-ysp-recovery-') as directory:
     path=Path(directory)/'YangshipinRecoveryCheck.java';path.write_text(java,encoding='utf-8')
     subprocess.run(['javac','-encoding','UTF-8',str(path)],check=True)

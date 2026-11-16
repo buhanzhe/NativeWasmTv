@@ -326,7 +326,8 @@ final class AutoUpdater {
             throw new JSONException("Missing APK URL for " + apkAsset);
         }
         apkUrl = validatedGithubUrl(apkUrl);
-        String displayAsset = architectureUpgrade || "arm64".equals(BuildConfig.FLAVOR)
+        String displayAsset = "ntvFull".equals(BuildConfig.FLAVOR) ? "网页电视全量.apk"
+                : architectureUpgrade || "arm64".equals(BuildConfig.FLAVOR) || "ntvBro64".equals(BuildConfig.FLAVOR)
                 ? "网页电视64位.apk" : "x86".equals(BuildConfig.FLAVOR)
                 ? "网页电视x86.apk" : "网页电视32位.apk";
         apkAsset = validatedApkFilename(apkUrl, apkAsset, displayAsset);

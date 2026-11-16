@@ -35,6 +35,15 @@ class Check {
   ok(!LiteWebStartupPolicy.retryDependency(loader,0,state(2000,0,0,false,false,true),false,false,false));
   ok(!LiteWebStartupPolicy.retryDependency("HTTP 403",0,ordinary,false,false,false));
   ok(!LiteWebStartupPolicy.retryDependency(loader,0,new LiteStartupState(2000,0,403,0,false,false,false),false,false,false));
+  String truncated="JS：Script https://example.test/apiList.js Error: java.io.EOFException: Incomplete web resource";
+  ok(LiteWebStartupPolicy.retryDependency(truncated,0,ordinary,false,false,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated,1,ordinary,false,false,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated,0,ordinary,false,true,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated,0,ordinary,false,false,true));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated,0,ordinary,true,false,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated,0,state(2000,0,0,false,true,false),false,false,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated.replace("Script ","Image "),0,ordinary,false,false,false));
+  ok(!LiteWebStartupPolicy.retryDependency(truncated.replace("java.io.EOFException: Incomplete web resource","HTTP 403"),0,ordinary,false,false,false));
 
   ok(LiteWebStartupPolicy.deadline(start,31000,fetching,false)==LiteWebStartupPolicy.Decision.WAIT);
   ok(LiteWebStartupPolicy.render(start,31000,fetching,false)==LiteWebStartupPolicy.Decision.WAIT);
@@ -106,7 +115,84 @@ class Check {
    }
   }finally{client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();}
  }
- public static void main(String[] args)throws Exception{startup();clocks();manifests();System.out.println("PASS startup progress/interaction/hard cap, muxed TS reset/normal/wrap/retry/variant isolation and real relay clear/encrypted/discontinuity/fMP4/range guards");}
+ static void slowLiveSegment()throws Exception{
+  ok(LiteMediaRelay.segmentTimeoutMillis(12000,90000L*3)==12000);
+  ok(LiteMediaRelay.segmentTimeoutMillis(12000,90000L*19)==27000);
+  ok(LiteMediaRelay.segmentTimeoutMillis(12000,90000L*3600)==60000);
+  ok(LiteMediaRelay.segmentTimeoutMillis(0,90000L*19)==0);
+  final java.net.ServerSocket remote=new java.net.ServerSocket(0);
+  final byte[] part=packet(90000);final Throwable[] failure={null};
+  Thread writer=new Thread(()->{try(java.net.Socket socket=remote.accept()){
+   java.io.BufferedReader request=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),"US-ASCII"));String first=request.readLine();ok(first.startsWith("GET /segment.ts?channel=exact "));while(!request.readLine().isEmpty()){}
+   OutputStream output=socket.getOutputStream();output.write(("HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: "+(part.length*3)+"\r\nConnection: close\r\n\r\n").getBytes("US-ASCII"));output.write(part);output.flush();
+   Thread.sleep(250);output.write(part);output.flush();Thread.sleep(250);output.write(part);output.flush();
+  }catch(Throwable error){failure[0]=error;}});writer.setDaemon(true);writer.start();
+  OkHttpClient client=new OkHttpClient.Builder().callTimeout(100,java.util.concurrent.TimeUnit.MILLISECONDS).build();
+  String root="http://127.0.0.1:"+remote.getLocalPort()+"/live.m3u8";
+  LiteHlsSession session=new LiteHlsSession();session.observe(HttpUrl.parse(root),"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2,\nsegment.ts?channel=exact\n",Collections.emptyMap(),android.os.SystemClock.elapsedRealtime());
+  LiteMediaRelay relay=new LiteMediaRelay(client,root,Collections.emptyMap(),false,false,session);
+  try{
+   String playlist=new String(read(new java.net.URL(relay.url()).openStream()),"UTF-8"),segment=null;
+   for(String line:playlist.split("\n"))if(line.startsWith("http://"))segment=line;
+   ok(segment!=null);byte[] received=read(new java.net.URL(segment).openStream());ok(received.length==part.length*3);
+   for(int i=0;i<received.length;i++)ok(received[i]==part[i%part.length]);writer.join(2000);ok(failure[0]==null);
+  }finally{relay.close();remote.close();client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();}
+ }
+ static byte[] read(InputStream in)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] block=new byte[1024];int count;while((count=input.read(block))>=0)out.write(block,0,count);return out.toByteArray();}}
+ static void slowLiveManifest()throws Exception{
+  final java.net.ServerSocket remote=new java.net.ServerSocket(0);final Throwable[] failure={null};
+  Thread writer=new Thread(()->{try(java.net.Socket socket=remote.accept()){
+   java.io.BufferedReader request=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),"US-ASCII"));ok(request.readLine().startsWith("GET /live.m3u8 "));while(!request.readLine().isEmpty()){}
+   Thread.sleep(3300);byte[] manifest="#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:4,\nsegment.ts\n".getBytes("UTF-8");OutputStream out=socket.getOutputStream();out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: "+manifest.length+"\r\nConnection: close\r\n\r\n").getBytes("US-ASCII"));out.write(manifest);out.flush();
+  }catch(Throwable error){failure[0]=error;}});writer.setDaemon(true);writer.start();
+  OkHttpClient client=new OkHttpClient.Builder().readTimeout(5000,java.util.concurrent.TimeUnit.MILLISECONDS).callTimeout(6000,java.util.concurrent.TimeUnit.MILLISECONDS).build();
+  String root="http://127.0.0.1:"+remote.getLocalPort()+"/live.m3u8";LiteHlsSession session=new LiteHlsSession();LiteMediaRelay relay=new LiteMediaRelay(client,root,Collections.emptyMap(),false,false,session);
+  try{java.net.URLConnection connection=new java.net.URL(relay.url()).openConnection();connection.setReadTimeout(6000);String received=new String(read(connection.getInputStream()),"UTF-8");ok(received.startsWith("#EXTM3U")&&received.contains(".ts"));writer.join(1000);ok(failure[0]==null);}
+  finally{relay.close();remote.close();client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();}
+ }
+ static void segmentHeaderAndBodyDeadlines()throws Exception{
+  for(final boolean slowHeaders:new boolean[]{true,false}){
+   final java.net.ServerSocket remote=new java.net.ServerSocket(0);final byte[] part=packet(90000);final Throwable[] failure={null};
+   Thread writer=new Thread(()->{try(java.net.Socket socket=remote.accept()){
+    java.io.BufferedReader request=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),"US-ASCII"));ok(request.readLine().startsWith("GET /segment.ts "));while(!request.readLine().isEmpty()){}
+    if(slowHeaders)Thread.sleep(3300);OutputStream out=socket.getOutputStream();out.write(("HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: "+part.length*3+"\r\nConnection: close\r\n\r\n").getBytes("US-ASCII"));out.write(part);out.flush();
+    if(!slowHeaders)Thread.sleep(3300);out.write(part);out.write(part);out.flush();
+   }catch(Throwable error){if(slowHeaders)failure[0]=error;}});writer.setDaemon(true);writer.start();
+   OkHttpClient client=new OkHttpClient.Builder().readTimeout(5000,java.util.concurrent.TimeUnit.MILLISECONDS).callTimeout(6000,java.util.concurrent.TimeUnit.MILLISECONDS).build();String root="http://127.0.0.1:"+remote.getLocalPort()+"/live.m3u8";
+   LiteHlsSession session=new LiteHlsSession();session.observe(HttpUrl.parse(root),"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:4,\nsegment.ts\n",Collections.emptyMap(),android.os.SystemClock.elapsedRealtime());LiteMediaRelay relay=new LiteMediaRelay(client,root,Collections.emptyMap(),false,false,session);
+   try{String playlist=new String(read(new java.net.URL(relay.url()).openStream()),"UTF-8"),segment=null;for(String line:playlist.split("\n"))if(line.startsWith("http://"))segment=line;ok(segment!=null);
+    byte[] received=null;try{java.net.URLConnection connection=new java.net.URL(segment).openConnection();connection.setReadTimeout(6000);received=read(connection.getInputStream());}catch(IOException timedOut){ok(!slowHeaders);}
+    if(slowHeaders){ok(received!=null&&received.length==part.length*3);for(int i=0;i<received.length;i++)ok(received[i]==part[i%part.length]);}else ok(received==null||received.length<part.length*3);
+    writer.join(1000);ok(failure[0]==null);
+   }finally{relay.close();remote.close();client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();}
+  }
+ }
+ static void rangeContinuationIntegrity()throws Exception{
+  for(final int mode:new int[]{0,1,2,3,4,5,6,7}){
+   final java.net.ServerSocket remote=new java.net.ServerSocket(0);final byte[] body=new byte[188*12];for(int i=0;i<body.length;i++)body[i]=packet(90000)[i%188];
+   final java.util.concurrent.atomic.AtomicInteger requests=new java.util.concurrent.atomic.AtomicInteger();final Throwable[] error={null};
+   Thread writer=new Thread(()->{try{while(!remote.isClosed())try(java.net.Socket socket=remote.accept()){
+    java.io.BufferedReader in=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),"US-ASCII"));String first=in.readLine(),line,range=null,validator=null;ok(first.startsWith("GET /segment.ts "));
+    while((line=in.readLine())!=null&&!line.isEmpty()){if(line.toLowerCase(Locale.US).startsWith("range:"))range=line.substring(6).trim();if(line.toLowerCase(Locale.US).startsWith("if-range:"))validator=line.substring(9).trim();}
+    int number=requests.incrementAndGet(),start=range==null?0:Integer.parseInt(range.substring(6,range.length()-1));
+    if(range!=null)ok("\"immutable\"".equals(validator));
+    int status=range==null||mode==2?200:206,declared=body.length-start;
+    String headers="HTTP/1.1 "+status+" OK\r\nContent-Length: "+declared+"\r\nContent-Type: video/mp2t\r\nConnection: close\r\n";
+    if(mode!=5)headers+="ETag: "+(mode==6?"W/\"immutable\"":mode==1&&number>1?"\"changed\"":"\"immutable\"")+"\r\n";
+    if(range!=null)headers+="Content-Range: bytes "+(mode==3?start+1:start)+"-"+(body.length-1)+"/"+body.length+"\r\n";
+    OutputStream out=socket.getOutputStream();out.write((headers+"\r\n").getBytes("US-ASCII"));int count=mode==4&&number>1?0:Math.min(mode==0&&number>1?declared:mode==7?1:137,declared);out.write(body,start,count);out.flush();
+   }}catch(Throwable t){if(!remote.isClosed())error[0]=t;}});writer.setDaemon(true);writer.start();
+   OkHttpClient client=new OkHttpClient.Builder().callTimeout(5000,java.util.concurrent.TimeUnit.MILLISECONDS).build();String root="http://127.0.0.1:"+remote.getLocalPort()+"/live.m3u8";
+   LiteHlsSession session=new LiteHlsSession();session.observe(HttpUrl.parse(root),"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:4,\nsegment.ts\n",Collections.emptyMap(),android.os.SystemClock.elapsedRealtime());LiteMediaRelay relay=new LiteMediaRelay(client,root,Collections.emptyMap(),false,false,session);
+   try{
+    String playlist=new String(read(new java.net.URL(relay.url()).openStream()),"UTF-8"),segment=null;for(String line:playlist.split("\n"))if(line.startsWith("http://"))segment=line;ok(segment!=null);
+    byte[] got=null;try(Response received=client.newBuilder().retryOnConnectionFailure(false).build().newCall(new Request.Builder().url(segment).build()).execute()){got=received.body().bytes();}catch(IOException expected){ok(mode!=0);}
+    if(mode==0){if(!Arrays.equals(body,got)||requests.get()!=2)throw new AssertionError("range integrity bytes="+(got==null?-1:got.length)+" requests="+requests.get()+" server="+error[0]);}else{ok(got==null||got.length<body.length);if(requests.get()>2)throw new AssertionError("mode="+mode+" requests="+requests.get());}
+    ok(error[0]==null);
+   }finally{relay.close();remote.close();client.dispatcher().executorService().shutdownNow();client.connectionPool().evictAll();writer.join(1000);}
+  }
+ }
+ public static void main(String[] args)throws Exception{rangeContinuationIntegrity();startup();clocks();manifests();slowLiveSegment();slowLiveManifest();segmentHeaderAndBodyDeadlines();System.out.println("PASS startup/TS clocks/format guards; paced segments, slow manifest/fragment headers and retained three-second body-idle cancellation");}
 }'''
 with tempfile.TemporaryDirectory() as folder:
     p=Path(folder)

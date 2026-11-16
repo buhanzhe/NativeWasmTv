@@ -25,6 +25,10 @@ METHOD
   verify("ntv.apk","nTv.apk","网页电视32位.apk",true);
   verify("ntv64.apk","nTv64.apk","网页电视64位.apk",true);
   verify("nTvX86.apk","nTvX86.apk","网页电视x86.apk",true);
+  verify("ntv_bro64.apk","ntv_bro64.apk","网页电视64位.apk",true);
+  verify("ntv_full.apk","ntv_full.apk","网页电视全量.apk",true);
+  verify("nTv64.apk","ntv_bro64.apk","网页电视64位.apk",false);
+  verify("ntv_bro.apk","ntv_full.apk","网页电视全量.apk",false);
   verify("%E7%BD%91%E9%A1%B5%E7%94%B5%E8%A7%8632%E4%BD%8D.apk","nTv.apk","网页电视32位.apk",true);
   verify("nTv64.apk","nTv.apk","网页电视32位.apk",false);
   verify("ntv.apk","nTv64.apk","网页电视64位.apk",false);
@@ -41,7 +45,7 @@ with tempfile.TemporaryDirectory() as folder:
     subprocess.run([str(jdk/'javac.exe'), '-encoding', 'UTF-8', '-d', folder, str(tmp/'AssetCheck.java'), str(tmp/'JSONException.java')], check=True)
     subprocess.run([str(jdk/'java.exe'), '-cp', folder, 'xiao.bu.tv.AssetCheck'], check=True)
 
-names = ['ntv_bro.apk', 'nTv.apk', 'nTv64.apk', 'nTvX86.apk']
+names = ['ntv_bro.apk', 'ntv_bro64.apk', 'ntv_full.apk', 'nTv.apk', 'nTv64.apk', 'nTvX86.apk']
 script = (root/'scripts/build-release.ps1').read_text('utf-8-sig')
 gradle = (root/'app/build.gradle').read_text('utf-8')
 assert re.findall(r"Name = '(.*\.apk)'", script) == names
@@ -50,8 +54,8 @@ for name in names:
 manifest = json.loads((root/'version-lite.json').read_text('utf-8'))
 # The checked-in manifest describes the published release. Older releases may
 # predate bro; only the build/export checks below require the new bro fields.
-for key, name in zip(['apkBroUrl','apk32Url','apk64Url','apkX86Url'], names):
-    if key == 'apkBroUrl' and key not in manifest:
+for key, name in zip(['apkBroUrl','apkBro64Url','apkFullUrl','apk32Url','apk64Url','apkX86Url'], names):
+    if key in ('apkBroUrl','apkBro64Url','apkFullUrl') and key not in manifest:
         continue
     assert manifest[key].rsplit('/',1)[-1] == name, (key, name)
 if os.name == 'nt':
@@ -73,22 +77,26 @@ if os.name == 'nt':
     # Exercise the production export gate with stale hashes/versions, including
     # the deliberate difference between startup code 6 and actual APK code 9.
     start = script.index('foreach ($manifestPath in @($liteVersionPath, $versionPath, $legacyVersionPath))')
-    end = script.index('Copy-Item -LiteralPath $liteVersionPath', start)
+    end = script.index('[ordered]@{ capabilities =', start)
     gate = script[start:end]
     with tempfile.TemporaryDirectory(prefix='ntv-manifests-') as folder:
         paths = [Path(folder)/name for name in ['version-lite.json','version.json','version-iptv.json']]
         original = dict(versionCode=9, versionName='1.8.1', sha256='a',
-                        sha25632='a', sha25664='b', sha256X86='c', sha256Bro='d')
+                        sha25632='a', sha25664='b', sha256X86='c', sha256Bro='d', sha256Bro64='e', sha256Full='f')
         setup = "$ErrorActionPreference='Stop';\n"
         for var, path in zip(['liteVersionPath','versionPath','legacyVersionPath'], paths):
             setup += "$" + var + "='" + str(path).replace("'", "''") + "';\n"
         for var, sha in [('arm32Result','a'),('arm64Result','b'),('x86Result','c'),('broResult','d')]:
             setup += "$"+var+"=[pscustomobject]@{SHA256='"+sha+"';VersionCode=9;VersionName='1.8.1';APK='test.apk'};\n"
-        for case in ['valid','stale_hash','stale_browser_hash','wrong_name','wrong_lite_code','wrong_startup_code']:
+        setup += "$results=@([pscustomobject]@{Flavor='ntvBro';SHA256='d'},[pscustomobject]@{Flavor='ntvBro64';SHA256='e'},[pscustomobject]@{Flavor='ntvFull';SHA256='f'});\n"
+        for case in ['valid','stale_hash','stale_browser_hash','stale_bro64_hash','stale_full_hash','missing_full_hash','wrong_name','wrong_lite_code','wrong_startup_code']:
             for i, path in enumerate(paths):
                 data = dict(original, versionCode=9 if i == 0 else 6)
                 if case == 'stale_hash' and i == 2: data['sha256'] = 'old'
                 if case == 'stale_browser_hash' and i == 0: data['sha256Bro'] = 'old'
+                if case == 'stale_bro64_hash' and i == 0: data['sha256Bro64'] = 'old'
+                if case == 'stale_full_hash' and i == 2: data['sha256Full'] = 'old'
+                if case == 'missing_full_hash' and i == 1: del data['sha256Full']
                 if case == 'wrong_name' and i == 1: data['versionName'] = 'old'
                 if case == 'wrong_lite_code' and i == 0: data['versionCode'] = 8
                 if case == 'wrong_startup_code' and i == 1: data['versionCode'] = 9

@@ -972,7 +972,7 @@ final class YangshipinWebResolver {
         }
 
         String cacheKey() {
-            return channel.yangshipinPid + "_" + definition;
+            return channel.yangshipinPid + "_" + channel.yangshipinStreamId + "_" + definition;
         }
     }
 

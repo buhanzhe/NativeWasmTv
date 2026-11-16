@@ -1,9 +1,40 @@
 rootProject.name = 'nTv'
 include ':app'
-def browserCore = file('browser-core')
-if (!new File(browserCore, 'litecore/build.gradle').isFile()) {
-    throw new GradleException('Private browser core is missing. Place the separately authorized core checkout in browser-core; see README.md. Public prebuilt .so files alone do not include the Java/JS build dependencies.')
+// Public packages compile against app/src/browserUnavailable. The protected
+// engine is configured only when its checkout and authorized signing are ready.
+def core = file('browser-core')
+def present = !providers.gradleProperty('withoutBrowserCore').isPresent() &&
+        new File(core, 'litecore/build.gradle').isFile() &&
+        new File(core, 'litebrowser/build.gradle').isFile()
+def expected = 'bf31a6b5e6dd9a65112b0becba4456395b3d7ef11b5a9b4771107384d1f68060'
+def fingerprint = ''
+def reason = present ? 'Release signing certificate is unavailable.' : 'Private browser-core is unavailable.'
+if (present) {
+    def info = file('.signing/keystore-info.properties')
+    def key = file('.signing/iptv-release.jks')
+    if (info.isFile() && key.isFile()) {
+        try {
+            def props = new Properties()
+            info.withInputStream { props.load(it) }
+            def store = java.security.KeyStore.getInstance(key, props.getProperty('storePassword', '').toCharArray())
+            def certificate = store.getCertificate(props.getProperty('alias', ''))
+            if (certificate != null) fingerprint = java.security.MessageDigest.getInstance('SHA-256')
+                    .digest(certificate.encoded).encodeHex().toString()
+            reason = fingerprint == expected ? '' : 'Signing certificate does not match the protected browser.'
+        } catch (Exception ignored) {
+            reason = 'Cannot read the release signing certificate.'
+        }
+    }
 }
-include ':litebrowser', ':litecore'
-project(':litebrowser').projectDir = new File(browserCore, 'litebrowser')
-project(':litecore').projectDir = new File(browserCore, 'litecore')
+def applicationId = providers.gradleProperty('applicationIdOverride').orNull ?: 'xiao.bu.tv'
+if (!reason && applicationId != 'xiao.bu.tv') reason = 'Application ID is not authorized by the protected browser.'
+gradle.ext.ntvBrowserBuild = [corePresent: present, browserEnabled: !reason,
+        certificateSha256: fingerprint, reason: reason,
+        supportedAbis: ['armeabi-v7a', 'arm64-v8a', 'x86']]
+if (!reason) {
+    include ':litebrowser', ':litecore'
+    project(':litebrowser').projectDir = new File(core, 'litebrowser')
+    project(':litecore').projectDir = new File(core, 'litecore')
+} else {
+    logger.lifecycle("Skipping bro/full packages: ${reason} Standard ARM32/ARM64/x86 builds remain available.")
+}

@@ -12,24 +12,26 @@ import xiao.bu.tv.skin.TvUi;
 /** Popup lifetime only. Layout, focus, recycling and drawing live in the JAR. */
 final class TvUiMenu {
     private PopupWindow popup;
+    private final LegacyMenuOverlay legacy=new LegacyMenuOverlay();
     private TvUi.Events exitEvents;
     void dismiss(){
+        legacy.dismiss();
         PopupWindow old=popup;popup=null;exitEvents=null;
         if(old!=null)try{old.dismiss();}catch(IllegalArgumentException detached){
             xiao.bu.tv.AppLog.w("TvUiMenu","Popup window already detached",detached);
         }
     }
-    boolean visible(){return popup!=null&&popup.isShowing();}
-    View contentView(){return visible()?popup.getContentView():null;}
+    boolean visible(){return legacy.visible()||popup!=null&&popup.isShowing();}
+    View contentView(){return legacy.visible()?legacy.contentView():popup!=null&&popup.isShowing()?popup.getContentView():null;}
     boolean confirmExitFromBack(){if(!visible()||exitEvents==null)return false;TvUi.Events events=exitEvents;events.action(-1,1);return true;}
     boolean dispatchKeyEvent(KeyEvent event){
         if(!visible()||exitEvents==null)return false;
         int key=event.getKeyCode();
         if(key==KeyEvent.KEYCODE_VOLUME_UP||key==KeyEvent.KEYCODE_VOLUME_DOWN||key==KeyEvent.KEYCODE_VOLUME_MUTE)return false;
         if(key==KeyEvent.KEYCODE_BACK){if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0)confirmExitFromBack();return true;}
-        popup.getContentView().dispatchKeyEvent(event);return true;
+        contentView().dispatchKeyEvent(event);return true;
     }
-    void refresh(){if(visible()&&TvUiPlugin.provider()!=null){try{TvUiPlugin.provider().update(popup.getContentView(),new Bundle());}catch(RuntimeException|LinkageError failure){android.content.Context c=popup.getContentView().getContext();dismiss();TvUiPlugin.rejectRenderer(c,failure);}}}
+    void refresh(){if(visible()&&TvUiPlugin.provider()!=null){try{TvUiPlugin.provider().update(contentView(),new Bundle());}catch(RuntimeException|LinkageError failure){android.content.Context c=contentView().getContext();dismiss();TvUiPlugin.rejectRenderer(c,failure);}}}
     void showSubmenu(View anchor,Bundle state,TvUi.Events events){
         Bundle child=new Bundle(state);String[] categories=state.getStringArray("categories");
         final int backIndex=categories==null?0:categories.length;
@@ -64,6 +66,9 @@ final class TvUiMenu {
         final int maxWidth=Math.max(1,anchor.getWidth()-2*horizontalInset);
         if(menu&&content instanceof xiao.bu.tv.skin.SharedTvUi.MenuWidth)
             width=Math.min(maxWidth,((xiao.bu.tv.skin.SharedTvUi.MenuWidth)content).preferredWidth(height));
+        if(legacy.show(anchor,content,width,height,horizontalInset,verticalInset,menu)){
+            exitEvents=exit?events:null;return;
+        }
         // Android's focusable PopupWindow consumes BACK itself and only dismisses.
         // Keep exit keys in the Activity, forwarding DPAD/ENTER to the same renderer.
         popup=new PopupWindow(content,width,height,false);exitEvents=exit?events:null;

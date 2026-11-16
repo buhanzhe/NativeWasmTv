@@ -52,17 +52,17 @@ final class TvbusPlugin implements Closeable {
         }
     }
     private SharedPreferences prefs(Profile profile) {
-        return context.getSharedPreferences("tvbus-plugin-" + BuildConfig.CJS_PLUGIN_ABI + profile.key, 0);
+        return context.getSharedPreferences("tvbus-plugin-" + RuntimeAbi.current() + profile.key, 0);
     }
     private File directory(Profile profile) throws IOException {
-        File dir = new File(context.getFilesDir(), "tvbus/" + BuildConfig.CJS_PLUGIN_ABI
+        File dir = new File(context.getFilesDir(), "tvbus/" + RuntimeAbi.current()
                 + (profile.key.isEmpty() ? "" : "/" + profile.key));
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("无法创建 TVBus 插件目录");
         return dir;
     }
     static String upstreamUrl() {
         return "https://raw.githubusercontent.com/binstreamio/tvbus.android/master/tvbus/src/main/jniLibs/"
-                + BuildConfig.CJS_PLUGIN_ABI + "/libtvcore.so";
+                + RuntimeAbi.current() + "/libtvcore.so";
     }
     private File cached(Profile profile) throws Exception {
         String digest = prefs(profile).getString("digest", "");
@@ -398,7 +398,7 @@ final class TvbusPlugin implements Closeable {
     static void validate(byte[] bytes) throws IOException {
         if (bytes.length < 1024 || bytes[0] != 0x7f || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F' || bytes[5] != 1)
             throw new IOException("TVBus 下载内容不是有效 ELF 插件");
-        String abi = BuildConfig.CJS_PLUGIN_ABI;
+        String abi = RuntimeAbi.current();
         int machine = (bytes[18] & 255) | (bytes[19] & 255) << 8;
         int expected = "arm64-v8a".equals(abi) ? 183 : "armeabi-v7a".equals(abi) ? 40 : 3;
         if (machine != expected || bytes[4] != (expected == 183 ? 2 : 1)) throw new IOException("TVBus 插件架构不匹配");
