@@ -5,6 +5,11 @@ assert hashlib.sha256(jar.read_bytes()).hexdigest()==(folder/'dist/bl.sha256').r
 with zipfile.ZipFile(jar) as z:
     info=json.loads(z.read('channel-plugin.json'));assert info['minSdk']==14 and info['native'] and info['entry']=='xiao.bu.channel.bl.BlPlugin'
     names=z.namelist();assert not any(n.endswith(('.so','.class','.html')) for n in names)
+    reference=json.loads((folder/'reference/source.json').read_text(encoding='utf-8'))
+    for icon in reference['icons']:
+        asset='assets/'+icon+'.png'
+        assert asset in names, 'Missing BBLL icon: '+icon
+        assert z.read(asset)==(folder/asset).read_bytes(), 'Unexpected bundled icon: '+icon
     for license in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer']:assert license in names
     dex=z.read('classes.dex')
 def word(offset):return struct.unpack_from('<I',dex,offset)[0]

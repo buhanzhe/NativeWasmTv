@@ -1,11 +1,14 @@
 """Run BlPluginInstrumentation on an explicitly selected device and test package."""
-import argparse,pathlib,shlex,socket,subprocess,time,urllib.parse,threading,re
+import argparse,hashlib,pathlib,shlex,socket,subprocess,time,urllib.parse,threading,re
 p=argparse.ArgumentParser();p.add_argument('--adb',default='adb');p.add_argument('--serial',required=True)
 p.add_argument('--package',required=True,help='Explicit host package; plugin tests use separate preferences even in xiao.bu.tv')
 p.add_argument('--host-apk',required=True);p.add_argument('--test-apk',required=True)
 p.add_argument('--real',action='store_true',help='Use official Bilibili APIs (JAR still comes from local HTTPS fixture)')
 p.add_argument('--system',action='store_true',help='Exercise the API-14 platform player adapter')
 p.add_argument('--dash',action='store_true',help='Exercise separate DASH video/audio merge on API 16+')
+p.add_argument('--premium-dash',action='store_true',help='Exercise 8K, Dolby and Hi-Res selection against a premium DASH fixture')
+p.add_argument('--dash-resume',action='store_true',help='Check that DASH recovers across byte ranges and audio representations')
+p.add_argument('--video',help='Run a focused playback check on a public BV identifier with --real')
 p.add_argument('--smoke',action='store_true',help='Initial playback, navigation and live danmaku; skip decoder-switch stress tests')
 p.add_argument('--jar-url',help='Optional published HTTPS JAR instead of the local HTTPS fixture')
 p.add_argument('--cert',type=pathlib.Path,help='Public fixture certificate, trusted only inside the isolated instrumentation process')
@@ -22,6 +25,10 @@ p.add_argument('--soak-seconds',type=int,default=0,help='Additional initial play
 p.add_argument('--run-label',default='',help='Optional output suffix to preserve separate regression rounds')
 a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[3];adb=[a.adb,'-s',a.serial]
 if a.account_audit and (not a.real or not a.jar_url or a.errors):p.error('--account-audit requires --real --jar-url and cannot inject faults')
+if a.premium_dash and (not a.dash or a.real or a.system):p.error('--premium-dash requires local fixtures and --dash')
+if a.dash_resume and (not a.dash or a.real or a.system):p.error('--dash-resume requires local fixtures and --dash')
+if a.video and (not a.real or a.account_audit or not re.fullmatch(r'BV[A-Za-z0-9]{10}',a.video)):
+    p.error('--video requires --real and a BV identifier')
 def run(*args,**kw):return subprocess.run(adb+list(args),check=True,**kw)
 if not a.skip_install:
     for apk in ([a.host_apk] if a.embedded_runner else [a.test_apk] if a.skip_host_install else [a.host_apk,a.test_apk]):run('install','-r',apk)
@@ -29,7 +36,8 @@ run('shell','input','keyevent','224')
 subprocess.run(adb+['shell','wm','dismiss-keyguard'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.connect(('1.1.1.1',80));host=s.getsockname()[0];s.close()
 if a.fixture_host:host=a.fixture_host
-sha=(root/'plugins/bl/dist/bl.sha256').read_text().strip();params={'sha256':sha}
+sha=hashlib.sha256(a.local_jar.read_bytes()).hexdigest() if a.local_jar else (root/'plugins/bl/dist/bl.sha256').read_text().strip()
+params={'sha256':sha}
 if not a.account_audit:params['testPreferences']='true'
 if not a.real:
     for key in ['apiOrigin','passportOrigin','liveOrigin']:params[key]='http://'+host+':39626'
@@ -44,6 +52,9 @@ if a.cert:
 if a.real:command+=' -e real true'
 if a.system:command+=' -e system true'
 if a.dash:command+=' -e dash true'
+if a.premium_dash:command+=' -e premiumDash true'
+if a.dash_resume:command+=' -e dashResume true'
+if a.video:command+=' -e video '+shlex.quote(a.video)
 if a.smoke:command+=' -e smoke true'
 if a.errors:command+=' -e errors true'
 if a.interactions:command+=' -e interactions true'
@@ -89,6 +100,9 @@ else:logs='No target PID was reported; unrelated process logs were omitted.\n'
 (out/'logcat.txt').write_text(logs,encoding='utf-8')
 if a.account_audit and not a.account_probe:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/bl-account-audit.json',str(out/'account-audit.json')])
 images=(['bl-account-player.png','bl-account-settings.png'] if a.account_audit else ['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text or a.account_audit else ['bl-error.png']
+if 'browseUi=' in text:images+=['bl-search-keyboard.png','bl-browse-settings.png','bl-theme-pink.png','bl-theme-classic.png','bl-mine.png']
+if a.video:images=['bl-focused-player.png'] if 'PASS:' in text else ['bl-error.png']
+if 'playerUi=' in text:images+=['bl-player-overlay.png','bl-player-related.png']
 if a.account_probe:images=[]
 for name in images:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/'+name,str(out/name)])
 raise SystemExit(0 if 'PASS:' in text else 1)

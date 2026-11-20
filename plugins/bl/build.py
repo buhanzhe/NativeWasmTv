@@ -67,11 +67,16 @@ with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as z:
     def entry(name,data):
         info=zipfile.ZipInfo(name,(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16;z.writestr(info,data)
     entry('classes.dex',(dex/'classes.dex').read_bytes())
-    entry('channel-plugin.json',json.dumps(dict(api=1,version=5,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
+    entry('channel-plugin.json',json.dumps(dict(api=1,version=14,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
     for f in sorted((here/'assets').rglob('*')):
         if f.is_file() and f.suffix!='.webp':entry('assets/'+f.relative_to(here/'assets').as_posix(),f.read_bytes())
-    for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer']:
-        if (here/name).exists():entry(name,(here/name).read_bytes())
+    # Keep the tested release's license bytes independent of Git checkout line endings.
+    license_endings={'NOTICE':b'\r\n','LICENSE-newBV':b'\r\n','LICENSE-ZXing':b'\n','LICENSE-ExoPlayer':b'\n'}
+    for name,newline in license_endings.items():
+        source=here/name
+        if source.exists():
+            text=source.read_bytes().replace(b'\r\n',b'\n')
+            entry(name,text.replace(b'\n',newline))
 sha=hashlib.sha256(jar.read_bytes()).hexdigest();(dist/'bl.sha256').write_text(sha+'\n',encoding='ascii')
 (dist/'example.m3u').write_text('#EXTM3U\n#EXTINF:-1 group-title="视频",BL 哔哩哔哩\nhttps://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/bl.jar?sha256='+sha+'\n',encoding='utf-8')
 print(f'Built {jar}: {jar.stat().st_size} bytes, API 14, SHA256 {sha}')

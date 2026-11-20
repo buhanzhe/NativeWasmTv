@@ -4,7 +4,7 @@ import org.json.*;
 
 /** A small UI projection; preserve API identifiers without copying complete response trees. */
 final class BlItem {
-    final JSONObject raw;final String kind,title,picture,owner,id;final long count,duration;
+    final JSONObject raw;final String kind,title,picture,owner,id;final long count,duration,danmakuCount;
     BlItem(JSONObject v,String expected){
         raw=v;String type=expected;
         if(expected.equals("dynamic")){JSONObject modules=v.optJSONObject("modules"),module=modules==null?null:modules.optJSONObject("module_dynamic"),major=module==null?null:module.optJSONObject("major"),archive=major==null?null:major.optJSONObject("archive");if(archive!=null)v=archive;type="video";}
@@ -19,6 +19,7 @@ final class BlItem {
         picture=v.optString("pic",v.optString("cover",v.optString("face",v.optString("user_cover",v.optString("keyframe","")))));
         JSONObject author=v.optJSONObject("owner");if(author==null)author=v.optJSONObject("author");owner=author==null?v.optString("author",v.optString("uname",v.optString("upper_name",v.optString("author_name","")))):author.optString("name",author.optString("uname"));
         JSONObject stat=v.optJSONObject("stat");count=stat==null?v.optLong("play",v.optLong("cnt",v.optLong("online",v.optLong("media_count")))):stat.optLong("view");
+        danmakuCount=stat==null?v.optLong("video_review",v.optLong("danmaku",-1)):stat.optLong("danmaku",-1);
         Object durationValue=v.opt("duration");long d=0;if(durationValue instanceof Number)d=((Number)durationValue).longValue()*1000;else if(durationValue instanceof String){String[] parts=((String)durationValue).split(":");for(String p:parts)try{d=d*60+Long.parseLong(p);}catch(Exception ignored){}d*=1000;}duration=d;
     }
 }

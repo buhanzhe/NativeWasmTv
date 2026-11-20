@@ -364,7 +364,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             webBackPressCount = 0;
             webClosePrompt = false;
             resetBackPromptContent();
-            root.requestFocus();
+            requestPlaybackFocus();
         }
     };
     private final Runnable commitNumericChannel = new Runnable() {
@@ -5517,15 +5517,19 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         dispatchFlyMouseButtonUp(false);
     }
 
+    void setFullscreenStartup(boolean enabled) {
+        getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
+                .putBoolean(FullscreenPolicy.PREFERENCE, enabled).apply();
+        runOnUiThread(() -> {
+            applySystemUiVisibility();
+            ManagementActivity.refreshSystemUi();
+        });
+    }
+
     private String handleWebSettings(JSONObject request) throws Exception {
         if("domain".equals(request.optString("webPreferenceScope")))return handleWebDomainSettings(request);
         if (request.has("fullscreenStartup")) {
-            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
-                    .putBoolean(FullscreenPolicy.PREFERENCE, request.getBoolean("fullscreenStartup")).apply();
-            runOnUiThread(() -> {
-                applySystemUiVisibility();
-                ManagementActivity.refreshSystemUi();
-            });
+            setFullscreenStartup(request.getBoolean("fullscreenStartup"));
         }
         if (request.has("githubProxyBaseUrl")) {
             GithubProxy.setBaseUrl(request.optString("githubProxyBaseUrl", ""));
@@ -13614,7 +13618,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         favoriteActionFocused = false;
         channelListPanel.setVisibility(View.GONE);
         if (refreshOverlay) applyClockLocation();
-        root.requestFocus();
+        requestPlaybackFocus();
+    }
+
+    private void requestPlaybackFocus() {
+        if (jarChannelRuntime == null || !jarChannelRuntime.hasNativeFocus()) root.requestFocus();
     }
 
     private void scheduleChannelListDismiss() {

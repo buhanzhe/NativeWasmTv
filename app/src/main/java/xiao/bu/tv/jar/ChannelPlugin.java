@@ -22,6 +22,11 @@ public interface ChannelPlugin {
         // The value is the host's okhttp3.OkHttpClient; keep baseline API-1 builds transport-free.
         Object httpClient();
     }
+    /** Optional access to the host's fullscreen preference. */
+    interface FullscreenHost extends NativeHost {
+        boolean isFullscreenEnabled();
+        void setFullscreenEnabled(boolean enabled);
+    }
     /** Optional native navigation and foreground lifecycle, independent of Activities. */
     interface NativePage {
         boolean onBack();

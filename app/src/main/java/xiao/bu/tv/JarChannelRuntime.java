@@ -78,8 +78,13 @@ final class JarChannelRuntime {
                     ChannelPlugin incoming=null;
                     try {
                         incoming=type.getConstructor().newInstance();
-                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.NativeHost(){
+                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.FullscreenHost(){
                             public okhttp3.OkHttpClient httpClient(){return NetworkClient.sharedClient();}
+                            public boolean isFullscreenEnabled(){return FullscreenPolicy.isEnabled(context);}
+                            public void setFullscreenEnabled(boolean enabled){
+                                if(token==generation&&callbackCurrent()&&context instanceof MainActivity)
+                                    ((MainActivity)context).setFullscreenStartup(enabled);
+                            }
                             public void chooseDirectory(android.webkit.ValueCallback<android.net.Uri[]> selected){
                                 if(token!=generation||!callbackCurrent()){selected.onReceiveValue(null);return;}
                                 if(context instanceof android.app.Activity)filePicker.openDirectory((android.app.Activity)context,selected);
@@ -199,6 +204,7 @@ final class JarChannelRuntime {
         } finally { event.recycle(); }
     }
     boolean dispatchKey(android.view.KeyEvent event){if(!visible())return false;if(browser!=null){browser.requestFocus();return browser.dispatchKeyEvent(event);}return view.dispatchKeyEvent(event);}
+    boolean hasNativeFocus(){return visible()&&browser==null&&view.hasFocus();}
     void setActive(boolean active){
         if(plugin instanceof ChannelPlugin.NativePage){
             try{((ChannelPlugin.NativePage)plugin).setActive(active);}
