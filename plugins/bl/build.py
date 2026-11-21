@@ -47,19 +47,21 @@ subprocess.run([javac,'-encoding','UTF-8','-g:none',*language,'-sourcepath',str(
 ijk=out/'ijk-api.jar'
 with zipfile.ZipFile(aar) as z:ijk.write_bytes(z.read('classes.jar'))
 exo=out/'exoplayer.jar'
-with zipfile.ZipFile(dependency('exoplayer-core.aar')) as z:exo.write_bytes(z.read('classes.jar'))
+with zipfile.ZipFile(dependency('exoplayer-core-2.10.8.aar')) as z:exo.write_bytes(z.read('classes.jar'))
+flac=dependency('jflac-codec-1.5.2.jar')
 api=root/'app/src/main/java/xiao/bu/tv/jar/ChannelPlugin.java'
 json_api=dependency('json.jar');xml_api=dependency('xmlpull.jar')
-classpath=os.pathsep.join(map(str,[android,json_api,xml_api,okhttp,okio,classes,ijk,exo]))
+classpath=os.pathsep.join(map(str,[android,json_api,xml_api,okhttp,okio,classes,ijk,exo,flac]))
 sources=[str(api),*map(str,(here/'src').rglob('*.java'))]
 subprocess.run([javac,'-encoding','UTF-8','-g:source,lines',*language,'-cp',classpath,'-d',str(classes),*sources],check=True)
 program=out/'program.jar';contract=out/'contract.jar'
 with zipfile.ZipFile(program,'w') as pzip,zipfile.ZipFile(contract,'w') as azip:
     for f in sorted(classes.rglob('*.class')):
         name=f.relative_to(classes).as_posix();(azip if name.startswith('xiao/bu/tv/jar/') else pzip).write(f,name)
-    with zipfile.ZipFile(exo) as z:
-        for name in sorted(z.namelist()):
-            if name.endswith('.class'):pzip.writestr(name,z.read(name))
+    for library in (exo,flac):
+        with zipfile.ZipFile(library) as z:
+            for name in sorted(z.namelist()):
+                if name.endswith('.class'):pzip.writestr(name,z.read(name))
 dex=out/'dex';dex.mkdir(exist_ok=True)
 subprocess.run([str(java/('java'+exe)),'-cp',str(sdk/'build-tools/30.0.3/lib/d8.jar'),'com.android.tools.r8.R8','--min-api','14','--pg-conf',str(here/'shrink.pro'),'--lib',str(sdk/'platforms/android-30/android.jar'),'--lib',str(contract),'--lib',str(okhttp),'--lib',str(okio),'--lib',str(ijk),'--output',str(dex),str(program)],check=True)
 dist=here/'dist';dist.mkdir(exist_ok=True);jar=dist/'bl.jar'
@@ -67,16 +69,11 @@ with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as z:
     def entry(name,data):
         info=zipfile.ZipInfo(name,(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16;z.writestr(info,data)
     entry('classes.dex',(dex/'classes.dex').read_bytes())
-    entry('channel-plugin.json',json.dumps(dict(api=1,version=14,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
+    entry('channel-plugin.json',json.dumps(dict(api=1,version=16,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
     for f in sorted((here/'assets').rglob('*')):
         if f.is_file() and f.suffix!='.webp':entry('assets/'+f.relative_to(here/'assets').as_posix(),f.read_bytes())
-    # Keep the tested release's license bytes independent of Git checkout line endings.
-    license_endings={'NOTICE':b'\r\n','LICENSE-newBV':b'\r\n','LICENSE-ZXing':b'\n','LICENSE-ExoPlayer':b'\n'}
-    for name,newline in license_endings.items():
-        source=here/name
-        if source.exists():
-            text=source.read_bytes().replace(b'\r\n',b'\n')
-            entry(name,text.replace(b'\n',newline))
+    for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer','LICENSE-jFLAC']:
+        if (here/name).exists():entry(name,(here/name).read_bytes())
 sha=hashlib.sha256(jar.read_bytes()).hexdigest();(dist/'bl.sha256').write_text(sha+'\n',encoding='ascii')
 (dist/'example.m3u').write_text('#EXTM3U\n#EXTINF:-1 group-title="视频",BL 哔哩哔哩\nhttps://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/bl.jar?sha256='+sha+'\n',encoding='utf-8')
 print(f'Built {jar}: {jar.stat().st_size} bytes, API 14, SHA256 {sha}')

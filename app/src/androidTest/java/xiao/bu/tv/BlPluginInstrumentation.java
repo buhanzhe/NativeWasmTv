@@ -67,7 +67,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
         do{onMain(new Runnable(){public void run(){target[0]=findButton(root,title);}});if(target[0]!=null&&target[0].isShown())break;SystemClock.sleep(100);}while(SystemClock.elapsedRealtime()<end);
         check(target[0]!=null&&target[0].isShown(),"Button missing: "+title);
         onMain(new Runnable(){public void run(){target[0].requestFocusFromTouch();}});SystemClock.sleep(350);int[] point=new int[2];onMain(new Runnable(){public void run(){target[0].getLocationOnScreen(point);}});float x=point[0]+target[0].getWidth()/2f,y=point[1]+target[0].getHeight()/2f;
-        long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+60,MotionEvent.ACTION_UP,x,y,0);if(Build.VERSION.SDK_INT<=15){
+        long now=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+60,MotionEvent.ACTION_UP,x,y,0);if(Build.VERSION.SDK_INT<=19){
             down.setLocation(target[0].getWidth()/2f,target[0].getHeight()/2f);
             up.setLocation(target[0].getWidth()/2f,target[0].getHeight()/2f);
             onMain(new Runnable(){public void run(){target[0].dispatchTouchEvent(down);}});
@@ -288,6 +288,54 @@ public final class BlPluginInstrumentation extends Instrumentation {
 
     private JSONObject selectedStream()throws Exception{return (JSONObject)field(plugin,"selectedStream");}
 
+    private int waitAudioOutput(Object player,Object engine,int trackId)throws Exception{
+        Object exo=field(engine,"player");
+        long deadline=SystemClock.elapsedRealtime()+7000;
+        int buffers=0;
+        while(SystemClock.elapsedRealtime()<deadline&&field(player,"engine")==engine){
+            Object counters=field(exo,"audioDecoderCounters");
+            if(counters!=null)buffers=((Number)field(counters,"renderedOutputBufferCount")).intValue();
+            if(buffers>=8&&selectedStream().optInt("bl_audio_id")==trackId)return buffers;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("No sustained audio output from track "+trackId+", selected="+
+                selectedStream().optInt("bl_audio_id")+", buffers="+buffers);
+    }
+
+    private void hiresPlayback(Object player,Object original,Bundle result)throws Exception{
+        JSONObject initial=selectedStream();
+        int aac=initial.optInt("bl_audio_id");
+        check(aac>0&&aac!=30251,"Hi-Res test must start on AAC");
+        long before=playbackPosition(player);
+        Object flac=selectPlaybackOption(player,"音轨","Hi-Res");
+        int first=waitAudioOutput(player,flac,30251);
+        check(playbackPosition(player)+800>=before,"Hi-Res switch restarted the video");
+        Object ordinary=selectPlaybackOption(player,"音轨",initial.getString("bl_audio_label"));
+        waitAudioOutput(player,ordinary,aac);
+        flac=selectPlaybackOption(player,"音轨","Hi-Res");
+        int second=waitAudioOutput(player,flac,30251);
+        check(flac!=original,"Hi-Res switch did not change the audio engine");
+        result.putString("hiRes","AAC → FLAC → AAC → FLAC, audio output buffers="+first+" and "+second);
+    }
+
+    private void playbackCache(Object engine,Bundle result)throws Exception{
+        check(engine.getClass().getSimpleName().equals("BlDashPlayer"),"The cache test needs a DASH stream");
+        Object allocator=field(engine,"allocator");
+        int limit=((Number)field(engine,"BUFFER_TARGET_BYTES")).intValue();
+        key(KeyEvent.KEYCODE_MEDIA_PAUSE);
+        int peak=0;
+        long deadline=SystemClock.elapsedRealtime()+6000;
+        while(SystemClock.elapsedRealtime()<deadline){
+            peak=Math.max(peak,((Number)invoke(allocator,"getTotalBytesAllocated")).intValue());
+            SystemClock.sleep(50);
+        }
+        check(peak>=limit-512*1024&&peak<=limit+1024*1024,"DASH cache sample peak was "+peak);
+        closePlayback();waitRoute("detail");
+        check(((Number)invoke(allocator,"getTotalBytesAllocated")).intValue()==0,"DASH buffer retained after exit");
+        result.putInt("dashCachePeakBytes",peak);
+        result.putInt("dashCacheAfterCloseBytes",0);
+    }
+
     private long playbackPosition(Object player)throws Exception{
         long[] position={0};
         onMain(()->{
@@ -295,6 +343,131 @@ public final class BlPluginInstrumentation extends Instrumentation {
             catch(Exception error){throw new RuntimeException(error);}
         });
         return position[0];
+    }
+
+    private int renderedDashFrames(Object engine)throws Exception{
+        if(!engine.getClass().getSimpleName().equals("BlDashPlayer"))return 0;
+        Object counters=field(field(engine,"player"),"videoDecoderCounters");
+        return ((Number)field(counters,"renderedOutputBufferCount")).intValue();
+    }
+
+    private long waitAfterSeek(Object player,Object engine,long min,long max,int previousFrames)throws Exception{
+        long start=SystemClock.elapsedRealtime(),first=-1,at=0;
+        while(SystemClock.elapsedRealtime()-start<7000&&field(player,"engine")==engine){
+            at=playbackPosition(player);
+            if(at>=min&&at<=max){
+                if(first<0)first=at;
+                if(at-first>=1000&&(previousFrames==0||renderedDashFrames(engine)>previousFrames))
+                    return SystemClock.elapsedRealtime()-start;
+            }else first=-1;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("Playback stalled after seek: position="+at+", state="+field(player,"state")+
+                ", target="+min+".."+max+", rendered frames before seek="+previousFrames);
+    }
+
+    private void seekPlayback(Object player,Object engine,Bundle result)throws Exception{
+        controls();
+        View bar=(View)field(player,"seek");
+        long duration=((Number)invoke(player,"duration")).longValue();
+        check(duration>=30000&&bar.isShown(),"Seek fixture needs a visible progress bar and at least 30 s of video");
+        int[] origin=new int[2];bar.getLocationOnScreen(origin);
+        float y=origin[1]+bar.getHeight()/2f,start=origin[0]+bar.getWidth()*0.1f,end=origin[0]+bar.getWidth()*0.77f;
+        int frames=renderedDashFrames(engine);
+        long down=SystemClock.uptimeMillis();
+        for(int action:new int[]{MotionEvent.ACTION_DOWN,MotionEvent.ACTION_MOVE,MotionEvent.ACTION_UP}){
+            MotionEvent event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,action==MotionEvent.ACTION_DOWN?start:end,y,0);
+            if(Build.VERSION.SDK_INT<=19){
+                event.offsetLocation(-origin[0],-origin[1]);
+                onMain(()->bar.dispatchTouchEvent(event));
+            }else sendPointerSync(event);
+            event.recycle();
+        }
+        long forward=waitAfterSeek(player,engine,duration*72/100,duration,frames);
+        long at=playbackPosition(player);
+        frames=renderedDashFrames(engine);
+        key(KeyEvent.KEYCODE_MEDIA_REWIND);
+        long backward=waitAfterSeek(player,engine,Math.max(0,at-16000),at-5000,frames);
+        result.putLong("dragResumeMs",forward);
+        result.putLong("rewindResumeMs",backward);
+        result.putInt("renderedFramesAfterRewind",renderedDashFrames(engine)-frames);
+    }
+
+    private void vodPlayback(Object player,Object engine,Bundle result)throws Exception{
+        check(engine.getClass().getSimpleName().equals("BlDashPlayer")&&Boolean.TRUE.equals(field(plugin,"refreshedVodStream")),
+                "Expired DASH URLs did not recover through a fresh playback request");
+        View surface=(View)field(player,"surface");
+        check(surface.getHeight()>0&&Math.abs(surface.getWidth()/(double)surface.getHeight()-9d/16)<0.01,
+                "Portrait surface ignored the sample aspect ratio: "+surface.getWidth()+"x"+surface.getHeight());
+        SharedPreferences prefs=getTargetContext().getSharedPreferences("ntv-bl-instrumentation",0);
+        String prefix="position:"+((JSONObject)field(plugin,"video")).getString("bvid")+":";
+        long firstCid=((Number)field(plugin,"cid")).longValue();
+        long end=SystemClock.elapsedRealtime()+8000;
+        while(prefs.getLong(prefix+firstCid,0)<4000&&SystemClock.elapsedRealtime()<end)SystemClock.sleep(100);
+        long firstSaved=prefs.getLong(prefix+firstCid,0);
+        check(firstSaved>=4000,"Progress was not saved while the first part was playing");
+
+        key(KeyEvent.KEYCODE_MEDIA_NEXT);
+        Object next=waitPlaying(engine);
+        long nextCid=((Number)field(plugin,"cid")).longValue();
+        check(nextCid!=firstCid,"Next part did not switch content");
+        key(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD);
+        waitAfterSeek(player,next,8000,19000,renderedDashFrames(next));
+        closePlayback();waitRoute("detail");
+        long saved=prefs.getLong(prefix+nextCid,0);
+        check(saved>=8000&&prefs.getLong(prefix+firstCid,0)>=firstSaved,"Parts did not keep separate positions");
+
+        click("播放");waitRoute("player");
+        Object resumedEngine=waitPlaying(null),resumedPlayer=field(plugin,"player");
+        check(((Number)field(plugin,"cid")).longValue()==nextCid,"Playback did not resume the last watched part");
+        waitAfterSeek(resumedPlayer,resumedEngine,saved-1000,saved+7000,0);
+        result.putLong("firstPartSavedMs",firstSaved);
+        result.putLong("secondPartResumedMs",saved);
+        result.putString("portraitSurface",surface.getWidth()+"x"+surface.getHeight());
+        result.putString("vodRecovery","refreshed expired DASH URLs");
+    }
+
+    private void finishVideoPart(Object player){
+        onMain(()->{
+            try{
+                long duration=((Number)invoke(player,"duration")).longValue();
+                invoke(player,"seekTo",duration-500);
+            }catch(Exception error){throw new RuntimeException(error);}
+        });
+    }
+
+    private void playbackOrder(Object player,Object engine,Bundle result)throws Exception{
+        controls();
+        check(findButton(root,"底部进度条")==null,"Always-visible progress bar remains");
+        ImageView button=(ImageView)findButton(root,"播放顺序");
+        Bitmap sequence=((android.graphics.drawable.BitmapDrawable)button.getDrawable()).getBitmap();
+        click("播放顺序");option("单集循环");
+        Bitmap repeat=((android.graphics.drawable.BitmapDrawable)button.getDrawable()).getBitmap();
+        check(!sequence.sameAs(repeat),"Repeat one shows the sequence icon");
+        long cid=((Number)field(plugin,"cid")).longValue();
+        finishVideoPart(player);
+        Object looped=waitPlaying(engine);
+        check(((Number)field(plugin,"cid")).longValue()==cid&&playbackPosition(player)<5000,
+                "Repeat one did not restart the same part");
+
+        controls();click("播放顺序");option("顺序播放");
+        check(sequence.sameAs(((android.graphics.drawable.BitmapDrawable)button.getDrawable()).getBitmap()),
+                "Returning to sequence mode did not restore its icon");
+        Object route=field(plugin,"route");
+        java.util.List<?> queue=(java.util.List<?>)field(route,"playbackQueue");
+        int index=((Number)field(route,"playbackIndex")).intValue();
+        check(index>=0&&queue.size()>index+1,"Playback queue missing from the originating list");
+        String expected=String.valueOf(field(queue.get(index+1),"id"));
+        finishVideoPart(player);
+        Object nextPart=waitPlaying(looped);
+        check(((Number)field(plugin,"cid")).longValue()!=cid&&field(plugin,"player")==player,
+                "Sequential playback skipped the remaining part");
+        finishVideoPart(player);
+        Object nextVideo=waitPlaying(nextPart),nextPlayer=field(plugin,"player");
+        check(nextPlayer!=player&&expected.equals(((JSONObject)field(plugin,"video")).optString("bvid")),
+                "Sequential playback did not open the next video in the original list");
+        waitAfterSeek(nextPlayer,nextVideo,0,8000,0);
+        result.putString("playbackOrder","repeat one, remaining part, next video "+expected);
     }
 
     private void focusedPlayback(String bvid,Bundle result)throws Exception{
@@ -311,6 +484,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
         check(advanced>=seconds*900L&&"playing".equals(field(player,"state")),"Public video playback stalled during observation");
         Object playingEngine=field(player,"engine");
         check(playingEngine!=null&&engine.getClass()==playingEngine.getClass(),"Playback fell back to another engine during observation");
+        if("true".equals(args.getString("seek")))seekPlayback(player,playingEngine,result);
         screenshot("bl-focused-player.png");
         JSONObject stream=selectedStream();
         result.putString("stream","PASS: "+bvid+" advanced "+advanced+" ms with "+engine.getClass().getSimpleName()+
@@ -380,7 +554,19 @@ public final class BlPluginInstrumentation extends Instrumentation {
                 }
                 check(actual==30216&&recovered,"Missing decoder fallback for "+names[i]);
             }
-            result.putString("audio"+ids[i],actual==ids[i]?"selected and prepared":"AAC decoder fallback");
+            if(ids[i]==30251)check(actual==ids[i],"Hi-Res FLAC unexpectedly fell back to AAC");
+            if(actual==ids[i]){
+                Object exo=field(engine,"player");
+                long deadline=SystemClock.elapsedRealtime()+4000;
+                int buffers=0;
+                while(buffers==0&&SystemClock.elapsedRealtime()<deadline&&field(player,"engine")==engine){
+                    Object counters=field(exo,"audioDecoderCounters");
+                    if(counters!=null)buffers=((Number)field(counters,"renderedOutputBufferCount")).intValue();
+                    SystemClock.sleep(100);
+                }
+                check(buffers>0&&selectedStream().optInt("bl_audio_id")==ids[i],"No audio output for "+names[i]);
+                result.putString("audio"+ids[i],"selected with audio output buffers="+buffers);
+            }else result.putString("audio"+ids[i],"AAC decoder fallback");
         }
         selectPlaybackOption(player,"音轨","AAC · 64 kbps");
         try{
@@ -505,7 +691,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
         click("推荐");waitItems();key(KeyEvent.KEYCODE_DPAD_DOWN);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");armFault("media");click("播放");waitRoute("player");long end=SystemClock.elapsedRealtime()+30000;
         while(SystemClock.elapsedRealtime()<end&&!"error".equals(field(field(plugin,"player"),"state")))SystemClock.sleep(100);
         check("error".equals(field(field(plugin,"player"),"state")),"Rejected CDN did not produce a terminal player error");key(KeyEvent.KEYCODE_MENU);option("错误详情");waitText("HTTP：403");waitText("what=");
-        check(!containsText(root,"fixture-secret-token"),"CDN token leaked into player diagnostics");screenshot("bl-media-error.png");key(KeyEvent.KEYCODE_BACK);key(KeyEvent.KEYCODE_BACK);closePlayback();
+        check(!containsText(root,"fixture-secret-token"),"CDN token leaked into player diagnostics");screenshot("bl-media-error.png");key(KeyEvent.KEYCODE_BACK);key(KeyEvent.KEYCODE_BACK);closePlayback();armFault("");
     }
     private void onMain(final Runnable task){final Throwable[] failure={null};runOnMainSync(new Runnable(){public void run(){try{task.run();}catch(Throwable error){failure[0]=error;}}});if(failure[0] instanceof Error)throw (Error)failure[0];if(failure[0]!=null)throw new RuntimeException(failure[0]);}
     private interface AuditCase{String run()throws Exception;}
@@ -580,7 +766,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
         for(final String[] setting:dmSettings)audit("设置 · "+setting[0],new AuditCase(){public String run()throws Exception{return danmakuSetting(setting[0],setting[1]);}});
         audit("弹幕开关",new AuditCase(){public String run()throws Exception{requirePlayer();controls();click("弹幕开关");Object dm=field(auditPlayer,"danmaku");check(!((Boolean)invoke(dm,"enabled")),"Danmaku not disabled");click("弹幕开关");check((Boolean)invoke(dm,"enabled"),"Danmaku not enabled");return "off/on";}});
         audit("弹幕关键词",new AuditCase(){public String run()throws Exception{requirePlayer();controls();key(KeyEvent.KEYCODE_MENU);selectRow("弹幕设置");selectRow("关键词屏蔽");onMain(new Runnable(){public void run(){try{EditText input=findEdit((View)field(plugin,"modal"));check(input!=null,"Keyword editor missing");input.setText("codex-audit-only-word");}catch(Exception e){throw new RuntimeException(e);}}});click("保存");check(getTargetContext().getSharedPreferences("ntv-bl",0).getString("dm_block","").equals("codex-audit-only-word"),"Keyword not saved");return "local keyword saved; original restored after audit";}});
-        audit("底部进度、调试信息与按钮偏好",new AuditCase(){public String run()throws Exception{settingsAudit("底部常驻进度条",null);settingsAudit("显示视频调试信息",null);dismissAuditPanels();controls();key(KeyEvent.KEYCODE_MENU);selectRow("控制栏与播放偏好");selectRow("显示快进快退按钮");dismissAuditPanels();check(findButton(root,"快进").getVisibility()==View.GONE,"Button visibility not applied");return "view preferences applied";}});
+        audit("调试信息与按钮偏好",new AuditCase(){public String run()throws Exception{settingsAudit("显示视频调试信息",null);dismissAuditPanels();controls();key(KeyEvent.KEYCODE_MENU);selectRow("控制栏与播放偏好");selectRow("显示快进快退按钮");dismissAuditPanels();check(findButton(root,"快进").getVisibility()==View.GONE,"Button visibility not applied");return "view preferences applied";}});
         for(final String order:new String[]{"倒序播放","单集循环","随机播放","播完停止","顺序播放"})audit("播放顺序 · "+order,new AuditCase(){public String run()throws Exception{requirePlayer();controls();click("播放顺序");selectRow(order);dismissAuditPanels();return "selected; completion behavior not simulated";}});
         audit("分 P 与连续切集",new AuditCase(){public String run()throws Exception{requirePlayer();JSONArray parts=list(auditVideo,"pages");if(parts.length()<2)throw new AuditSkip("Public sample has one part; prior fixture regression covers multi-part");Object old=field(auditPlayer,"engine");key(KeyEvent.KEYCODE_MEDIA_NEXT);playingAudit(old);old=field(auditPlayer,"engine");key(KeyEvent.KEYCODE_MEDIA_PREVIOUS);playingAudit(old);return "next/previous decoded";}});
         audit("三连确认流程（取消）",new AuditCase(){public String run()throws Exception{requirePlayer();controls();click("更多");selectRow("一键三连");check(containsText(root,"确认点赞、投币并收藏"),"Triple confirmation missing");dismissAuditPanels();return "cancelled without submitting";}});
@@ -618,13 +804,21 @@ public final class BlPluginInstrumentation extends Instrumentation {
             if(testVideo!=null){try{focusedPlayback(testVideo,result);}finally{publicPlaybackDiagnostics();}code=-1;return;}
             screenshot("bl-home.png");
             if("true".equals(args.getString("errors"))){errorScenarios();result.putString("stream","PASS: HTTP 503, malformed JSON, business -352, failing CDN 403, native error-details UI/copy/BACK, recovery and credential redaction");code=-1;return;}
-            if(!"true".equals(args.getString("real"))){verifyBrowseIcons();browseNavigation();result.putString("icons","BBLL rail/card resources; no rail heading; measured 16:9 cover");}
+            boolean seekTest="true".equals(args.getString("seek")),vodTest="true".equals(args.getString("vod")),orderTest="true".equals(args.getString("order")),hiresTest="true".equals(args.getString("hires")),cacheTest="true".equals(args.getString("cache"));
+            if(!"true".equals(args.getString("real"))&&!seekTest&&!vodTest&&!orderTest&&!hiresTest&&!cacheTest){verifyBrowseIcons();browseNavigation();result.putString("icons","BBLL rail/card resources; no rail heading; measured 16:9 cover");}
             result.putLong("firstCardsMs",SystemClock.elapsedRealtime()-start);result.putInt("sdk",Build.VERSION.SDK_INT);result.putString("mode","true".equals(args.getString("smoke"))?"smoke":"full");
             Bundle focusStatus=new Bundle();View initialFocus=root.findFocus();focusStatus.putString("stream","BL_FOCUS "+(initialFocus==null?"null":initialFocus.getClass().getName()+":"+initialFocus.getContentDescription())+"\n");sendStatus(0,focusStatus);
-            key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");click("播放");waitRoute("player");
+            key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");
+            if(vodTest)armFault("expired_vod");
+            click("播放");waitRoute("player");
             end=SystemClock.elapsedRealtime()+30000;Object player=null;while(SystemClock.elapsedRealtime()<end){player=field(plugin,"player");if(player!=null&&"playing".equals(field(player,"state")))break;SystemClock.sleep(100);}check(player!=null&&"playing".equals(field(player,"state")),"Player did not prepare");
             final Object runningPlayer=player;Method position=player.getClass().getDeclaredMethod("position");position.setAccessible(true);SystemClock.sleep(1500);long p1=((Number)position.invoke(player)).longValue();SystemClock.sleep(800);long p2=((Number)position.invoke(player)).longValue();check(p2>p1,"Playback clock did not advance");
             Object engine=field(player,"engine");result.putString("engine",engine.getClass().getName());result.putLong("playbackMs",p2);
+            if(seekTest){seekPlayback(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(vodTest){vodPlayback(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(orderTest){playbackOrder(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(hiresTest){try{hiresPlayback(player,engine,result);}finally{publicPlaybackDiagnostics();}result.putString("stream","PASS: "+result);code=-1;return;}
+            if(cacheTest){playbackCache(engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
             if("true".equals(args.getString("interactions"))){interactionScenarios(player,result);result.putString("stream","PASS: touch/remote player interaction, existing danmaku continuity, transient playback recovery and main-thread responsiveness; "+result.toString());code=-1;return;}
             int soak=0;try{soak=Integer.parseInt(args.getString("soakSeconds","0"));}catch(NumberFormatException ignored){}long soakEnd=SystemClock.elapsedRealtime()+Math.min(600,Math.max(0,soak))*1000L;
             while(SystemClock.elapsedRealtime()<soakEnd){SystemClock.sleep(2000);check("playing".equals(field(player,"state")),"Playback stopped during sustained test: "+field(player,"state"));long at=((Number)position.invoke(player)).longValue();check(at>p2,"Playback clock stalled during sustained test");p2=at;Bundle sample=new Bundle();sample.putString("stream","BL_SOAK positionMs="+at+" javaUsed="+(Runtime.getRuntime().totalMemory()-Runtime.getRuntime().freeMemory())+" nativeUsed="+Debug.getNativeHeapAllocatedSize()+"\n");sendStatus(0,sample);}

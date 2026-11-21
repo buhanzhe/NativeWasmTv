@@ -8,6 +8,11 @@ p.add_argument('--system',action='store_true',help='Exercise the API-14 platform
 p.add_argument('--dash',action='store_true',help='Exercise separate DASH video/audio merge on API 16+')
 p.add_argument('--premium-dash',action='store_true',help='Exercise 8K, Dolby and Hi-Res selection against a premium DASH fixture')
 p.add_argument('--dash-resume',action='store_true',help='Check that DASH recovers across byte ranges and audio representations')
+p.add_argument('--seek',action='store_true',help='Check that playback advances after dragging and rewinding')
+p.add_argument('--vod',action='store_true',help='Check video URL refresh, portrait layout and saved progress using a portrait DASH fixture')
+p.add_argument('--order',action='store_true',help='Check the repeat-one icon, looping, and sequential playback of the next video')
+p.add_argument('--hires',action='store_true',help='Exercise repeated Hi-Res track switches and verify decoded audio output')
+p.add_argument('--cache',action='store_true',help='Measure the peak DASH sample cache with a high-bitrate local fixture')
 p.add_argument('--video',help='Run a focused playback check on a public BV identifier with --real')
 p.add_argument('--smoke',action='store_true',help='Initial playback, navigation and live danmaku; skip decoder-switch stress tests')
 p.add_argument('--jar-url',help='Optional published HTTPS JAR instead of the local HTTPS fixture')
@@ -27,6 +32,7 @@ a=p.parse_args();root=pathlib.Path(__file__).resolve().parents[3];adb=[a.adb,'-s
 if a.account_audit and (not a.real or not a.jar_url or a.errors):p.error('--account-audit requires --real --jar-url and cannot inject faults')
 if a.premium_dash and (not a.dash or a.real or a.system):p.error('--premium-dash requires local fixtures and --dash')
 if a.dash_resume and (not a.dash or a.real or a.system):p.error('--dash-resume requires local fixtures and --dash')
+if a.vod and (not a.dash or a.real or a.system):p.error('--vod requires a local portrait fixture and --dash')
 if a.video and (not a.real or a.account_audit or not re.fullmatch(r'BV[A-Za-z0-9]{10}',a.video)):
     p.error('--video requires --real and a BV identifier')
 def run(*args,**kw):return subprocess.run(adb+list(args),check=True,**kw)
@@ -54,6 +60,11 @@ if a.system:command+=' -e system true'
 if a.dash:command+=' -e dash true'
 if a.premium_dash:command+=' -e premiumDash true'
 if a.dash_resume:command+=' -e dashResume true'
+if a.seek:command+=' -e seek true'
+if a.vod:command+=' -e vod true'
+if a.order:command+=' -e order true'
+if a.hires:command+=' -e hires true'
+if a.cache:command+=' -e cache true'
 if a.video:command+=' -e video '+shlex.quote(a.video)
 if a.smoke:command+=' -e smoke true'
 if a.errors:command+=' -e errors true'
@@ -102,6 +113,7 @@ if a.account_audit and not a.account_probe:subprocess.run(adb+['pull','/sdcard/A
 images=(['bl-account-player.png','bl-account-settings.png'] if a.account_audit else ['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text or a.account_audit else ['bl-error.png']
 if 'browseUi=' in text:images+=['bl-search-keyboard.png','bl-browse-settings.png','bl-theme-pink.png','bl-theme-classic.png','bl-mine.png']
 if a.video:images=['bl-focused-player.png'] if 'PASS:' in text else ['bl-error.png']
+if (a.seek and not a.video or a.vod or a.order or a.hires or a.cache) and 'PASS:' in text:images=[]
 if 'playerUi=' in text:images+=['bl-player-overlay.png','bl-player-related.png']
 if a.account_probe:images=[]
 for name in images:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/'+name,str(out/name)])

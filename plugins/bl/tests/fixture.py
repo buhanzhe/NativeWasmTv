@@ -2,6 +2,8 @@ import http.server,threading,ssl,json,urllib.parse,pathlib,socket,re,time,argpar
 args=argparse.ArgumentParser();args.add_argument('--cert',required=True,type=pathlib.Path);args.add_argument('--key',required=True,type=pathlib.Path);args.add_argument('--video',required=True,type=pathlib.Path);args.add_argument('--host',help='Advertised host; 127.0.0.1 works with adb reverse');args.add_argument('--dash-fallbacks',action='store_true',help='Reject both DASH primary streams to verify supplied video/audio backups');args.add_argument("--dash-reject-all",action="store_true",help="Reject all DASH mirrors; progressive media remains available")
 args.add_argument('--premium-dash',action='store_true',help='Advertise a test HEVC clip as 8K and expose Dolby and Hi-Res tracks')
 args.add_argument('--dash-resume',action='store_true',help='Cut the video response, reject one range mirror and the default AAC track')
+args.add_argument('--seek-stall',action='store_true',help='Stall the initial DASH video read while allowing later seek ranges')
+args.add_argument('--check-media-cache',action='store_true',help='Require playback requests to opt out of HTTP cache storage')
 options=args.parse_args()
 ROOT=pathlib.Path(__file__).resolve().parents[3]
 work=ROOT/'.codex-tmp/bl';work.mkdir(parents=True,exist_ok=True)
@@ -41,7 +43,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   if self.command!='HEAD':self.wfile.write(data)
  def do_GET(self):
   try:self.handle_get()
-  except (BrokenPipeError,ConnectionResetError):pass
+  except ConnectionError:pass
  def handle_get(self):
   p=urllib.parse.urlsplit(self.path);q=urllib.parse.parse_qs(p.query);page=int(q.get('pn',q.get('page',q.get('fresh_idx',['1'])))[0]);offset=(page-1)*24
   with (work/'requests.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps({'time':time.time(),'method':self.command,'path':self.path},ensure_ascii=False)+'\n')
@@ -55,7 +57,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    if mode=='json':return self.response(200,b'<html>unavailable</html>','text/html')
    if mode=='business':return self.response(200,{'code':-352,'message':'站点要求验证 token=fixture-secret-token','data':{}})
   if p.path in ['/x/player/playurl','/x/player/wbi/playurl']:
-   with fault_lock:media_fault=faults['mode']=='media';faults['mode']='' if media_fault else faults['mode']
+   with fault_lock:media_fault=faults['mode']=='media'
    if media_fault:return self.response(200,{'code':0,'data':{'quality':32,'durl':[{'url':base+'/video.mp4?fail=1&token=fixture-secret-token','length':40000}]}})
   if p.path=='/sub':
    key=self.headers.get('Sec-WebSocket-Key','');accept=base64.b64encode(hashlib.sha1((key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
@@ -82,7 +84,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
    self.close_connection=True;return
   if p.path=='/bl.jar':return self.response(200,(ROOT/'plugins/bl/dist/bl.jar').read_bytes(),'application/java-archive')
   if p.path=='/cover.png':return self.response(200,(ROOT/'plugins/bl/assets/background.png').read_bytes(),'image/png')
-  if p.path in ['/video.mp4','/video-only.mp4','/audio-only.m4a','/hevc.mp4','/hi-res.m4a','/dolby.m4a']:
+  if p.path in ['/video.mp4','/video-only.mp4','/audio-only.m4a','/hevc.mp4','/hi-res.m4a','/dolby.m4a','/ac3.m4a']:
+   if options.check_media_cache and 'no-store' not in self.headers.get('Cache-Control',''):
+    return self.response(400,b'Media must request no-store','text/plain')
    if q.get('fail',['0'])[0]=='1':return self.response(403,b'fixture CDN failure','text/plain')
    file=options.video if p.path=='/video.mp4' else options.video.with_name(p.path[1:]);size=file.stat().st_size;a=0;b=size-1;match=re.match(r'bytes=(\d+)-(\d*)',self.headers.get('Range',''))
    if match:a=int(match[1]);b=min(size-1,int(match[2])) if match[2] else size-1
@@ -98,6 +102,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
    if self.command!='HEAD':
     with file.open('rb') as f:
      f.seek(a);left=min(131072,b-a+1) if q.get('cut') else b-a+1
+     if options.seek_stall and p.path=='/video-only.mp4' and a==0 and left>524288:
+      prefix=f.read(524288);self.wfile.write(prefix);left-=len(prefix)
+      print('DASH initial video read stalled',flush=True)
+      time.sleep(16)
      while left:
       data=f.read(min(left,32768))
       if not data:break
@@ -110,7 +118,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
    data={'items':[dict(video(0),title='分区视频 '+q.get('from_region',[''])[0])]}
   elif p.path.endswith('/feed/rcmd'):data={'item':[video(i) for i in range(offset,min(offset+24,72))]}
   elif p.path=='/x/web-interface/popular':data={'list':[video(i) for i in range(offset,min(offset+24,72))]}
-  elif p.path=='/x/web-interface/view':data=video(0)
+  elif p.path=='/x/web-interface/view':
+   bvid=q.get('bvid',[''])[0]
+   data=video(int(bvid[2:])-1000000000 if re.fullmatch(r'BV1000000[0-9]{3}',bvid) else 0)
   elif p.path.endswith('/search/type'):
    kind=q.get('search_type',['video'])[0]
    if kind=='live_room':data={'result':[dict(roomid=42,title='直播搜索结果',uname='fixture',cover=base+'/cover.png')]}
@@ -142,12 +152,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
      dash['audio'][0]['baseUrl']='file:///invalid-audio'
      dash['audio'][0].pop('base_url')
      dash['audio'].insert(0,dash_track(30280,'audio-only.m4a','mp4a.40.2',192000,reject=True))
-    with fault_lock:mode=faults['mode']
+    with fault_lock:
+     mode=faults['mode']
+     if mode=='expired_vod':faults['mode']=''
+    if mode=='expired_vod':
+     for track in dash['video']:
+      track['baseUrl']+='&fail=1'
+      track['backupUrl']=[url+'&fail=1' for url in track['backupUrl']]
     if options.premium_dash and fnval=='4048' and quality==127 and q.get('fourk')==['1']:
      data['accept_quality'].append(127)
      if mode!='no_premium':
       dash['video'].append(dict(dash_track(127,'hevc.mp4','hvc1.1.6.L120.90',2000000,reject=mode=='reject_8k'),codecid=12))
-      dash['dolby']={'type':2,'audio':[dash_track(i,'dolby.m4a','ec-3',384000,snake_case=True) for i in (30250,30255)]}
+      ac3=options.video.with_name('ac3.m4a').is_file()
+      dash['dolby']={'type':2,'audio':[dash_track(30250,'dolby.m4a','ec-3',384000,snake_case=True),
+           dash_track(30255,'ac3.m4a' if ac3 else 'dolby.m4a','ac-3' if ac3 else 'ec-3',384000,snake_case=True)]}
       dash['flac']={'display':True,'audio':dash_track(30251,'hi-res.m4a','fLaC',2000000,snake_case=True)}
     if p.path=='/pgc/player/web/v2/playurl':
      if mode=='pgc_v1':return self.response(200,dict(code=-404,message='fixture v2 unavailable'))
@@ -172,7 +190,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.response(200,dict(code=code,message='fixture',data=data))
  def do_POST(self):
   length=int(self.headers.get('Content-Length','0'));self.rfile.read(length);self.response(200,dict(code=0,data={}))
-http_server=http.server.ThreadingHTTPServer(('0.0.0.0',39626),Handler)
-https_server=http.server.ThreadingHTTPServer(('0.0.0.0',39627),Handler)
-tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);tls.minimum_version=ssl.TLSVersion.TLSv1;tls.set_ciphers('ALL:@SECLEVEL=0');tls.load_cert_chain(options.cert,options.key);https_server.socket=tls.wrap_socket(https_server.socket,server_side=True)
-threading.Thread(target=http_server.serve_forever,daemon=True).start();print(json.dumps({'host':host,'api':base,'jar':f'https://{host}:39627/bl.jar'}),flush=True);https_server.serve_forever()
+def serve(handler=Handler):
+ http_server=http.server.ThreadingHTTPServer(('0.0.0.0',39626),handler)
+ https_server=http.server.ThreadingHTTPServer(('0.0.0.0',39627),handler)
+ tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);tls.minimum_version=ssl.TLSVersion.TLSv1;tls.set_ciphers('ALL:@SECLEVEL=0');tls.load_cert_chain(options.cert,options.key);https_server.socket=tls.wrap_socket(https_server.socket,server_side=True)
+ threading.Thread(target=http_server.serve_forever,daemon=True).start();print(json.dumps({'host':host,'api':base,'jar':f'https://{host}:39627/bl.jar'}),flush=True);https_server.serve_forever()
+
+if __name__=='__main__':serve()

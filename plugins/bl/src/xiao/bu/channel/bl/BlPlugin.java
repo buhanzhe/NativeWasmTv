@@ -22,6 +22,8 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     private interface Result{void show(Object value)throws Exception;}
     private static final class Route{
         String kind,title,arg;long playbackCid,playbackEpisode;int playbackPart;int page=1,selection,scroll;boolean more=true,playFromDetail;JSONArray cached=new JSONArray();JSONObject data;
+        List<BlItem> playbackQueue=Collections.emptyList();
+        int playbackIndex=-1;
         Route(String kind,String title,String arg){this.kind=kind;this.title=title;this.arg=arg;}
     }
     private static final class Option{
@@ -40,7 +42,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         Playback(JSONObject data,JSONArray streams){this.data=data;this.streams=streams;}
     }
     private Panel panel,openingPanel;
-    private BlLiveDanmaku liveDanmaku;private boolean liveLegacy,progressiveFallback;
+    private BlLiveDanmaku liveDanmaku;private boolean liveLegacy,progressiveFallback,refreshedVodStream;
     private final Set<String> rejectedDashTracks=new HashSet<>();
     private Context context;private Host host;private BlUi ui;private BlApi api;private BlImages images;private BlMediaProxy proxy;
     private Root root;private LinearLayout sidebar,headerActions;private FrameLayout content,modal;private GridView grid;private TextView status;
@@ -67,6 +69,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     private final ThreadPoolExecutor jobs=new ThreadPoolExecutor(2,2,20,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(16),new ThreadPoolExecutor.DiscardOldestPolicy());
     private int generation,modalGeneration;private boolean closed,loading,statusError,active=true;private String selectedTab="home";
     private BlPlayer player;private BlDanmakuFeed dmFeed;private long dmCid;private final List<BlPlayer> retired=new ArrayList<>();private JSONObject video,playData,selectedStream;private long cid,episode;private int playbackGeneration,playingGeneration;private int partIndex;private View modalFocus;
+    private long playingCid,savedProgressCid,savedProgress=-1,nextProgressSave;
     /** Build the entire native channel inside one root View using the host transport. */
     public View create(Context context,ClassLoader resources,JSONObject config,Host host)throws Exception{
         if(!(host instanceof ChannelPlugin.NativeHost))throw new java.io.IOException("BL 需要更新支持原生插件的宿主 APK");
@@ -345,6 +348,9 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         }});
     }
     private void openItem(BlItem item){
+        openItem(item,items);
+    }
+    private void openItem(BlItem item,List<BlItem> queue){
         if(item.kind.equals("folder"))navigate(new Route("favoriteItems",item.title,item.id),true);
         else if(item.kind.equals("user"))navigate(new Route("uploads",item.title,item.id),true);
         else if(item.kind.equals("season"))navigate(new Route("seasonDetail",item.title,item.id),true);
@@ -352,6 +358,8 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         else{
             Route detail=new Route("detail",item.title,item.id);
             detail.playFromDetail=!api.prefs.getBoolean("show_video_details",true);
+            detail.playbackIndex=queue.indexOf(item);
+            if(detail.playbackIndex>=0)detail.playbackQueue=new ArrayList<>(queue);
             navigate(detail,true);
         }
     }
@@ -712,7 +720,6 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
             rows.add(subtitleSizeOption());
             rows.add(settingToggle("显示视频调试信息","player_debug",false));
             rows.add(settingToggle("显示视频详情页","show_video_details",true));
-            rows.add(settingToggle("显示底部常驻进度条","bottom_progress",true));
             rows.add(settingToggle("显示上下集切换按钮","show_next_previous",true));
             rows.add(settingToggle("显示弹幕开关按钮","show_dm_switch",true));
             rows.add(settingToggle("硬件解码","hardware",true));
@@ -812,7 +819,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         final Route target=route;setStatus("正在加载详情…");
         submit(()->api.detail(target.arg),generation,value->{
             target.data=(JSONObject)value;
-            if(target.playFromDetail&&startVideo(target.data,0,0,false))return;
+            if(target.playFromDetail&&startVideo(target.data,api.lastWatchedPart(target.data),0,false))return;
             detailViews(page,target.data);
         });
     }
@@ -821,7 +828,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         LinearLayout summary=ui.horizontal();summary.setPadding(0,ui.px(18),0,ui.px(14));ImageView cover=new ImageView(context);cover.setScaleType(ImageView.ScaleType.CENTER_CROP);images.load(cover,data.optString("pic"),true);summary.addView(cover,new LinearLayout.LayoutParams(ui.px(300),ui.px(169)));ui.gap(summary,24);
         LinearLayout text=ui.vertical();TextView title=ui.title(data.optString("title"));title.setMaxLines(2);text.addView(title);JSONObject owner=data.optJSONObject("owner");TextView author=ui.text("UP · "+(owner==null?"":owner.optString("name")),18,ui.theme.accent);author.setPadding(0,ui.px(14),0,ui.px(12));text.addView(author);TextView description=ui.text(data.optString("desc"),16,ui.theme.muted);description.setMaxLines(3);description.setEllipsize(TextUtils.TruncateAt.END);text.addView(description);summary.addView(text,new LinearLayout.LayoutParams(0,-2,1));page.addView(summary);
         HorizontalScrollView actions=new HorizontalScrollView(context);actions.setHorizontalScrollBarEnabled(false);LinearLayout row=ui.horizontal();actions.addView(row);final JSONArray parts=BlApi.array(data,"pages");
-        Button play=ui.button("播放");row.addView(play);play.setOnClickListener(new View.OnClickListener(){public void onClick(View v){startVideo(data,0,0);}});
+        Button play=ui.button("播放");row.addView(play);play.setOnClickListener(v->startVideo(data,api.lastWatchedPart(data),0));
         action(row,"选集 ("+parts.length()+")",new Runnable(){public void run(){episodeOptions(data,0);}});
         action(row,"评论",new Runnable(){public void run(){comments(data.optLong("aid"),1);}});
         action(row,"收藏",new Runnable(){public void run(){favorite(data);}});
@@ -844,28 +851,47 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         if(contentId<=0){message("视频分 P 信息缺失",true);return false;}
         Route next=new Route("player",data.optString("title"),data.optString("bvid"));
         next.data=data;next.playbackCid=contentId;next.playbackEpisode=episodeId;next.playbackPart=index;
+        next.playbackQueue=route.playbackQueue;
+        next.playbackIndex=route.playbackIndex;
+        if(next.playbackQueue.isEmpty()&&route.kind.equals("detail")&&!items.isEmpty())next.playbackQueue=new ArrayList<>(items);
         navigate(next,push);return true;
     }
     private void renderPlayer(){
-        liveLegacy=false;progressiveFallback=false;playData=null;selectedStream=null;
+        liveLegacy=false;progressiveFallback=false;refreshedVodStream=false;playData=null;selectedStream=null;
+        playingCid=0;savedProgressCid=0;savedProgress=-1;nextProgressSave=0;
         video=route.data;cid=route.playbackCid;episode=route.playbackEpisode;partIndex=route.playbackPart;final boolean live=video.optBoolean("bl_live");if(live)cid=Long.parseLong(route.arg);
         BlUi playerUi=new BlUi(context);
         if(ui.theme==BlTheme.CLASSIC)playerUi.theme=ui.theme;
         player=new BlPlayer(playerUi,proxy,api,images,route.title,live,BlApi.array(video,"pages").length(),api.prefs.getBoolean("hardware",true),api.prefs.getBoolean("systemPlayer",false),new BlPlayer.Actions(){
             public void settings(){playerSettings();}public void episodes(){episodeOptions(video,episode);}public void comments(){BlPlugin.this.comments(video.optLong("aid"),1);}public void subtitle(){subtitles();}
-            public void more(){playerMore();}public void diagnostics(){showDiagnostics();}public void related(){playerRelated();}public void up(){playerUp();}public void step(int delta){stepPart(delta);}public void order(){playOrder();}public void exit(){leavePlayer();}public void position(long at){if(dmFeed!=null)dmFeed.update(at);}
-            public void complete(){String order=api.prefs.getString("play_order","顺序播放");if(!live&&order.equals("单集循环")){loadPlayback(0);return;}if(!live&&api.prefs.getBoolean("autoplay",true)&&(!order.equals("播完停止"))){if(stepPart(order.equals("倒序播放")?-1:1))return;}if(!live&&api.prefs.getBoolean("exit_after_play",false)){leavePlayer();return;}message("播放结束",false);}
-            public void failure(String error,BlStreams.Track track){
+            public void more(){playerMore();}public void diagnostics(){showDiagnostics();}public void related(){playerRelated();}public void up(){playerUp();}public void step(int delta){stepPart(delta,true);}public void order(){playOrder();}public void exit(){leavePlayer();}
+            public void position(long at){
+                if(dmFeed!=null)dmFeed.update(at);
+                if(!live&&SystemClock.elapsedRealtime()>=nextProgressSave)savePlaybackPosition();
+            }
+            public void complete(){
+                if(playingGeneration!=playbackGeneration)return;
+                savePlaybackPosition();
+                String order=api.prefs.getString("play_order","顺序播放");
+                if(!live&&order.equals("单集循环")){refreshedVodStream=false;loadPlayback(0);return;}
+                if(!live&&api.prefs.getBoolean("autoplay",true)&&!order.equals("播完停止")){
+                    if(stepPart(order.equals("倒序播放")?-1:1,false))return;
+                    if(order.equals("顺序播放")&&playNextVideo())return;
+                }
+                if(!live&&api.prefs.getBoolean("exit_after_play",false)){leavePlayer();return;}
+                message("播放结束",false);
+            }
+            public void failure(String error,BlStreams.Track track,boolean transport){
                 if(player==null)return;
                 int request=playingGeneration;
                 long at=player.position();
-                main.post(()->{if(player!=null&&request==playbackGeneration)recoverPlayback(live,at,error,track);});
+                main.post(()->{if(player!=null&&request==playbackGeneration)recoverPlayback(live,at,error,track,transport);});
             }
         });
         player.title(route.title,playbackDetails(live));
         content.addView(player,new FrameLayout.LayoutParams(-1,-1));
-        loadPlayback(live?0:api.prefs.getLong("position:"+video.optString("bvid")+":"+cid,0));
-        if(!live){api.remember(video,cid);resetPage(mineSections.get("history"));}else{liveDanmaku=new BlLiveDanmaku(api,player.danmaku,cid);if(!active)liveDanmaku.active(false);}
+        loadPlayback(live?0:api.resumePosition(video.optString("bvid"),cid));
+        if(live){liveDanmaku=new BlLiveDanmaku(api,player.danmaku,cid);if(!active)liveDanmaku.active(false);}
     }
     private void loadPlayback(final long at){
         route.playbackCid=cid;route.playbackEpisode=episode;route.playbackPart=partIndex;
@@ -906,20 +932,28 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
                 if(quality==BlStreams.QUALITY_8K&&currentQuality()!=quality)message("当前视频未提供可用 8K 流，已选择 "+qualityName(currentQuality()),false);
                 else if(!BlStreams.premiumAudioLabel(audio).isEmpty()&&selectedStream.optInt("bl_audio_id")!=audio)message("当前视频未提供所选音轨，已使用可用音轨",false);
             }
-        });
-        if(!live&&player!=null&&dmCid!=cid){if(dmFeed!=null)dmFeed.close();dmCid=cid;dmFeed=new BlDanmakuFeed(api,player.danmaku);dmFeed.reset(cid,video.optLong("aid"));player.setSubtitle(new JSONArray());if(api.prefs.getBoolean("subtitle_default",false))defaultSubtitle();api.remember(video,cid);resetPage(mineSections.get("history"));}
+        },true,request);
+        if(!live&&player!=null&&dmCid!=cid){if(dmFeed!=null)dmFeed.close();dmCid=cid;dmFeed=new BlDanmakuFeed(api,player.danmaku);dmFeed.reset(cid,video.optLong("aid"));player.setSubtitle(new JSONArray());if(api.prefs.getBoolean("subtitle_default",false))defaultSubtitle();}
     }
 
     private void playSelection(JSONArray streams,long at,boolean live){
         selectedStream=streams.optJSONObject(0);
         playingGeneration=playbackGeneration;
+        playingCid=cid;
         player.title(route.title,playbackDetails(live));
         player.play(streams,at);
     }
 
-    private void recoverPlayback(boolean live,long at,String error,BlStreams.Track track){
+    private void recoverPlayback(boolean live,long at,String error,BlStreams.Track track,boolean transport){
         if(live&&!liveLegacy){
             liveLegacy=true;player.recovering("正在切换兼容直播线路…");loadPlayback(0);
+            return;
+        }
+        if(!live&&transport&&!refreshedVodStream){
+            refreshedVodStream=true;
+            api.diagnostics.record("刷新点播地址",new java.io.IOException(error),"保留播放进度和音轨设置");
+            player.recovering("正在刷新播放地址…");
+            loadPlayback(at);
             return;
         }
         if(!live&&!progressiveFallback&&playData!=null&&selectedStream!=null&&selectedStream.has("bl_audio")){
@@ -928,9 +962,11 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
                         ?BlStreams.compatibleDash(playData,selectedStream,track,rejectedDashTracks):new JSONArray();
                 if(compatible.length()>0){
                     JSONObject replacement=compatible.getJSONObject(0);
-                    String choice=selectedStream.optInt("bl_audio_id")!=replacement.optInt("bl_audio_id")
+                    boolean audioChanged=selectedStream.optInt("bl_audio_id")!=replacement.optInt("bl_audio_id");
+                    String choice=audioChanged
                             ?replacement.optString("bl_audio_label"):qualityName(replacement.optInt("bl_quality"));
                     api.diagnostics.record("DASH 轨道回退",new java.io.IOException(error),"使用 "+choice);
+                    if(audioChanged)message(selectedStream.optString("bl_audio_label")+" 播放失败，正在切换到 "+choice,false);
                     playbackGeneration++;
                     playSelection(compatible,at,false);
                     return;
@@ -953,6 +989,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
 
     private void reloadVodSelection(){
         progressiveFallback=false;
+        refreshedVodStream=false;
         if(player!=null)loadPlayback(player.position());
     }
     private String playbackDetails(boolean live){
@@ -972,7 +1009,42 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     }
 
     private void leavePlayer(){saveRoute();closePlayer();hideModal();route=history.isEmpty()?new Route("home","推荐",""):history.pop();render();}
-    private boolean stepPart(int delta){if(video==null||video.optBoolean("bl_live"))return false;JSONArray parts=BlApi.array(video,"pages");int next=partIndex+delta;String order=api.prefs.getString("play_order","顺序播放");if(order.equals("随机播放")&&parts.length()>1)next=(partIndex+1+new Random().nextInt(parts.length()-1))%parts.length();if(next<0||next>=parts.length()){message(delta>0?"已经是最后一集":"已经是第一集",false);return false;}savePlaybackPosition();partIndex=next;cid=parts.optJSONObject(next).optLong("cid");progressiveFallback=false;loadPlayback(0);return true;}
+    private boolean stepPart(int delta,boolean announceEnd){
+        if(video==null||video.optBoolean("bl_live"))return false;
+        JSONArray parts=BlApi.array(video,"pages");
+        int next=partIndex+delta;
+        if(api.prefs.getString("play_order","顺序播放").equals("随机播放")&&parts.length()>1)
+            next=(partIndex+1+new Random().nextInt(parts.length()-1))%parts.length();
+        JSONObject part=parts.optJSONObject(next);
+        if(part==null||part.optLong("cid")<=0){
+            if(announceEnd)message(delta>0?"已经是最后一集":"已经是第一集",false);
+            return false;
+        }
+        selectPart(next,part.optLong("cid"));
+        return true;
+    }
+
+    private boolean playNextVideo(){
+        for(int index=route.playbackIndex+1;index<route.playbackQueue.size();index++){
+            BlItem item=route.playbackQueue.get(index);
+            if(!item.kind.equals("video")||item.id.isEmpty()||item.id.equals("0")||item.id.equals(route.arg))continue;
+            Route next=new Route("detail",item.title,item.id);
+            next.playFromDetail=true;
+            next.playbackQueue=route.playbackQueue;
+            next.playbackIndex=index;
+            navigate(next,false);
+            return true;
+        }
+        return false;
+    }
+
+    private void selectPart(int index,long nextCid){
+        savePlaybackPosition();
+        partIndex=index;cid=nextCid;
+        progressiveFallback=false;refreshedVodStream=false;
+        player.recovering("正在加载分 P…");
+        loadPlayback(api.resumePosition(video.optString("bvid"),cid));
+    }
     private void playOrder(){
         if(player!=null&&video.optBoolean("bl_live")){message("直播不支持播放顺序",false);return;}
         String current=api.prefs.getString("play_order","顺序播放");
@@ -980,7 +1052,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         for(String value:new String[]{"顺序播放","倒序播放","单集循环","随机播放","播完停止"}){
             rows.add(new Option(value,()->{
                 api.prefs.edit().putString("play_order",value).apply();
-                if(player!=null)message(value,false);else render();
+                if(player!=null){player.refreshOrderIcon();message(value,false);}else render();
             },value.equals(current)));
         }
         options(player==null?"播放完成后":"播放顺序",rows);
@@ -1024,10 +1096,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         }));
         rows.add(new Option("弹幕设置\n"+(dmFeed!=null?dmFeed.status:liveDanmaku!=null?liveDanmaku.status:"正在加载"),this::danmakuSettings));
         rows.add(new Option("播放线路",new Runnable(){public void run(){List<Option> choices=new ArrayList<>();List<String> urls=player==null?Collections.<String>emptyList():player.lines();for(int i=0;i<urls.size();i++){final int index=i;choices.add(new Option(i==0?"主线路":"备用线路 "+i,new Runnable(){public void run(){if(player!=null)player.line(index);}}));}options("播放线路",choices);}}));
-        if(!live){
-            rows.add(subtitleSizeOption());
-            rows.add(new Option("底部常驻进度条\n"+(api.prefs.getBoolean("bottom_progress",true)?"开":"关"),new Runnable(){public void run(){api.prefs.edit().putBoolean("bottom_progress",!api.prefs.getBoolean("bottom_progress",true)).apply();if(player!=null)player.refreshSettings();}}));
-        }
+        if(!live)rows.add(subtitleSizeOption());
         rows.add(new Option("显示视频调试信息\n"+(api.prefs.getBoolean("player_debug",false)?"开":"关"),new Runnable(){public void run(){api.prefs.edit().putBoolean("player_debug",!api.prefs.getBoolean("player_debug",false)).apply();}}));
         rows.add(new Option("控制栏与播放偏好",this::playerPreferences));
         rows.add(new Option("错误详情",this::showDiagnostics));
@@ -1038,14 +1107,28 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     private void audioTracks(){
         List<Option> rows=new ArrayList<>();
         int selected=selectedStream==null?0:selectedStream.optInt("bl_audio_id");
-        for(BlStreams.AudioTrack track:BlStreams.audioTracks(playData)){
+        for(BlStreams.AudioTrack track:BlStreams.audioTracks(playingCid==cid?playData:null)){
             rows.add(new Option(track.label(),()->{
                 api.prefs.edit().putInt("audio_track",track.id).apply();
-                reloadVodSelection();
+                selectAudioTrack(track);
             },track.id==selected));
         }
         if(rows.isEmpty())rows.add(new Option("当前媒体仅有一条音轨",null));
         options("音轨",rows);
+    }
+    private void selectAudioTrack(BlStreams.AudioTrack track){
+        if(player==null||playingCid!=cid)return;
+        try{
+            JSONArray streams=BlStreams.withAudio(playData,selectedStream,track);
+            if(streams.length()>0){
+                refreshedVodStream=false;
+                rejectedDashTracks.clear();
+                playbackGeneration++;
+                playSelection(streams,player.position(),false);
+                return;
+            }
+        }catch(JSONException invalid){api.diagnostics.record("切换 DASH 音轨",invalid,"");}
+        reloadVodSelection();
     }
     private void danmakuSettings(){options("弹幕设置",danmakuOptions());}
     private List<Option> danmakuOptions(){List<Option> rows=new ArrayList<>();
@@ -1109,15 +1192,17 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
         strip.setHorizontalScrollBarEnabled(false);
         strip.addView(cards);
         View first=null;
+        List<BlItem> queue=new ArrayList<>();
         for(int i=0;i<Math.min(related.length(),24);i++){
             JSONObject row=related.optJSONObject(i);
             if(row==null)continue;
             BlItem item=new BlItem(row,"video");
             if(item.title.isEmpty()||item.id.isEmpty()||item.id.equals("0"))continue;
+            queue.add(item);
             BlCard card=new BlCard(ui,images);
             card.bind(item);
             card.setFocusable(true);
-            card.setOnClickListener(v->openItem(item));
+            card.setOnClickListener(v->openItem(item,queue));
             card.setOnKeyListener((v,key,event)->{
                 if(key!=KeyEvent.KEYCODE_DPAD_UP)return false;
                 if(event.getAction()==KeyEvent.ACTION_DOWN)close.requestFocusFromTouch();
@@ -1172,10 +1257,7 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
             if(current)selected=values.size();
             values.add(new Option("P"+(index+1)+" · "+part.optString("part"),()->{
                 if(player==null){startVideo(data,next,ep);return;}
-                savePlaybackPosition();
-                partIndex=next;
-                cid=part.optLong("cid");
-                loadPlayback(0);
+                selectPart(next,part.optLong("cid"));
             },current));
         }
         Panel picker=new Panel("选集",values,openingPanel);
@@ -1327,32 +1409,53 @@ public final class BlPlugin implements ChannelPlugin,ChannelPlugin.NativePage {
     }
     private void submit(final Job job,final int token,final Result result){submit(job,token,result,true);}
     private void submit(final Job job,final int token,final Result result,final boolean report){
+        submit(job,token,result,report,0);
+    }
+    private boolean currentRequest(int token,int playbackRequest){
+        return !closed&&token==generation&&(playbackRequest==0||playbackRequest==playbackGeneration);
+    }
+    private void submit(final Job job,final int token,final Result result,final boolean report,final int playbackRequest){
         if(closed)return;
         jobs.execute(new Runnable(){public void run(){
             if(closed||token!=generation)return;
             try{
                 final Object value=job.run();
                 main.post(new Runnable(){public void run(){
-                    if(closed||token!=generation)return;
+                    if(!currentRequest(token,playbackRequest))return;
                     try{result.show(value);}catch(Exception e){loading=false;reportFailure("内容处理",e,report);}catch(LinkageError e){loading=false;reportFailure("宿主接口不兼容",e,report);}
                 }});
             }catch(final Exception error){
                 main.post(new Runnable(){public void run(){
-                    if(closed||token!=generation)return;
+                    if(!currentRequest(token,playbackRequest))return;
                     loading=false;reportFailure("页面请求",error,report);
                     if(report&&error instanceof BlApi.ApiException&&((BlApi.ApiException)error).code==-101){
                         List<Option> values=new ArrayList<>();values.add(new Option("扫码登录",new Runnable(){public void run(){navigate(new Route("login","扫码登录",""),true);}}));options("此功能需要登录",values);
                     }
                 }});
-            }catch(final LinkageError error){main.post(new Runnable(){public void run(){if(closed||token!=generation)return;loading=false;reportFailure("宿主接口不兼容",error,report);}});}
+            }catch(final LinkageError error){main.post(new Runnable(){public void run(){if(!currentRequest(token,playbackRequest))return;loading=false;reportFailure("宿主接口不兼容",error,report);}});}
         }});
     }
-    private void savePlaybackPosition(){if(player!=null&&video!=null&&!video.optBoolean("bl_live"))api.savePosition(video.optString("bvid"),cid,player.position());}
+    private void savePlaybackPosition(){
+        if(player==null||video==null||video.optBoolean("bl_live")||playingCid<=0)return;
+        long position=player.resumePosition();
+        if(position<0)return;
+        if(playingCid!=savedProgressCid){
+            api.remember(video,playingCid);
+            resetPage(mineSections.get("history"));
+            savedProgressCid=playingCid;
+            savedProgress=-1;
+        }
+        if(position!=savedProgress){
+            api.savePosition(video.optString("bvid"),playingCid,position);
+            savedProgress=position;
+        }
+        nextProgressSave=SystemClock.elapsedRealtime()+5000;
+    }
     private void closePlayer(){playbackGeneration++;if(liveDanmaku!=null){liveDanmaku.close();liveDanmaku=null;}if(dmFeed!=null){dmFeed.close();dmFeed=null;}dmCid=0;if(player!=null){savePlaybackPosition();player.close();retired.add(player);player=null;for(Iterator<BlPlayer> i=retired.iterator();i.hasNext();)try{if(i.next().awaitRelease(0))i.remove();}catch(InterruptedException e){Thread.currentThread().interrupt();}}}
     /** Back first dismisses an in-View modal, then pops the native route stack. */
     public boolean onBack(){if(modal!=null){backPanel();return true;}if(player!=null&&player.back())return true;if(history.isEmpty())return false;saveRoute();closePlayer();route=history.pop();render();return true;}
     /** Host visibility drives media and timers without an Activity inside this JAR. */
-    public void setActive(boolean active){if(this.active!=active&&liveDanmaku!=null)liveDanmaku.active(active);this.active=active;if(player!=null)player.active(active);if(active&&!closed){BlTheme resolved=preferredTheme().resolve(context.getResources().getConfiguration());if(player==null&&modal==null&&ui.theme!=resolved){saveRoute();applyTheme();render();}else if(route!=null&&route.kind.equals("login"))render();}}
+    public void setActive(boolean active){if(this.active&&!active)savePlaybackPosition();if(this.active!=active&&liveDanmaku!=null)liveDanmaku.active(active);this.active=active;if(player!=null)player.active(active);if(active&&!closed){BlTheme resolved=preferredTheme().resolve(context.getResources().getConfiguration());if(player==null&&modal==null&&ui.theme!=resolved){saveRoute();applyTheme();render();}else if(route!=null&&route.kind.equals("login"))render();}}
     public void update(long positionMs,boolean playing){}
     /** Stop playback, sockets, downloads, polling and bitmap workers on channel exit. */
     public void dispose(){if(closed)return;closed=true;generation++;main.removeCallbacksAndMessages(null);closePlayer();hideModal();jobs.shutdownNow();if(images!=null)images.close();history.clear();if(root!=null)root.removeAllViews();final List<BlPlayer> release=new ArrayList<>(retired);Thread cleanup=new Thread(new Runnable(){public void run(){for(BlPlayer p:release)try{p.awaitRelease(5);}catch(InterruptedException e){Thread.currentThread().interrupt();}if(proxy!=null)proxy.close();if(api!=null)api.close();}},"bl-channel-cleanup");cleanup.setDaemon(true);cleanup.start();}

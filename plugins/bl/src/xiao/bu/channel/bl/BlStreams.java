@@ -43,9 +43,12 @@ final class BlStreams {
         if(id<=0||tracks.containsKey(id))return;
         String format=premiumAudioLabel(id);
         if(format.isEmpty()){
-            String codecs=data.optString("codecs");
-            if(group.equals("AAC")&&!codecs.isEmpty()&&!codecs.startsWith("mp4a"))return;
-            format=group;
+            String codec=data.optString("codecs").toLowerCase(Locale.US).split("\\.",2)[0];
+            if(codec.equals("flac"))format="Hi-Res";
+            else if(codec.equals("ec+3"))format="杜比全景声";
+            else if(codec.equals("ec-3")||codec.equals("ac-3"))format="杜比音频";
+            else if(!group.equals("AAC")||codec.isEmpty()||codec.equals("mp4a"))format=group;
+            else return;
         }
         tracks.put(id,new AudioTrack(data,format));
     }
@@ -77,6 +80,13 @@ final class BlStreams {
             if(video!=null&&audio!=null)return merge(data,dash,video,audio);
         }
         return BlApi.array(data,"durl");
+    }
+
+    static JSONArray withAudio(JSONObject data,JSONObject current,AudioTrack audio)throws JSONException{
+        JSONObject dash=data==null?null:data.optJSONObject("dash");
+        if(dash==null||current==null)return new JSONArray();
+        JSONObject video=findVideo(dash,current.optString("url"));
+        return video==null?new JSONArray():merge(data,dash,video,audio);
     }
 
     static JSONArray compatibleDash(JSONObject data,JSONObject failed,Track track,Set<String> rejected)throws JSONException{

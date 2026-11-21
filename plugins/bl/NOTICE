@@ -22,8 +22,13 @@ Host-provided libraries (not bundled in bl.jar):
   The host retains their existing distribution and license obligations.
 
 DASH video/audio merge (Android API 16 and later):
-  ExoPlayer core 2.9.6, https://github.com/google/ExoPlayer/tree/r2.9.6
+  ExoPlayer core 2.10.8, https://github.com/google/ExoPlayer/tree/r2.10.8
   Copyright (C) The Android Open Source Project.
   Apache License, Version 2.0: LICENSE-ExoPlayer.
+
+jFLAC Codec 1.5.2 (FLAC decoding)
+  Copyright (C) 2000–2003 Josh Coalson, original libFLAC.
+  Java port by the jFLAC contributors. GNU LGPL 2.1: LICENSE-jFLAC.
+  Source: https://repo.maven.apache.org/maven2/org/jflac/jflac-codec/1.5.2/jflac-codec-1.5.2-sources.jar
   Core only; native channel controls are Java Views, without Exo UI/Activity modules.
   Its DataSource uses the host's shared OkHttp client.

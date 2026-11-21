@@ -29,8 +29,12 @@
     "maven": "tv/danmaku/ijk/media/ijkplayer-java/0.8.8/ijkplayer-java-0.8.8.aar",
     "sha256": "408d8bb7905ecd3cc3e427ec46dc74be0ce8cdaa0508267188ffcdcf0c29c68d"
   },
-  "exoplayer-core.aar": {
-    "url": "https://maven.aliyun.com/repository/jcenter/com/google/android/exoplayer/exoplayer-core/2.9.6/exoplayer-core-2.9.6.aar",
-    "sha256": "92697fca8befb810164dc06d2d76e26cfa92235b2031f4ad1ed28f5ef4d5c095"
+  "exoplayer-core-2.10.8.aar": {
+    "url": "https://maven.aliyun.com/repository/jcenter/com/google/android/exoplayer/exoplayer-core/2.10.8/exoplayer-core-2.10.8.aar",
+    "sha256": "201fb7deb6a40c61de5256c36a504486c6131a022e651107c6d2cab08e8e3168"
+  },
+  "jflac-codec-1.5.2.jar": {
+    "maven": "org/jflac/jflac-codec/1.5.2/jflac-codec-1.5.2.jar",
+    "sha256": "36bec99e9d159cdd7419d4c27551697600cb8d65a523dca008b2f8574ff97a0c"
   }
 }

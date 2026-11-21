@@ -18,6 +18,7 @@ final class BlApi {
     static final String API="https://api.bilibili.com",PASSPORT="https://passport.bilibili.com",LIVE="https://api.live.bilibili.com";
     // newBV requests the full DASH format set and selects a representation locally.
     private static final String DASH_FORMATS="4048",DASH_MAX_QUALITY=Integer.toString(BlStreams.QUALITY_8K);
+    private static final CacheControl MEDIA_CACHE_CONTROL=new CacheControl.Builder().noStore().build();
     private static final int[] MIX={46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52};
     final OkHttpClient client;
     final SharedPreferences prefs;
@@ -57,9 +58,11 @@ final class BlApi {
         Request.Builder b=new Request.Builder().url(parsed).header("User-Agent",userAgent).header("Referer",url.contains("/search/")?"https://search.bilibili.com/":url.contains("api.live.")?"https://live.bilibili.com/":"https://www.bilibili.com/");
         String cookie=cookieHeader(parsed);if(!cookie.isEmpty())b.header("Cookie",cookie);return b;
     }
+    Request.Builder mediaRequest(String url){return request(url).cacheControl(MEDIA_CACHE_CONTROL);}
     Request.Builder dashRequest(String url,long position,long length){
         String end=length<0?"":Long.toString(position+length-1);
-        return request(url,DASH_UA).header("Accept-Encoding","identity").header("Range","bytes="+position+"-"+end);
+        return request(url,DASH_UA).cacheControl(MEDIA_CACHE_CONTROL)
+                .header("Accept-Encoding","identity").header("Range","bytes="+position+"-"+end);
     }
     Response execute(Request request)throws IOException{return execute(request,null);}
     Response execute(Request request,final Set<Call> owner)throws IOException{
@@ -226,6 +229,27 @@ final class BlApi {
         JSONArray old=new JSONArray(prefs.getString("history","[]")),a=new JSONArray();JSONObject item=new JSONObject();for(String key:new String[]{"bvid","aid","title","pic","duration","owner","stat"})if(video.has(key))item.put(key,video.opt(key));item.put("cid",cid);a.put(item);
         for(int i=0;i<old.length()&&a.length()<100;i++){JSONObject v=old.optJSONObject(i);if(v!=null&&!v.optString("bvid").equals(video.optString("bvid")))a.put(v);}prefs.edit().putString("history",a.toString()).apply();
     }catch(Exception ignored){}}
+    int lastWatchedPart(JSONObject video){
+        JSONArray parts=array(video,"pages");
+        String bvid=video.optString("bvid");
+        if(parts.length()<2||bvid.isEmpty())return 0;
+        try{
+            JSONArray history=new JSONArray(prefs.getString("history","[]"));
+            for(int i=0;i<history.length();i++){
+                JSONObject item=history.optJSONObject(i);
+                if(item==null||!bvid.equals(item.optString("bvid")))continue;
+                long saved=item.optLong("cid");
+                for(int part=0;part<parts.length();part++){
+                    JSONObject entry=parts.optJSONObject(part);
+                    if(entry!=null&&saved>0&&entry.optLong("cid")==saved)return part;
+                }
+                break;
+            }
+        }catch(JSONException ignored){}
+        return 0;
+    }
+
+    long resumePosition(String bvid,long cid){return Math.max(0,prefs.getLong("position:"+bvid+":"+cid,0));}
     void savePosition(String bvid,long cid,long position){SharedPreferences.Editor edit=prefs.edit();String key="position:"+bvid+":"+cid;int count=0;for(String existing:prefs.getAll().keySet())if(existing.startsWith("position:")){if(++count>=256&&!existing.equals(key))edit.remove(existing);}edit.putLong(key,position).apply();}
     static JSONArray array(JSONObject object,String name){if(object==null)return new JSONArray();JSONArray a=object.optJSONArray(name);return a==null?new JSONArray():a;}
     void close(){closed=true;for(Call call:pending)call.cancel();pending.clear();transportFailures.clear();}
