@@ -7,8 +7,6 @@ import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import okhttp3.*;
 import org.json.JSONArray;
 import com.google.android.exoplayer2.*;
@@ -29,12 +27,13 @@ final class BlDashPlayer extends AbstractMediaPlayer {
     private final DefaultAllocator allocator=new DefaultAllocator(true,64*1024);
     private final SimpleExoPlayer player;private final BlApi api;private final String audio;private String source="";private boolean notified,released;private int width,height;private Throwable lastFailure;
     private final BlAudioRenderers audioRenderers;
+    private final BlDiskBuffer diskBuffer;
     private BlStreams.Track failureTrack=BlStreams.Track.UNKNOWN;
     private final Set<Load> loads=Collections.newSetFromMap(new ConcurrentHashMap<Load,Boolean>());
     private final AtomicBoolean cancelled=new AtomicBoolean();
     private final Map<String,String> preferred=new ConcurrentHashMap<>();
     private final List<String> videoAlternatives,audioAlternatives=new ArrayList<>();
-    BlDashPlayer(Context context,BlApi api,String audio,List<String> videoAlternatives,JSONArray audioBackups,boolean allowPassthrough){this.api=api;this.audio=audio;this.videoAlternatives=new ArrayList<>(videoAlternatives);for(int i=0;i<Math.min(8,audioBackups.length());i++){String url=audioBackups.optString(i);if(!url.isEmpty()&&!audioAlternatives.contains(url))audioAlternatives.add(url);}
+    BlDashPlayer(Context context,BlApi api,String audio,List<String> videoAlternatives,JSONArray audioBackups,boolean allowPassthrough,BlDiskBuffer diskBuffer){this.api=api;this.audio=audio;this.diskBuffer=diskBuffer;this.videoAlternatives=new ArrayList<>(videoAlternatives);for(int i=0;i<Math.min(8,audioBackups.length());i++){String url=audioBackups.optString(i);if(!url.isEmpty()&&!audioAlternatives.contains(url))audioAlternatives.add(url);}
         DefaultLoadControl load=new DefaultLoadControl(allocator,2000,10000,500,1000,BUFFER_TARGET_BYTES,false);
         audioRenderers=new BlAudioRenderers(context,allowPassthrough);
         player=ExoPlayerFactory.newSimpleInstance(context,audioRenderers,new DefaultTrackSelector(),load);
@@ -90,7 +89,7 @@ final class BlDashPlayer extends AbstractMediaPlayer {
         return error.type==ExoPlaybackException.TYPE_SOURCE&&error.getSourceException() instanceof TrackReadFailure;
     }
     public void prepareAsync(){
-        DataSource.Factory transport=()->new SharedSource(api,loads,cancelled,preferred,source,audio,videoAlternatives,audioAlternatives);
+        DataSource.Factory transport=()->new SharedSource(api,loads,cancelled,preferred,source,audio,videoAlternatives,audioAlternatives,diskBuffer);
         ExtractorMediaSource.Factory media=new ExtractorMediaSource.Factory(transport)
                 .setContinueLoadingCheckIntervalBytes(LOADING_CHECK_BYTES);
         ExtractorMediaSource video=media.createMediaSource(Uri.parse(source));
@@ -120,7 +119,6 @@ final class BlDashPlayer extends AbstractMediaPlayer {
         TrackReadFailure(BlStreams.Track track,IOException error){super((track==BlStreams.Track.AUDIO?"DASH 音频":"DASH 视频")+"线路读取失败",error);this.track=track;}
     }
     private static final class SharedSource extends BaseDataSource {
-        private static final Pattern RANGE=Pattern.compile("bytes (\\d+)-(\\d+)/(\\d+|\\*)",Pattern.CASE_INSENSITIVE);
         final BlApi api;final Set<Load> loads;final AtomicBoolean cancelled;final Map<String,String> preferred;final String video,audio;final List<String> videos,audios;
         private final List<String> candidates=new ArrayList<>();
         private Load load;
@@ -131,8 +129,13 @@ final class BlDashPlayer extends AbstractMediaPlayer {
         private String original,selected;
         private int nextCandidate;
         private long position,remaining,responseEnd;
+        private final BlDiskBuffer disk;
+        private BlDiskBuffer.Resource diskPrefix, writable;
+        private byte[] pendingWrite;
+        private long pendingAt;
+        private int pendingBytes;
 
-        SharedSource(BlApi api,Set<Load> loads,AtomicBoolean cancelled,Map<String,String> preferred,String video,String audio,List<String> videos,List<String> audios){super(true);this.api=api;this.loads=loads;this.cancelled=cancelled;this.preferred=preferred;this.video=video;this.audio=audio;this.videos=videos;this.audios=audios;}
+        SharedSource(BlApi api,Set<Load> loads,AtomicBoolean cancelled,Map<String,String> preferred,String video,String audio,List<String> videos,List<String> audios,BlDiskBuffer disk){super(true);this.api=api;this.loads=loads;this.cancelled=cancelled;this.preferred=preferred;this.video=video;this.audio=audio;this.videos=videos;this.audios=audios;this.disk=disk;}
         public long open(DataSpec spec)throws IOException{
             transferInitializing(spec);
             load=new Load();
@@ -165,6 +168,14 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                         (original.equals(audio)?"音频":"视频")+" 字节位置="+position);
                 selected=candidates.get(nextCandidate++);
                 try{
+                    if(failure==null&&disk!=null){
+                        diskPrefix=disk.find(selected,position);
+                        if(diskPrefix!=null){
+                            uri=Uri.parse(diskPrefix.resolved);
+                            limitRemaining(diskPrefix.length-position);
+                            return;
+                        }
+                    }
                     requestSelected();
                     preferred.put(original,selected);
                     return;
@@ -180,9 +191,12 @@ final class BlDashPlayer extends AbstractMediaPlayer {
 
         private void requestSelected()throws IOException{
             checkCancelled();
+            BlDiskBuffer.Resource prefix=diskPrefix;
+            diskPrefix=null;
             responseEnd=-1;
             response=api.execute(api.dashRequest(selected,position,remaining).build(),load.calls,load.cancelled);
             if(response.code()==416&&response.header("Content-Range","").equals("bytes */"+position)){
+                if(prefix!=null){disk.invalidate(prefix);throw new IOException("DASH 媒体长度已变化");}
                 remaining=0;
                 return;
             }
@@ -192,19 +206,16 @@ final class BlDashPlayer extends AbstractMediaPlayer {
             uri=Uri.parse(response.request().url().toString());
             stream=response.body().byteStream();
             long available=response.body().contentLength();
-            if(response.code()==206){
-                Matcher range=RANGE.matcher(response.header("Content-Range",""));
-                if(!range.matches())throw new IOException("DASH CDN 返回无效的 Content-Range");
-                try{
-                    long start=Long.parseLong(range.group(1)),end=Long.parseLong(range.group(2));
-                    if(start!=position||end<start)throw new IOException("DASH CDN 返回了错误的字节位置");
-                    responseEnd=end;
-                    if(!range.group(3).equals("*")){
-                        long total=Long.parseLong(range.group(3));
-                        if(total<=end)throw new IOException("DASH CDN 返回了错误的媒体长度");
-                        available=total-start;
-                    }
-                }catch(NumberFormatException invalid){throw new IOException("DASH CDN 返回无效的 Content-Range",invalid);}
+            BlMediaRange range=response.code()==206?BlMediaRange.received(response):null;
+            if(prefix!=null&&(range==null||!prefix.matches(response,range))){
+                disk.invalidate(prefix);
+                throw new IOException("DASH 缓冲片段对应的媒体已变化");
+            }
+            if(range!=null){
+                if(range.start!=position)throw new IOException("DASH CDN 返回了错误的字节位置");
+                responseEnd=range.end;
+                if(range.total>=0)available=range.total-position;
+                if(disk!=null)writable=disk.observe(selected,response,range);
             }else if(position>0){
                 if(position>MAX_SKIP_WITHOUT_RANGE)throw new IOException("DASH CDN 不支持从指定位置读取");
                 if(available>=0)available-=position;
@@ -216,7 +227,36 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                     left-=read;
                 }
             }
-            if(available>=0)remaining=remaining==C.LENGTH_UNSET?available:Math.min(remaining,available);
+            if(available>=0)limitRemaining(available);
+        }
+
+        private void limitRemaining(long available){
+            remaining=remaining==C.LENGTH_UNSET?available:Math.min(remaining,available);
+        }
+
+        private int delivered(int count){
+            position+=count;
+            if(remaining>0)remaining-=count;
+            bytesTransferred(count);
+            return count;
+        }
+
+        private void recordForDisk(byte[] data,int at,int count){
+            if(pendingWrite==null)pendingWrite=new byte[BlDiskBuffer.WRITE_BYTES];
+            for(int copied=0;copied<count;){
+                if(pendingBytes==0)pendingAt=position+copied;
+                int size=Math.min(count-copied,pendingWrite.length-pendingBytes);
+                System.arraycopy(data,at+copied,pendingWrite,pendingBytes,size);
+                pendingBytes+=size;
+                copied+=size;
+                if(pendingBytes==pendingWrite.length)queueDiskWrite();
+            }
+        }
+
+        private void queueDiskWrite(){
+            if(pendingBytes==0)return;
+            disk.offer(writable,pendingAt,pendingWrite,0,pendingBytes);
+            pendingBytes=0;
         }
 
         public int read(byte[] buffer,int at,int count)throws IOException{
@@ -224,6 +264,12 @@ final class BlDashPlayer extends AbstractMediaPlayer {
             while(remaining!=0){
                 checkCancelled();
                 try{
+                    if(diskPrefix!=null){
+                        int read=disk.read(diskPrefix,position,buffer,at,(int)Math.min(count,remaining));
+                        if(read>0)return delivered(read);
+                        requestSelected();
+                        if(remaining==0)return C.RESULT_END_OF_INPUT;
+                    }
                     // A valid 206 may cover only part of the requested range.
                     if(responseEnd>=0&&position>responseEnd){
                         disconnect(false);
@@ -237,10 +283,8 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                         if(remaining<0)return C.RESULT_END_OF_INPUT;
                         throw new EOFException("DASH CDN 提前断开");
                     }
-                    position+=read;
-                    if(remaining>0)remaining-=read;
-                    bytesTransferred(read);
-                    return read;
+                    if(writable!=null&&disk.acceptsWrites())recordForDisk(buffer,at,read);
+                    return delivered(read);
                 }catch(IOException error){
                     if(isCancelled())throw error;
                     disconnect(true);
@@ -252,9 +296,10 @@ final class BlDashPlayer extends AbstractMediaPlayer {
 
         public Uri getUri(){return uri;}public Map<String,List<String>> getResponseHeaders(){return response==null?Collections.<String,List<String>>emptyMap():response.headers().toMultimap();}
         private void disconnect(boolean failed){
+            queueDiskWrite();
             if(failed&&selected.equals(preferred.get(original)))preferred.remove(original);
             if(response!=null){if(failed)api.cancel(response);response.close();}
-            response=null;stream=null;uri=null;
+            response=null;stream=null;uri=null;diskPrefix=null;writable=null;
         }
         public void close(){
             try{
@@ -262,6 +307,7 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                 disconnect(false);
             }finally{
                 if(load!=null){loads.remove(load);load=null;}
+                pendingWrite=null;
                 if(opened){opened=false;transferEnded();}
             }
         }

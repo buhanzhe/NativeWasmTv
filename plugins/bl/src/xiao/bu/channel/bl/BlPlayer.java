@@ -29,6 +29,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     private double pixelAspectRatio=1;
     private boolean decodedAudioOnly;
     private final boolean systemPlayer,live,multipleParts;private boolean prepared,closed,active=true,seeking,hardware=true,hardwareFailed,wantPlaying=true;
+    private final BlDiskBuffer diskBuffer;
     private String source="",audio="",format="";private float playbackSpeed=1;private long clockMinute=-1;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService releases=Executors.newSingleThreadExecutor();
@@ -66,6 +67,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     }};
     BlPlayer(BlUi ui,BlMediaProxy proxy,BlApi api,BlImages images,String title,boolean live,int partCount,boolean hardware,boolean systemPlayer,Actions actions){
         super(ui.context);this.ui=ui;this.proxy=proxy;this.api=api;this.images=images;this.prefs=api.prefs;this.actions=actions;this.live=live;this.multipleParts=partCount>1;this.hardware=hardware;this.systemPlayer=systemPlayer||Build.VERSION.SDK_INT<16;playbackSpeed=prefs.getFloat("play_speed",1);setBackgroundColor(0xff000000);setContentDescription("BL播放器");setClipChildren(true);
+        diskBuffer=live?null:new BlDiskBuffer(ui.context);
         surface=new SurfaceView(ui.context);surface.setZOrderMediaOverlay(true);surface.getHolder().addCallback(this);surface.getHolder().setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);addView(surface,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
         danmaku=new BlDanmaku(ui,this,prefs);addView(danmaku,new FrameLayout.LayoutParams(-1,-1));
         clock=ui.text("",33,0xffffffff);clock.setTypeface(null,android.graphics.Typeface.BOLD);clock.setShadowLayer(ui.px(4),0,0,0xff000000);FrameLayout.LayoutParams clockBox=ui.frame(-2,54,Gravity.RIGHT|Gravity.TOP);clockBox.rightMargin=ui.px(34);clockBox.topMargin=ui.px(16);addView(clock,clockBox);
@@ -157,7 +159,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     private void createEngine(){
         try{
             api.clearTransportFailure(source);
-            IMediaPlayer p;if(!audio.isEmpty()&&Build.VERSION.SDK_INT>=16)p=new BlDashPlayer(ui.context,api,audio,lines(),BlApi.array(streams.optJSONObject(segment),"bl_audio_backups"),!decodedAudioOnly);
+            IMediaPlayer p;if(!audio.isEmpty()&&Build.VERSION.SDK_INT>=16)p=new BlDashPlayer(ui.context,api,audio,lines(),BlApi.array(streams.optJSONObject(segment),"bl_audio_backups"),!decodedAudioOnly,diskBuffer);
             else if(!systemPlayer){
                 IjkMediaPlayer.loadLibrariesOnce(null);
                 IjkMediaPlayer ijk=new IjkMediaPlayer();
@@ -179,7 +181,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
             p.setOnBufferingUpdateListener(new IMediaPlayer.OnBufferingUpdateListener(){public void onBufferingUpdate(IMediaPlayer mp,int percent){if(engine==mp)buffered=percent;}});
             p.setOnCompletionListener(new IMediaPlayer.OnCompletionListener(){public void onCompletion(IMediaPlayer mp){if(engine!=mp||closed)return;if(segment+1<streams.length()){segmentStart+=streams.optJSONObject(segment).optLong("length");segment++;JSONObject item=streams.optJSONObject(segment);source=item.optString("url");audio=item.optString("bl_audio");seekWhenReady=0;start();}else{state="completed";actions.complete();}}});
             p.setOnErrorListener(this::engineError);
-            p.setDataSource(p instanceof BlDashPlayer?source:proxy.url(source,transportSession));p.prepareAsync();main.removeCallbacks(prepareTimeout);main.postDelayed(prepareTimeout,30000);
+            p.setDataSource(p instanceof BlDashPlayer?source:proxy.url(source,transportSession,diskBuffer));p.prepareAsync();main.removeCallbacks(prepareTimeout);main.postDelayed(prepareTimeout,30000);
         }catch(Exception e){showFailure("打开播放器",e,"");}catch(LinkageError e){showFailure("播放器能力不兼容",e,"请安装匹配设备架构的宿主");}
     }
     private boolean engineError(IMediaPlayer mp,int what,int extra){
@@ -309,7 +311,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     }
     void active(boolean value){active=value;danmaku.active(value);main.removeCallbacks(tick);if(!value){if(engine!=null&&prepared)try{engine.pause();}catch(Exception ignored){}main.removeCallbacks(hide);}else{if(engine!=null&&prepared&&wantPlaying)try{engine.start();}catch(Exception ignored){}main.post(tick);danmaku.start();}}
     public void surfaceCreated(SurfaceHolder h){if(engine==null)start();}public void surfaceChanged(SurfaceHolder h,int f,int w,int height){}public void surfaceDestroyed(SurfaceHolder h){position=position();seekWhenReady=live?0:Math.max(0,position-segmentStart);releaseEngine();}
-    void close(){if(closed)return;closed=true;main.removeCallbacksAndMessages(null);danmaku.close();releaseEngine();releases.shutdown();}
+    void close(){if(closed)return;closed=true;main.removeCallbacksAndMessages(null);danmaku.close();releaseEngine();if(diskBuffer!=null)releases.execute(diskBuffer::close);releases.shutdown();}
     boolean awaitRelease(long seconds)throws InterruptedException{return releases.awaitTermination(seconds,TimeUnit.SECONDS);}
     private final class TimeBar extends View {
         final Paint brush=new Paint(Paint.ANTI_ALIAS_FLAG);long at,length;int buffer;

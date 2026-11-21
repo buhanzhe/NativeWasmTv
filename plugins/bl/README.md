@@ -24,7 +24,7 @@ https://raw.githubusercontent.com/buhanzhe/NativeWasmTv/master/plugins/bl/dist/e
 | API 14–15 播放 | `BlSystemPlayer`，只引用 API 14 的平台 MediaPlayer；视频经共享 OkHttp 的本机代理输入 |
 | API 16+ 播放 | Exo core 2.10.8 通过宿主 OkHttp 合并 DASH 音视频。DASH 使用桌面 Web 请求头，断流时从已读位置切到备用 CDN。点播媒体读取失败可刷新播放地址并恢复进度。Hi-Res FLAC 有软件解码路径，杜比音轨使用设备的解码或直通能力 |
 
-BL 媒体边下边播，请求和本机代理响应均禁止磁盘缓存。DASH 压缩音视频共用 8 MiB 缓冲目标，优先按字节限流。IJK 播放队列目标为 2 MiB。
+BL 为当前 DASH 和支持字节范围的 MP4 点播保留已读取的片段。音视频共用 32 MiB 私有磁盘缓存，空间用满时按最近使用顺序淘汰片段。拖动进度、重建播放器或切换音轨时可复用相同媒体地址的缓存。退出播放清理缓存，剩余空间低于 128 MiB 或磁盘不可用时继续流式播放。直播走流式播放。DASH 音视频样本的内存缓冲目标为 8 MiB，IJK 队列目标为 2 MiB。写盘队列最多暂存 256 KiB，DASH 音视频各用 32 KiB 拼接连续读取的片段。
 | ABI | JAR 不包含 `.so`；IJK 播放取决于宿主 APK 与设备 ABI 匹配。平台播放无需 JAR 携带原生库 |
 
 没有直接打包 newBV 的 Compose/Media3 主应用，也没有把 BBLL 的 Activity 搬进 JAR。平台播放适配器特意避免 IJK `AndroidMediaPlayer` 中 API 16 `OnTimedTextListener` 的引用。

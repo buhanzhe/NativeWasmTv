@@ -318,22 +318,95 @@ public final class BlPluginInstrumentation extends Instrumentation {
         result.putString("hiRes","AAC → FLAC → AAC → FLAC, audio output buffers="+first+" and "+second);
     }
 
-    private void playbackCache(Object engine,Bundle result)throws Exception{
-        check(engine.getClass().getSimpleName().equals("BlDashPlayer"),"The cache test needs a DASH stream");
-        Object allocator=field(engine,"allocator");
-        int limit=((Number)field(engine,"BUFFER_TARGET_BYTES")).intValue();
-        key(KeyEvent.KEYCODE_MEDIA_PAUSE);
-        int peak=0;
-        long deadline=SystemClock.elapsedRealtime()+6000;
-        while(SystemClock.elapsedRealtime()<deadline){
-            peak=Math.max(peak,((Number)invoke(allocator,"getTotalBytesAllocated")).intValue());
-            SystemClock.sleep(50);
+    private void playbackCache(Object player,Object engine,Bundle result)throws Exception{
+        File file=new File(getTargetContext().getCacheDir(),"bl-vod.buffer");
+        String source=(String)field(player,"source");
+        Object disk=field(player,"diskBuffer");
+        int diskLimit=((Number)field(disk,"LIMIT")).intValue();
+        if("true".equals(args.getString("dash")))
+            check(engine.getClass().getSimpleName().equals("BlDashPlayer"),"Device fell back to progressive playback for the DASH fixture");
+        long deadline=SystemClock.elapsedRealtime()+5000;
+        while(invoke(disk,"find",source,0L)==null&&SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(50);
+        check(invoke(disk,"find",source,0L)!=null&&file.length()>0,"Playback did not store the first range");
+        if(engine.getClass().getSimpleName().equals("BlDashPlayer")){
+            Object allocator=field(engine,"allocator");
+            int limit=((Number)field(engine,"BUFFER_TARGET_BYTES")).intValue();
+            key(KeyEvent.KEYCODE_MEDIA_PAUSE);
+            int peak=0;
+            deadline=SystemClock.elapsedRealtime()+6000;
+            while(SystemClock.elapsedRealtime()<deadline){
+                peak=Math.max(peak,((Number)invoke(allocator,"getTotalBytesAllocated")).intValue());
+                SystemClock.sleep(50);
+            }
+            check(peak>=limit-512*1024&&peak<=limit+1024*1024,"DASH sample buffer peaked at "+peak);
+            key(KeyEvent.KEYCODE_MEDIA_PLAY);
+            Object resumed;
+            armFault("cache_replay");
+            try{
+                onMain(()->{
+                    try{invoke(player,"play",field(player,"streams"),0L);}
+                    catch(Exception error){throw new RuntimeException(error);}
+                });
+                resumed=waitPlaying(engine);
+                check(resumed.getClass()==engine.getClass(),"DASH did not reopen from disk");
+                long target=((Number)invoke(resumed,"getDuration")).longValue()*4/5;
+                deadline=SystemClock.elapsedRealtime()+target+8000;
+                while(playbackPosition(player)<target&&SystemClock.elapsedRealtime()<deadline){
+                    check(file.length()<=diskLimit,"Disk cache exceeded its byte limit");
+                    SystemClock.sleep(50);
+                }
+                check(playbackPosition(player)>=target,"DASH stalled after replaying the cached prefix");
+                key(KeyEvent.KEYCODE_MEDIA_PAUSE);
+            }finally{armFault("");}
+            check(file.length()>=diskLimit-256*1024&&file.length()<=diskLimit,"Stress fixture did not reach the disk limit");
+            check(invoke(disk,"find",source,0L)==null,"The oldest video range was not evicted");
+            result.putInt("dashCachePeakBytes",peak);
+            result.putLong("diskCachePeakBytes",file.length());
+            Object lastAllocator=field(resumed,"allocator");
+            closePlayback();waitRoute("detail");
+            check(((Number)invoke(allocator,"getTotalBytesAllocated")).intValue()==0
+                    &&((Number)invoke(lastAllocator,"getTotalBytesAllocated")).intValue()==0,"DASH samples retained after exit");
+            result.putInt("dashCacheAfterCloseBytes",0);
+        }else{
+            String loopback=(String)invoke(engine,"getDataSource");
+            byte[] expected=cacheTestRange(source);
+            armFault("cache_replay");
+            try{
+                check(java.util.Arrays.equals(expected,cacheTestRange(loopback)),"Cached MP4 range differed from the origin");
+            }finally{armFault("");}
+            check(file.length()<=diskLimit,"Disk cache exceeded its byte limit");
+            result.putLong("diskCachePeakBytes",file.length());
+            result.putInt("replayedMp4Bytes",expected.length);
+            closePlayback();waitRoute("detail");
         }
-        check(peak>=limit-512*1024&&peak<=limit+1024*1024,"DASH cache sample peak was "+peak);
-        closePlayback();waitRoute("detail");
-        check(((Number)invoke(allocator,"getTotalBytesAllocated")).intValue()==0,"DASH buffer retained after exit");
-        result.putInt("dashCachePeakBytes",peak);
-        result.putInt("dashCacheAfterCloseBytes",0);
+        check(Boolean.TRUE.equals(invoke(player,"awaitRelease",5L))&&!file.exists(),"Disk cache retained after exit");
+        result.putLong("diskCacheAfterCloseBytes",0);
+        if(!engine.getClass().getSimpleName().equals("BlDashPlayer"))diskUnavailablePlayback(file,result);
+    }
+
+    private byte[] cacheTestRange(String url)throws Exception{
+        okhttp3.Request request=new okhttp3.Request.Builder().url(url).header("Range","bytes=0-2097151")
+                .header("Cache-Control","no-store").build();
+        try(okhttp3.Response response=NetworkClient.sharedClient().newCall(request).execute()){
+            check(response.code()==206&&response.body()!=null,"MP4 range request failed: "+response.code());
+            byte[] bytes=response.body().bytes();
+            check(bytes.length==2097152,"Incomplete MP4 range: "+bytes.length);
+            return bytes;
+        }
+    }
+
+    private void diskUnavailablePlayback(File file,Bundle result)throws Exception{
+        check(file.mkdir(),"Could not create the disk failure fixture");
+        try{
+            click("播放");waitRoute("player");
+            Object engine=waitPlaying(null),player=field(plugin,"player"),disk=field(player,"diskBuffer");
+            long position=playbackPosition(player);
+            waitAfterSeek(player,engine,position,((Number)invoke(player,"duration")).longValue(),0);
+            check(Boolean.TRUE.equals(field(disk,"unavailable"))&&!file.isFile(),"Cache failure did not bypass writes");
+            closePlayback();waitRoute("detail");
+            check(Boolean.TRUE.equals(invoke(player,"awaitRelease",5L)),"Player did not release after a cache failure");
+            result.putString("diskFailure","continued streaming");
+        }finally{if(file.isDirectory())file.delete();}
     }
 
     private long playbackPosition(Object player)throws Exception{
@@ -818,7 +891,7 @@ public final class BlPluginInstrumentation extends Instrumentation {
             if(vodTest){vodPlayback(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
             if(orderTest){playbackOrder(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
             if(hiresTest){try{hiresPlayback(player,engine,result);}finally{publicPlaybackDiagnostics();}result.putString("stream","PASS: "+result);code=-1;return;}
-            if(cacheTest){playbackCache(engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(cacheTest){playbackCache(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
             if("true".equals(args.getString("interactions"))){interactionScenarios(player,result);result.putString("stream","PASS: touch/remote player interaction, existing danmaku continuity, transient playback recovery and main-thread responsiveness; "+result.toString());code=-1;return;}
             int soak=0;try{soak=Integer.parseInt(args.getString("soakSeconds","0"));}catch(NumberFormatException ignored){}long soakEnd=SystemClock.elapsedRealtime()+Math.min(600,Math.max(0,soak))*1000L;
             while(SystemClock.elapsedRealtime()<soakEnd){SystemClock.sleep(2000);check("playing".equals(field(player,"state")),"Playback stopped during sustained test: "+field(player,"state"));long at=((Number)position.invoke(player)).longValue();check(at>p2,"Playback clock stalled during sustained test");p2=at;Bundle sample=new Bundle();sample.putString("stream","BL_SOAK positionMs="+at+" javaUsed="+(Runtime.getRuntime().totalMemory()-Runtime.getRuntime().freeMemory())+" nativeUsed="+Debug.getNativeHeapAllocatedSize()+"\n");sendStatus(0,sample);}

@@ -12,7 +12,7 @@ p.add_argument('--seek',action='store_true',help='Check that playback advances a
 p.add_argument('--vod',action='store_true',help='Check video URL refresh, portrait layout and saved progress using a portrait DASH fixture')
 p.add_argument('--order',action='store_true',help='Check the repeat-one icon, looping, and sequential playback of the next video')
 p.add_argument('--hires',action='store_true',help='Exercise repeated Hi-Res track switches and verify decoded audio output')
-p.add_argument('--cache',action='store_true',help='Measure the peak DASH sample cache with a high-bitrate local fixture')
+p.add_argument('--cache',action='store_true',help='Check disk reuse and cleanup, using a high-bitrate fixture for the DASH cache limits')
 p.add_argument('--video',help='Run a focused playback check on a public BV identifier with --real')
 p.add_argument('--smoke',action='store_true',help='Initial playback, navigation and live danmaku; skip decoder-switch stress tests')
 p.add_argument('--jar-url',help='Optional published HTTPS JAR instead of the local HTTPS fixture')
@@ -33,6 +33,7 @@ if a.account_audit and (not a.real or not a.jar_url or a.errors):p.error('--acco
 if a.premium_dash and (not a.dash or a.real or a.system):p.error('--premium-dash requires local fixtures and --dash')
 if a.dash_resume and (not a.dash or a.real or a.system):p.error('--dash-resume requires local fixtures and --dash')
 if a.vod and (not a.dash or a.real or a.system):p.error('--vod requires a local portrait fixture and --dash')
+if a.cache and a.real:p.error('--cache requires local fixtures')
 if a.video and (not a.real or a.account_audit or not re.fullmatch(r'BV[A-Za-z0-9]{10}',a.video)):
     p.error('--video requires --real and a BV identifier')
 def run(*args,**kw):return subprocess.run(adb+list(args),check=True,**kw)

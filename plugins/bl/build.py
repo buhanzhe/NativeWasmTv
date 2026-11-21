@@ -69,7 +69,7 @@ with zipfile.ZipFile(jar,'w',compression=zipfile.ZIP_DEFLATED) as z:
     def entry(name,data):
         info=zipfile.ZipInfo(name,(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16;z.writestr(info,data)
     entry('classes.dex',(dex/'classes.dex').read_bytes())
-    entry('channel-plugin.json',json.dumps(dict(api=1,version=16,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
+    entry('channel-plugin.json',json.dumps(dict(api=1,version=17,minSdk=14,entry='xiao.bu.channel.bl.BlPlugin',native=True,hostCapability='NativeHost')))
     for f in sorted((here/'assets').rglob('*')):
         if f.is_file() and f.suffix!='.webp':entry('assets/'+f.relative_to(here/'assets').as_posix(),f.read_bytes())
     for name in ['NOTICE','LICENSE-newBV','LICENSE-ZXing','LICENSE-ExoPlayer','LICENSE-jFLAC']:

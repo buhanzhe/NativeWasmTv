@@ -46,7 +46,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   except ConnectionError:pass
  def handle_get(self):
   p=urllib.parse.urlsplit(self.path);q=urllib.parse.parse_qs(p.query);page=int(q.get('pn',q.get('page',q.get('fresh_idx',['1'])))[0]);offset=(page-1)*24
-  with (work/'requests.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps({'time':time.time(),'method':self.command,'path':self.path},ensure_ascii=False)+'\n')
+  with (work/'requests.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps({'time':time.time(),'method':self.command,'path':self.path,'range':self.headers.get('Range')},ensure_ascii=False)+'\n')
   if p.path=='/__fixture/fault':
    with fault_lock:faults['mode']=q.get('mode',[''])[0]
    return self.response(200,{'code':0})
@@ -90,6 +90,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
    if q.get('fail',['0'])[0]=='1':return self.response(403,b'fixture CDN failure','text/plain')
    file=options.video if p.path=='/video.mp4' else options.video.with_name(p.path[1:]);size=file.stat().st_size;a=0;b=size-1;match=re.match(r'bytes=(\d+)-(\d*)',self.headers.get('Range',''))
    if match:a=int(match[1]);b=min(size-1,int(match[2])) if match[2] else size-1
+   with fault_lock:cache_replay=faults['mode']=='cache_replay'
+   if cache_replay and (p.path=='/video-only.mp4' and a<32768 or p.path=='/video.mp4' and a==0):
+    return self.response(403,b'Cached prefix required for this test','text/plain')
    if match and q.get('window'):b=min(b,a+524287)
    if a>=size:return self.response(416,b'')
    if options.dash_resume and p.path!='/video.mp4':
