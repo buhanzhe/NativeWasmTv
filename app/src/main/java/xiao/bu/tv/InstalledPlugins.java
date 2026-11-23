@@ -22,7 +22,7 @@ final class InstalledPlugins {
 
     static synchronized JSONObject status(Context context) throws Exception {
         JSONObject result = new JSONObject().put("ok", true);
-        for (String id : new String[]{"tvbus", "bl", "tvbox", "folia", "folia-full", "python"}) {
+        for (String id : new String[]{"tvbus", "bl", "tvbox", "file-browser", "folia", "folia-full", "python"}) {
             JSONObject plugin = new JSONObject();
             if ("tvbus".equals(id)) {
                 TvbusBundle.Installed tvbus = TvbusBundle.installed(context);
@@ -154,6 +154,7 @@ final class InstalledPlugins {
     private static String entryFor(String id) throws IOException {
         if ("bl".equals(id)) return "xiao.bu.channel.bl.BlPlugin";
         if ("tvbox".equals(id)) return "xiao.bu.channel.tvbox.TvBoxPlugin";
+        if ("file-browser".equals(id)) return "xiao.bu.channel.files.FileBrowserPlugin";
         if ("folia".equals(id)) return "xiao.bu.channel.FoliaChannel";
         if ("folia-full".equals(id)) return "xiao.bu.channel.FoliaFull";
         if ("python".equals(id)) return PYTHON_ENTRY;
@@ -161,7 +162,8 @@ final class InstalledPlugins {
     }
 
     static boolean isChannel(String id) {
-        return "bl".equals(id) || "tvbox".equals(id) || "folia".equals(id) || "folia-full".equals(id);
+        return "bl".equals(id) || "tvbox".equals(id) || "file-browser".equals(id)
+                || "folia".equals(id) || "folia-full".equals(id);
     }
 
     static String digest(Context context, String id) {

@@ -114,3 +114,17 @@ savedCatalog = true;
 context.refreshCatalog(true);
 assert.equal(pluginNodes.get('pluginCatalogStatus').textContent, '已保存的发布版本 v1.0.0');
 console.log('PASS plugin install shows pending, releases controls after timeout and refreshes the installed status');
+
+assert.equal(pluginNodes.get('openFiles').disabled, true, 'Older hosts without file-browser status remain usable');
+context.api = (_path, _body, done) => done(null, {tvbus: {}, python: {}, bl: {}, tvbox: {}, 'file-browser': {installed: true, version: '3'}});
+context.refreshPlugins();
+assert.equal(pluginNodes.get('openFiles').disabled, false);
+assert.equal(pluginNodes.get('file-browserStatus').textContent, '已安装 · 3');
+context.openPlugin('file-browser');
+assert.match(pluginRequests.at(-1).path, /action=open&type=file-browser&name=$/);
+pluginRequests.at(-1).status = 200;
+pluginRequests.at(-1).responseText = '{"ok":true,"url":"ntv-plugin://local/file-browser.jar"}';
+pluginRequests.at(-1).onload();
+assert.equal(pluginNodes.get('pluginChannelUrl').value, 'ntv-plugin://local/file-browser.jar');
+assert.equal(pluginNodes.get('pluginAddress').hidden, false);
+console.log('PASS file browser status and direct open, with compatibility for older hosts');

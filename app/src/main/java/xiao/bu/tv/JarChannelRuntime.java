@@ -16,6 +16,7 @@ import xiao.bu.tv.jar.ChannelPlugin;
 final class JarChannelRuntime {
     interface Callback extends ChannelPlugin.Host {
         boolean current();
+        default void ready() { }
         default void playVod(String url, JSONObject headers) { play(url); }
     }
     static final class PlaybackReport {
@@ -31,6 +32,8 @@ final class JarChannelRuntime {
     private ChannelPlugin plugin;
     private View view;
     private boolean playingVod;
+    private View hiddenHostVideo;
+    private int hostVideoVisibility;
     private int generation;
     private boolean destroyed;
     private Callback callback;
@@ -109,6 +112,7 @@ final class JarChannelRuntime {
                                 if(token!=generation||!callback.current()||view==null) return;
                                 playingVod=true;
                                 view.setVisibility(View.GONE);
+                                hideHostVideo(false);
                                 callback.playVod(url,headers);
                             }
                             public void chooseDirectory(android.webkit.ValueCallback<android.net.Uri[]> selected){
@@ -136,6 +140,8 @@ final class JarChannelRuntime {
                         plugin=incoming;view=content;
                         // Above media/artwork/browser, below subtitle, HUD and channel menus.
                         root.addView(content,Math.min(3,root.getChildCount()),new FrameLayout.LayoutParams(-1,-1));
+                        if (incoming instanceof ChannelPlugin.NativePage) hideHostVideo(true);
+                        callback.ready();
                         if(plugin instanceof ChannelPlugin.NativePage&&context instanceof MainActivity)
                             ((MainActivity)context).scheduleVideoInfoRefresh();
                     } catch(Exception|LinkageError e) {
@@ -157,6 +163,7 @@ final class JarChannelRuntime {
         callback=null;
         clearPlaybackReport();
         playingVod=false;
+        hideHostVideo(false);
         if(browserProfile!=null){browserProfile.dispose();browserProfile=null;}
         browser=null;
         filePicker.cancel();
@@ -190,9 +197,24 @@ final class JarChannelRuntime {
     boolean resumeFromVod() {
         if (!playingVod || view==null) return false;
         playingVod=false;
+        hideHostVideo(true);
         view.setVisibility(View.VISIBLE);
         view.requestFocus();
         return true;
+    }
+    private void hideHostVideo(boolean hidden) {
+        if (hidden) {
+            if (hiddenHostVideo != null) return;
+            View output = root.findViewById(R.id.video_surface);
+            if (output == null) return;
+            hiddenHostVideo = output;
+            hostVideoVisibility = output.getVisibility();
+            // KitKat can keep the previous Surface buffer above a native plugin.
+            output.setVisibility(View.INVISIBLE);
+        } else if (hiddenHostVideo != null) {
+            hiddenHostVideo.setVisibility(hostVideoVisibility);
+            hiddenHostVideo = null;
+        }
     }
     boolean goBackIfPossible(){
         if(visible()&&plugin instanceof ChannelPlugin.NativePage) {

@@ -3315,6 +3315,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         }
                         final String target = url;
                         String title = "tvbox".equals(type) ? "TVBox" : "bl".equals(type) ? "BL"
+                                : "file-browser".equals(type) ? "文件浏览"
                                 : type.startsWith("folia") ? "Folia" : "Ku9 Python";
                         runOnMainThreadAndWait(() -> playQuickMedia(target, title, null));
                         return new JSONObject().put("ok", true).put("url", url).toString();
@@ -9004,6 +9005,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             updateLoadingStatus("正在加载 JAR 频道");
             jarChannelRuntime.open(configuredUrl, new JarChannelRuntime.Callback() {
                 public boolean current() { return requestId == playRequestId; }
+                public void ready() {
+                    hideLoading(); abortChannelSwitchAnimation();
+                    webChannelInfo.cancel();
+                    channelBar.removeCallbacks(hideChannelBar);
+                    channelBar.setVisibility(View.GONE);
+                }
                 public void configureBrowser(android.webkit.WebView web) { }
                 public void play(String url) {
                     android.net.Uri media = android.net.Uri.parse(url == null ? "" : url);

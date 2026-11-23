@@ -44,6 +44,11 @@
         <input id="pluginFile" type="file" accept=".jar" hidden onchange="uploadPlugin(this)" aria-label="选择插件文件">
       </section>
       <section class="browser-section">
+        <div class="browser-setting-row">
+          <div class="browser-setting-copy"><b>文件浏览</b><span id="file-browserStatus">查询中</span></div>
+          <button type="button" onclick="choosePlugin('file-browser')">上传 JAR</button>
+          <button id="openFiles" type="button" disabled onclick="openPlugin('file-browser')">打开文件浏览</button>
+        </div>
         <div class="section-head"><h2>打开频道插件</h2><button id="openBl" type="button" disabled onclick="openPlugin('bl')">打开 BL</button></div>
         <div class="script-import-row">
           <input id="tvboxUrl" type="url" autocomplete="off" placeholder="TVBox 配置地址" aria-label="TVBox 配置地址">

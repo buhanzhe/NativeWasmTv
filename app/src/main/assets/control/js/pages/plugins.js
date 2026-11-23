@@ -1,17 +1,18 @@
 var pluginType = "", pluginBusy = false, catalogPending = false;
-var pluginLabels = { tvbus: "TVBus", python: "Python", bl: "BL", tvbox: "TVBox", ku9py: "Ku9 脚本" };
+var pluginLabels = { tvbus: "TVBus", python: "Python", bl: "BL", tvbox: "TVBox", "file-browser": "文件浏览", ku9py: "Ku9 脚本" };
 
 function refreshPlugins() {
   api("/api/plugins", null, function (error, data) {
     setConnectionStatus(error ? "连接失败" : "电视在线");
     if (error) { toast(error.message, true); return; }
-    ["tvbus", "python", "bl", "tvbox"].forEach(function (type) {
-      var item = data[type];
+    ["tvbus", "python", "bl", "tvbox", "file-browser"].forEach(function (type) {
+      var item = data[type] || { installed: false };
       document.getElementById(type + "Status").textContent = type === "python" && data.pythonRestart
         ? "已更新，重启 nTv 后生效" : item.installed ? "已安装 · " + item.version : "未安装";
     });
     document.getElementById("openBl").disabled = !data.bl.installed;
     document.getElementById("openTvbox").disabled = !data.tvbox.installed;
+    document.getElementById("openFiles").disabled = !data["file-browser"] || !data["file-browser"].installed;
     document.getElementById("openKu9py").disabled = !data.python.installed || data.pythonRestart;
   });
 }
@@ -47,7 +48,7 @@ function catalogRow(list, entry, release) {
   row.appendChild(copy);
   button.type = "button";
   if (entry.action === "install") {
-    if (entry.current && entry.kind === "channel" && entry.id.indexOf("folia") === 0) {
+    if (entry.current && entry.kind === "channel" && (entry.id.indexOf("folia") === 0 || entry.id === "file-browser")) {
       button.textContent = "在电视打开";
       button.onclick = function () { openPlugin(entry.id); };
     } else {
