@@ -242,6 +242,9 @@ android {
             if (project.findProperty('testRunner') == 'xiao.bu.tv.CjsV5Instrumentation') {
                 proguardFile 'proguard-cjs-test.pro'
             }
+            if (project.findProperty('testRunner') == 'xiao.bu.tv.TvBoxProtocolInstrumentation') {
+                proguardFile 'proguard-tvbox-test.pro'
+            }
         }
     }
 

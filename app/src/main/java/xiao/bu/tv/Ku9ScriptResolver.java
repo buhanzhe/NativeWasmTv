@@ -84,6 +84,9 @@ final class Ku9ScriptResolver {
     private volatile Pending pending;
     private Ku9PlaylistServer playlistServer;
     private volatile int generation;
+    private java.util.concurrent.Future<?> pythonCall;
+    private static final java.util.concurrent.ExecutorService PYTHON = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(8));
     private final Runnable refreshPlaylist = new Runnable() {
         @Override
         public void run() {
@@ -106,7 +109,7 @@ final class Ku9ScriptResolver {
     }
 
     static boolean isKu9Source(String value) {
-        return Ku9ScriptLoader.isSource(value);
+        return Ku9ScriptLoader.isSource(value) || Ku9Python.matches(value);
     }
 
     void resolve(final int requestId, final String channelName, final String sourceUrl,
@@ -117,10 +120,12 @@ final class Ku9ScriptResolver {
             @Override
             public void run() {
                 try {
-                    final String script = scriptLoader.load(sourceUrl, false);
+                    boolean python = Ku9Python.matches(sourceUrl);
+                    if (python && speculative) throw new IOException("切台时运行 Python 脚本");
+                    final String script = python ? Ku9Python.load(activity, sourceUrl) : scriptLoader.load(sourceUrl, false);
                     final Pending work = new Pending(requestId, requestGeneration,
                             channelName, sourceUrl, script, callback);
-                    work.javascript = buildJavascript(work);
+                    if (!python) work.javascript = contract.build(work.script, item(work));
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -149,10 +154,25 @@ final class Ku9ScriptResolver {
 
     private void execute(Pending request) {
         if (pending != request || request.generation != generation) return;
-        engine.execute(request.javascript, new Bridge(request), request.browser);
+        if (!Ku9Python.matches(request.sourceUrl)) {
+            engine.execute(request.javascript, new Bridge(request), request.browser);
+            return;
+        }
+        Bridge bridge = new Bridge(request);
+        try {
+            pythonCall = PYTHON.submit(() -> {
+                try {
+                    bridge.onComplete(Ku9Python.run(activity, request.sourceUrl, request.script, item(request)).toString());
+                } catch (Exception | LinkageError error) {
+                    bridge.onFailure(safeMessage(error));
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            fail(request, "Python 正忙，请稍后再试");
+        }
     }
 
-    private String buildJavascript(Pending request) {
+    private JSONObject item(Pending request) {
         JSONObject item = new JSONObject();
         try {
             // IPTV source labels are display text, not query parameter values.
@@ -161,7 +181,7 @@ final class Ku9ScriptResolver {
             item.put("name", request.channelName == null ? "" : request.channelName);
         } catch (JSONException ignored) {
         }
-        return contract.build(request.script, item);
+        return item;
     }
 
     private void complete(Pending request, String json) {
@@ -278,6 +298,10 @@ final class Ku9ScriptResolver {
     }
 
     private void clearPending() {
+        if (pythonCall != null) {
+            pythonCall.cancel(true);
+            pythonCall = null;
+        }
         handler.removeCallbacks(refreshPlaylist);
         pending = null;
         engine.cancel();

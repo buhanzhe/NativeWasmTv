@@ -70,7 +70,41 @@ static JSValue call_host(JSContext *ctx, JSValueConst self, int argc, JSValueCon
     return value;
 }
 
-JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecute(JNIEnv *e, jclass klass, jbyteArray script, jobject host) {
+static char *normalize_module(JSContext *ctx, const char *base, const char *name, void *opaque) {
+    JSValue args[] = {JS_NewString(ctx, base), JS_NewString(ctx, name)};
+    JSValue value = call_host(ctx, JS_UNDEFINED, 2, args, 17);
+    JS_FreeValue(ctx, args[0]);
+    JS_FreeValue(ctx, args[1]);
+    const char *resolved = JS_IsString(value) ? JS_ToCString(ctx, value) : NULL;
+    char *result = resolved ? js_strdup(ctx, resolved) : NULL;
+    if (!result && !JS_IsException(value)) JS_ThrowReferenceError(ctx, "Invalid module name");
+    JS_FreeCString(ctx, resolved);
+    JS_FreeValue(ctx, value);
+    return result;
+}
+
+static JSModuleDef *load_module(JSContext *ctx, const char *name, void *opaque) {
+    JSValue arg = JS_NewString(ctx, name);
+    JSValue body = call_host(ctx, JS_UNDEFINED, 1, &arg, 16);
+    JS_FreeValue(ctx, arg);
+    if (!JS_IsString(body)) {
+        if (!JS_IsException(body)) JS_ThrowReferenceError(ctx, "Module could not be loaded");
+        JS_FreeValue(ctx, body);
+        return NULL;
+    }
+    size_t size;
+    const char *code = JS_ToCStringLen(ctx, &size, body);
+    JSValue value = code ? JS_Eval(ctx, code, size, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY)
+                         : JS_EXCEPTION;
+    JS_FreeCString(ctx, code);
+    JS_FreeValue(ctx, body);
+    if (JS_IsException(value)) return NULL;
+    JSModuleDef *module = JS_VALUE_GET_PTR(value);
+    JS_FreeValue(ctx, value);
+    return module;
+}
+
+static void execute(JNIEnv *e, jbyteArray script, jobject host, int module) {
     JSRuntime *rt = NULL;
     JSContext *ctx = NULL;
     Host h = {0};
@@ -88,6 +122,7 @@ JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecute(JNIEnv *e, jc
     JS_SetMemoryLimit(rt, 16 * 1024 * 1024);
     JS_SetMaxStackSize(rt, 256 * 1024);
     JS_SetInterruptHandler(rt, interrupted, &h);
+    if (module) JS_SetModuleLoaderFunc(rt, normalize_module, load_module, NULL);
     ctx = JS_NewContext(rt);
     if (!ctx) goto oom;
     JS_SetContextOpaque(ctx, &h);
@@ -105,14 +140,19 @@ JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecute(JNIEnv *e, jc
     if (!code) goto oom;
     (*e)->GetByteArrayRegion(e, script, 0, size, (jbyte *)code);
     code[size] = 0;
-    JSValue result = JS_Eval(ctx, code, size, "site-plugin.js", JS_EVAL_TYPE_GLOBAL);
+    JSValue result = JS_Eval(ctx, code, size, "site-plugin.js",
+                             module ? JS_EVAL_TYPE_MODULE : JS_EVAL_TYPE_GLOBAL);
     js_free(ctx, code);
     int failed = JS_IsException(result);
-    JS_FreeValue(ctx, result);
     while (!failed && JS_IsJobPending(rt)) {
         JSContext *job_ctx = NULL;
         if (JS_ExecutePendingJob(rt, &job_ctx) < 0) { failed = 1; break; }
     }
+    if (module && !failed && JS_PromiseState(ctx, result) == JS_PROMISE_REJECTED) {
+        JS_Throw(ctx, JS_PromiseResult(ctx, result));
+        failed = 1;
+    }
+    JS_FreeValue(ctx, result);
     if (failed && !(*e)->ExceptionCheck(e)) {
         JSValue error = JS_GetException(ctx);
         const char *message = JS_ToCString(ctx, error);
@@ -126,4 +166,12 @@ oom:
 done:
     if (ctx) JS_FreeContext(ctx);
     if (rt) JS_FreeRuntime(rt);
+}
+
+JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecute(JNIEnv *e, jclass klass, jbyteArray script, jobject host) {
+    execute(e, script, host, 0);
+}
+
+JNIEXPORT void JNICALL Java_xiao_bu_tv_NativeQuickJs_nativeExecuteModule(JNIEnv *e, jclass klass, jbyteArray script, jobject host) {
+    execute(e, script, host, 1);
 }

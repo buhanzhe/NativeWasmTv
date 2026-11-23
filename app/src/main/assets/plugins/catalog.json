@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "release": "v1.0.3",
+  "plugins": [
+    {
+      "id": "tvbox",
+      "name": "TVBox",
+      "kind": "channel",
+      "artifacts": [
+        {
+          "file": "tvbox.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/tvbox.jar",
+          "sha256": "72e55453f166171bd8a32da217c084115f880844f4996f3a150766f0c2a76cfc",
+          "bytes": 1058778,
+          "version": "6",
+          "minSdk": 14,
+          "abis": []
+        }
+      ]
+    },
+    {
+      "id": "python",
+      "name": "Python 运行时",
+      "kind": "python",
+      "artifacts": [
+        {
+          "file": "python-arm32.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/python-arm32.jar",
+          "sha256": "dc0292b8975882e2d2fdeb6e4ea9d9a3ec451117f29f7dbb8889a2a610029818",
+          "bytes": 9977250,
+          "version": "2",
+          "minSdk": 14,
+          "abis": [
+            "armeabi-v7a"
+          ],
+          "pythonVersion": "3.11.17"
+        },
+        {
+          "file": "python-arm64.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/python-arm64.jar",
+          "sha256": "8ea75b30123035909e149c694598c4c816b6c15c7caa5b3d4c5ead6d4c98b6c4",
+          "bytes": 11173405,
+          "version": "2",
+          "minSdk": 24,
+          "abis": [
+            "arm64-v8a"
+          ],
+          "pythonVersion": "3.14.8"
+        }
+      ]
+    },
+    {
+      "id": "bl",
+      "name": "BL 哔哩哔哩",
+      "kind": "channel",
+      "artifacts": [
+        {
+          "file": "bl.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/bl.jar",
+          "sha256": "f8b4005fe683fddaf739bfb5625fdb3be724f8afc1012017d7a2f4c7784a1604",
+          "bytes": 702232,
+          "version": "18",
+          "minSdk": 14,
+          "abis": []
+        }
+      ]
+    },
+    {
+      "id": "tvbus",
+      "name": "TVBus",
+      "kind": "tvbus",
+      "artifacts": []
+    },
+    {
+      "id": "folia-full",
+      "name": "Folia 音乐",
+      "kind": "channel",
+      "artifacts": [
+        {
+          "file": "folia-full.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/folia-full.jar",
+          "sha256": "e468889775459a57952ee5ce3e6e5aa690c83c1a05ec7a42627f3eff458c3d67",
+          "bytes": 13088234,
+          "version": "7",
+          "minSdk": 24,
+          "abis": [],
+          "minWebView": 61
+        }
+      ]
+    },
+    {
+      "id": "folia",
+      "name": "Folia 音频频道",
+      "kind": "channel",
+      "artifacts": [
+        {
+          "file": "folia.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/folia.jar",
+          "sha256": "4b21c696b6b05d0245013a5272b017bc9397f39a4dbd5ce1016b47773f610ec5",
+          "bytes": 25683,
+          "version": "1",
+          "minSdk": 14,
+          "abis": []
+        }
+      ]
+    },
+    {
+      "id": "ku9-hnyx",
+      "name": "Ku9 湖南 IPv6",
+      "kind": "ku9-js",
+      "artifacts": [
+        {
+          "file": "hnyx.js",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.3/hnyx.js",
+          "sha256": "6b92c3c3239ae6187e208abd9670915f8a8f338340c1fa37588c19209e0cf738",
+          "bytes": 9753,
+          "version": "6b92c3c3239a",
+          "minSdk": 14,
+          "abis": []
+        }
+      ]
+    }
+  ]
+}

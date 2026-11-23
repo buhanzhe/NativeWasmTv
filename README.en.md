@@ -26,6 +26,8 @@ Standard editions cover ARM32, ARM64 and x86. `ntv_bro.apk` is the ARM32 browser
 
 Public standard editions build without `browser-core`; Windows users can run `build-release.bat`. Browser/full editions are skipped when the authorized private core or matching signing certificate is unavailable.
 
+Plugin Management selects downloads for the receiver's Android version and CPU architecture, with local JAR uploads and a separate Python runtime. [nTv plugin releases](https://github.com/buhanzhe/ntv-plugin/releases/latest)
+
 ## License
 
 Copyright (C) 2026 buhanzhe and contributors. Original code is licensed under [GPL-3.0-only](LICENSE). Redistribution requires applicable notices and complete corresponding source; see [copyright and use notes](COPYRIGHT.md). Only play content you are authorized to access.

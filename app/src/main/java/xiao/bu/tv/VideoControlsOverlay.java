@@ -23,7 +23,7 @@ import android.widget.TextView;
 
 /** Owns the whole touch sequence while visible; no gesture reaches the player. */
 final class VideoControlsOverlay extends FrameLayout {
-    interface Playback {
+    interface Playback extends xiao.bu.tv.jar.ChannelPlugin.PlayerControls {
         boolean playing();
         boolean completed();
         String status();
@@ -40,7 +40,7 @@ final class VideoControlsOverlay extends FrameLayout {
         void live();
     }
     private final Activity activity;
-    private final Playback playback;
+    private final xiao.bu.tv.jar.ChannelPlugin.PlayerControls playback;
     private final boolean touchAdjustments;
     private final Icon toggle;
     private final TextView time, feedback, speed, title;
@@ -57,7 +57,12 @@ final class VideoControlsOverlay extends FrameLayout {
     private long startPosition, gestureDuration, seekPosition;
     private int gestureAxis;
     private boolean moved, dragging;
-    private final Runnable dismiss = new Runnable() { public void run() {if(playback.completed())return;if(playback.loading()){postDelayed(this,1000L);return;}hide();} };
+    private final Runnable dismiss = new Runnable() { public void run() {
+        if (playback.completed() || !playback.playing() && !playback.loading()
+                || speedOptions.getVisibility() == VISIBLE) return;
+        if (playback.loading()) { postDelayed(this,1000L); return; }
+        hide();
+    } };
     private final Runnable tick = new Runnable() {
         public void run() {
             if (getVisibility() != VISIBLE) return;
@@ -67,7 +72,7 @@ final class VideoControlsOverlay extends FrameLayout {
         }
     };
 
-    VideoControlsOverlay(Activity owner, Playback source, boolean television) {
+    VideoControlsOverlay(Activity owner, xiao.bu.tv.jar.ChannelPlugin.PlayerControls source, boolean television) {
         super(owner);
         activity = owner;
         playback = source;
@@ -102,7 +107,7 @@ final class VideoControlsOverlay extends FrameLayout {
         returnLive=label("回到直播",16);returnLive.setContentDescription("回到直播");
         LayoutParams liveBounds=new LayoutParams(dp(100),dp(48),Gravity.TOP|Gravity.RIGHT);
         liveBounds.topMargin=dp(20);liveBounds.rightMargin=dp(24);addView(returnLive,liveBounds);
-        returnLive.setOnClickListener(v->playback.live());returnLive.setVisibility(GONE);
+        returnLive.setOnClickListener(v->{if(playback instanceof Playback)((Playback)playback).live();});returnLive.setVisibility(GONE);
         if (touchAdjustments) {
             Icon volume = new Icon(owner, "volume"), brightness = new Icon(owner, "sun");
             LayoutParams left = new LayoutParams(dp(48), dp(48), Gravity.LEFT | Gravity.CENTER_VERTICAL);
@@ -155,7 +160,7 @@ final class VideoControlsOverlay extends FrameLayout {
         bottom.addView(speed, new LinearLayout.LayoutParams(-1, dp(44)));
         speed.setOnClickListener(new OnClickListener() {
             public void onClick(View v) {
-                if (!playback.speedSupported()) return;
+                if (!speedSupported()) return;
                 speedOptions.setVisibility(speedOptions.getVisibility() == VISIBLE ? GONE : VISIBLE); arm();
             }
         });
@@ -177,7 +182,7 @@ final class VideoControlsOverlay extends FrameLayout {
         view.setGravity(Gravity.CENTER); return view;
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    void show() { LayoutParams heading=(LayoutParams)title.getLayoutParams();heading.rightMargin=dp(playback.catchup()?132:32);title.setLayoutParams(heading);title.setText(playback.title()); feedback.setText(""); speedOptions.setVisibility(GONE); setVisibility(VISIBLE); bringToFront(); refresh(); removeCallbacks(tick); post(tick); arm(); }
+    void show() { LayoutParams heading=(LayoutParams)title.getLayoutParams();heading.rightMargin=dp(catchup()?132:32);title.setLayoutParams(heading);title.setText(playback.title()); feedback.setText(""); speedOptions.setVisibility(GONE); setVisibility(VISIBLE); bringToFront(); refresh(); removeCallbacks(tick); post(tick); arm(); }
     void hide() { setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
     void step(long delta) {
         long duration = playback.duration();
@@ -194,7 +199,7 @@ final class VideoControlsOverlay extends FrameLayout {
         }
     }
     private void refresh() {
-        returnLive.setVisibility(playback.catchup()?VISIBLE:GONE);
+        returnLive.setVisibility(catchup()?VISIBLE:GONE);
         boolean completed = playback.completed();
         if (completed) feedback.setText("播放完成 · 重新播放");
         else if ("播放完成 · 重新播放".contentEquals(feedback.getText())) feedback.setText("");
@@ -204,8 +209,8 @@ final class VideoControlsOverlay extends FrameLayout {
         toggle.kind = playback.playing() ? "pause" : "play"; toggle.invalidate();
         toggle.setContentDescription(completed ? "重新播放" : playback.playing() ? "暂停" : "播放");
         speed.setText(playback.speed() == 1f ? "倍速" : playback.speed() + "×");
-        speed.setEnabled(playback.speedSupported());
-        speed.setAlpha(playback.speedSupported() ? 1f : 0.4f);
+        speed.setEnabled(speedSupported());
+        speed.setAlpha(speedSupported() ? 1f : 0.4f);
         if (dragging) return;
         long duration = playback.duration(), position = playback.position();
         speed.setVisibility(duration > 0 ? VISIBLE : GONE);
@@ -214,6 +219,10 @@ final class VideoControlsOverlay extends FrameLayout {
         seek.setEnabled(duration > 0);
         seek.setProgress(duration > 0 ? (int) (Math.min(position, duration) * 1000L / duration) : 0);
         time.setText(duration > 0 ? stamp(position) + " / " + stamp(duration) : "直播");
+    }
+    private boolean catchup() { return playback instanceof Playback && ((Playback) playback).catchup(); }
+    private boolean speedSupported() {
+        return playback instanceof Playback ? ((Playback) playback).speedSupported() : playback.duration() > 0;
     }
     private static String stamp(long ms) {
         long seconds = Math.max(0L, ms) / 1000L;

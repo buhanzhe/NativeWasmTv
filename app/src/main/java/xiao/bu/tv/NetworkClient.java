@@ -83,9 +83,15 @@ final class NetworkClient {
     }
 
     static HttpURLConnection openBounded(URL url, int timeoutMs) throws IOException {
-        return new OkUrlFactory(sharedClient().newBuilder()
+        return openBounded(url, timeoutMs, false);
+    }
+
+    static HttpURLConnection openBounded(URL url, int timeoutMs, boolean http1) throws IOException {
+        OkHttpClient.Builder transport = sharedClient().newBuilder()
                 .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                .retryOnConnectionFailure(false).build()).open(url);
+                .retryOnConnectionFailure(false);
+        if (http1) transport.protocols(java.util.Collections.singletonList(okhttp3.Protocol.HTTP_1_1));
+        return new OkUrlFactory(transport.build()).open(url);
     }
 
     static void invalidateDns(String hostname) {

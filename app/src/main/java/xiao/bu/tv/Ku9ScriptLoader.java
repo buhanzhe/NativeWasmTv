@@ -29,7 +29,7 @@ final class Ku9ScriptLoader {
         preferredDirectory(activity);
     }
 
-    static SavedScript saveUserScript(Activity activity, String fileName, byte[] body)
+    static synchronized SavedScript saveUserScript(Activity activity, String fileName, byte[] body)
             throws IOException {
         String safeName = fileName == null ? "" : fileName.trim();
         if (!isSafeScriptName(safeName)) {
@@ -270,7 +270,7 @@ final class Ku9ScriptLoader {
         return null;
     }
 
-    private static File findUserScript(Activity activity, String fileName) {
+    static File findUserScript(Activity activity, String fileName) {
         File script = findScript(externalDirectory(activity), fileName);
         return script == null ? findScript(internalDirectory(activity), fileName) : script;
     }

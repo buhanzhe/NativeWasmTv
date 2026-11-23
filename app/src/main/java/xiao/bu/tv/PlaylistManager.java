@@ -1903,6 +1903,7 @@ final class PlaylistManager {
                 || value.startsWith("rtmps://")
                 || value.startsWith("rtp://") || value.startsWith("udp://")
                 || value.startsWith("rtsp://") || value.startsWith("tvbus://") || value.startsWith("sop://")
+                || JarChannelSource.matches(text)
                 || value.startsWith("webview://http://")
                 || value.startsWith("webview://https://");
     }

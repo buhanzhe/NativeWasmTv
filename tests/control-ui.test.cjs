@@ -18,6 +18,7 @@ function node(tag) {
     querySelectorAll(selector) { const result=[]; function visit(parent) { for(const child of parent.children||[]) { if(child.tagName==='BUTTON' && (!selector.includes(':disabled') || !child.disabled)) result.push(child); visit(child); } } visit(this); return result; }
   };
   Object.defineProperty(el, 'innerHTML', {set() { el.children = []; }});
+  Object.defineProperty(el, 'firstChild', {get() { return el.children[0]; }});
   Object.defineProperty(el, 'offsetHeight', {get() { return Math.min(parseInt(el.style.maxHeight)||1000, el.children.length*44+14); }});
   return el;
 }
@@ -63,3 +64,53 @@ for(const name of ['index.html',...fs.readdirSync(root+'/pages').filter(x=>x.end
 }
 assert.doesNotMatch(fs.readFileSync(root+'/js/pages/playback.js','utf8'),/legacySelectPicker|setupLegacyDateTimeSelects/);
 console.log('PASS production pages: same-origin APIs, one shared UI bundle and no obsolete picker');
+
+const pluginNodes = new Map(), pluginRequests = [], pluginMessages = [];
+const catalogEntry = {id: 'python', name: 'Python', kind: 'python', action: 'install', current: false};
+let savedCatalog = false;
+context.document.getElementById = id => {
+  if (!pluginNodes.has(id)) pluginNodes.set(id, node('div'));
+  return pluginNodes.get(id);
+};
+context.rememberManagementNavigation = () => {};
+context.setConnectionStatus = () => {};
+context.toast = (message, error) => pluginMessages.push({message, error});
+context.api = (path, _body, done) => {
+  if (path.includes('action=catalog')) done(null, {release: 'v1.0.0', cached: savedCatalog, plugins: [catalogEntry]});
+  else done(null, {tvbus: {}, python: {}, bl: {}, tvbox: {}});
+};
+context.XMLHttpRequest = function () {
+  this.open = (_method, path) => { this.path = path; };
+  this.setRequestHeader = () => {};
+  this.send = () => { pluginRequests.push(this); };
+};
+vm.runInContext(fs.readFileSync(root+'/js/pages/plugins.js','utf8'), context);
+const installButton = pluginNodes.get('pluginCatalog').children[0].children[1];
+installButton.onclick();
+layer('micro-confirm-layer').children[0].querySelectorAll('button')[1].onclick();
+flush();
+assert.equal(pluginRequests.length, 1);
+assert.equal(installButton.textContent, '安装中…');
+assert.equal(installButton.disabled, true);
+assert.equal(pluginNodes.get('refreshPluginCatalog').disabled, true);
+pluginRequests[0].ontimeout();
+assert.equal(installButton.textContent, '安装');
+assert.equal(installButton.disabled, false);
+assert.equal(pluginNodes.get('refreshPluginCatalog').disabled, false);
+assert.deepEqual(pluginMessages.at(-1), {message: '插件操作超时', error: true});
+
+installButton.onclick();
+layer('micro-confirm-layer').children[0].querySelectorAll('button')[1].onclick();
+flush();
+assert.equal(pluginRequests.length, 2);
+assert.match(pluginRequests[1].path, /action=install-release&type=python&name=v1\.0\.0$/);
+catalogEntry.current = true;
+pluginRequests[1].status = 200;
+pluginRequests[1].responseText = '{"ok":true}';
+pluginRequests[1].onload();
+assert.equal(pluginNodes.get('pluginCatalog').children[0].children[1].textContent, '已安装');
+assert.equal(pluginNodes.get('refreshPluginCatalog').disabled, false);
+savedCatalog = true;
+context.refreshCatalog(true);
+assert.equal(pluginNodes.get('pluginCatalogStatus').textContent, '已保存的发布版本 v1.0.0');
+console.log('PASS plugin install shows pending, releases controls after timeout and refreshes the installed status');

@@ -852,7 +852,8 @@ function playlistAttribute(line, name) {
 
 function playlistStreamUrl(value, base) {
   var text = String(value || "").replace(/^\s+|\s+$/g, "");
-  if (/^(https?|rtmps?|rtmpt|rtsp|rtp|udp|tvbus|sop|webview):\/\//i.test(text)) return text;
+  if (/^(https?|rtmps?|rtmpt|rtsp|rtp|udp|tvbus|sop|webview):\/\//i.test(text) ||
+      /^ntv-plugin:\/\/local\/(bl|tvbox|folia|folia-full)\.jar(?:\?|$)/.test(text)) return text;
   if (!/^https?:\/\//i.test(base)) return "";
   try {
     return new URL(text, base).href;

@@ -61,6 +61,13 @@
 -keep interface xiao.bu.tv.jar.ChannelPlugin$FullscreenHost { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$PlaybackHost { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$NativePage { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$VodHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$PlayerUiHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$PlayerControls { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$PlayerUi { *; }
+-keepclassmembers class * implements xiao.bu.tv.jar.ChannelPlugin$PlayerUi { public *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$ScriptHost { *; }
+-keep interface xiao.bu.tv.jar.PythonPlugin { *; }
 -keepclassmembers class * implements xiao.bu.tv.jar.ChannelPlugin$Host { public *; }
 
 # Downloaded native channels call these public APIs outside the host's reachability graph.

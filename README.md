@@ -30,4 +30,6 @@
 
 [内测QQ群：1121401707](https://qm.qq.com/q/abYSrBCq52) · [Linux.do](https://linux.do/u/buhanzhe) · [恩山论坛](https://www.right.com.cn/forum/thread-8484303-1-1.html)
 
+网页管理的「插件管理」支持按设备架构安装在线插件或上传 JAR，包含 TVBox 与独立 Python 运行时。[nTv 插件发布页](https://github.com/buhanzhe/ntv-plugin/releases/latest)
+
 Copyright (C) 2026 buhanzhe and contributors. 原创代码采用 [GPLv3](LICENSE)（`GPL-3.0-only`）；再分发的版权、许可和完整对应源码义务见 [版权与使用说明](COPYRIGHT.md)。请仅播放有权访问的内容。

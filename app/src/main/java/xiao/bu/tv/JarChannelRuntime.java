@@ -1,34 +1,36 @@
 package xiao.bu.tv;
 
 import android.content.Context;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.widget.FrameLayout;
-import dalvik.system.DexClassLoader;
 import java.io.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.zip.*;
 import org.json.JSONObject;
 import xiao.bu.tv.jar.ChannelPlugin;
 
 /** Executable plugins are trusted code, pinned by the playlist's SHA-256. */
 final class JarChannelRuntime {
-    interface Callback extends ChannelPlugin.Host { boolean current(); }
+    interface Callback extends ChannelPlugin.Host {
+        boolean current();
+        default void playVod(String url, JSONObject headers) { play(url); }
+    }
     static final class PlaybackReport {
         final Object session;
         final Bundle values;
         PlaybackReport(Object session,Bundle values){this.session=session;this.values=new Bundle(values);}
     }
+    private interface PluginHost extends ChannelPlugin.PlayerUiHost, ChannelPlugin.PlaybackHost { }
     private final Context context;
     private final FrameLayout root;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private ChannelPlugin plugin;
     private View view;
+    private boolean playingVod;
     private int generation;
     private boolean destroyed;
     private Callback callback;
@@ -45,47 +47,34 @@ final class JarChannelRuntime {
         worker.execute(()->{
             try {
                 JarChannelSource spec=new JarChannelSource(source);
-                File dir=new File(context.getFilesDir(),"channel-jars");
-                if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("无法创建插件目录");
-                File jar=new File(dir,spec.sha+".jar");
-                if(jar.exists()) {
-                    try(InputStream in=new FileInputStream(jar)) {
-                        if(!spec.sha.equals(sha(RadioUiCatalog.read(in,32*1024*1024)))) {
-                            if(!jar.delete())throw new IOException("无法清理损坏插件");
-                        }
-                    }
-                }
-                if(!jar.exists()) {
-                    byte[] bytes=RadioUiCatalog.download(spec.url,32*1024*1024,25000);
-                    if(!spec.sha.equals(sha(bytes)))throw new IOException("JAR 插件校验失败");
-                    File temp=File.createTempFile("install-",".tmp",dir);
-                    try {
-                        try(FileOutputStream out=new FileOutputStream(temp)){out.write(bytes);out.getFD().sync();}
-                        if(!temp.setReadOnly()||!temp.renameTo(jar))throw new IOException("无法保存插件");
-                    } finally {temp.delete();}
-                }
-                JSONObject info;
-                try(ZipFile zip=new ZipFile(jar)) {
-                    ZipEntry metadata=zip.getEntry("channel-plugin.json");
-                    if(metadata==null||zip.getEntry("classes.dex")==null)throw new IOException("不是频道插件");
-                    try(InputStream in=zip.getInputStream(metadata)) {
-                        info=new JSONObject(new String(RadioUiCatalog.read(in,4096),"UTF-8"));
-                    }
-                }
-                String entry=info.getString("entry");
-                if(info.getInt("api")!=1 || info.getInt("minSdk")<14
-                        || info.getInt("minSdk")>Build.VERSION.SDK_INT || !entry.startsWith("xiao.bu.channel."))
-                    throw new IOException("频道插件版本不兼容");
-                if(!jar.setReadOnly())throw new IOException("插件必须只读");
-                File dex=new File(dir,"dex");if(!dex.isDirectory()&&!dex.mkdirs())throw new IOException("无法创建 DEX 目录");
-                ClassLoader loader=new DexClassLoader(jar.getAbsolutePath(),dex.getAbsolutePath(),null,ChannelPlugin.class.getClassLoader());
-                Class<? extends ChannelPlugin> type=loader.loadClass(entry).asSubclass(ChannelPlugin.class);
+                File jar=spec.installed.isEmpty() ? download(spec) : InstalledPlugins.installed(context,spec.installed);
+                if (jar==null) throw new IOException("请先在管理网页安装频道插件");
+                JSONObject info=InstalledPlugins.metadata(jar,spec.installed);
+                ClassLoader loader=InstalledPlugins.loader(context,jar);
+                Class<? extends ChannelPlugin> type=loader.loadClass(info.getString("entry")).asSubclass(ChannelPlugin.class);
                 main.post(()->{
                     if(destroyed||token!=generation||!callback.current())return;
                     ChannelPlugin incoming=null;
                     try {
                         incoming=type.getConstructor().newInstance();
-                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.PlaybackHost(){
+                        View content=incoming.create(context,loader,spec.config,new PluginHost(){
+                            public ChannelPlugin.PlayerUi createPlayerUi(ChannelPlugin.PlayerControls playback) {
+                                if (!(context instanceof android.app.Activity))
+                                    throw new IllegalStateException("播放控件需要 Activity");
+                                boolean television = context instanceof MainActivity
+                                        ? ((MainActivity) context).isTelevisionDevice()
+                                        : (context.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_TYPE_MASK)
+                                                == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION;
+                                VideoControlsOverlay controls = new VideoControlsOverlay((android.app.Activity) context, playback, television);
+                                return new ChannelPlugin.PlayerUi() {
+                                    public View view() { return controls; }
+                                    public void show() { controls.show(); }
+                                    public void hide() { controls.hide(); }
+                                    public boolean visible() { return controls.visible(); }
+                                    public boolean surfaceGesture(android.view.MotionEvent event) { return controls.handleSurfaceGesture(event); }
+                                    public void dispose() { controls.hide(); }
+                                };
+                            }
                             public okhttp3.OkHttpClient httpClient(){return NetworkClient.sharedClient();}
                             public boolean isFullscreenEnabled(){return FullscreenPolicy.isEnabled(context);}
                             public void setFullscreenEnabled(boolean enabled){
@@ -103,6 +92,24 @@ final class JarChannelRuntime {
                                 if(token!=generation||!callbackCurrent())return;
                                 if(session==null||diagnostics==null)clearPlaybackReport();
                                 else playbackReport=new PlaybackReport(session,diagnostics);
+                            }
+                            public JSONObject python(JSONObject request) throws Exception {
+                                if (Thread.currentThread().isInterrupted()) throw new IOException("频道已关闭");
+                                return InstalledPlugins.python(context, request);
+                            }
+                            public void javascript(String source, ChannelPlugin.ScriptHost host) throws Exception {
+                                NativeQuickJs.executeModule(source, new NativeQuickJs.Host() {
+                                    public String invoke(int op, String[] arguments) throws Exception {
+                                        return host.invoke(op, arguments);
+                                    }
+                                    public boolean isCancelled() { return host.isCancelled(); }
+                                });
+                            }
+                            public void playVod(String url, JSONObject headers) {
+                                if(token!=generation||!callback.current()||view==null) return;
+                                playingVod=true;
+                                view.setVisibility(View.GONE);
+                                callback.playVod(url,headers);
                             }
                             public void chooseDirectory(android.webkit.ValueCallback<android.net.Uri[]> selected){
                                 if(token!=generation||!callbackCurrent()){selected.onReceiveValue(null);return;}
@@ -149,6 +156,7 @@ final class JarChannelRuntime {
         generation++;
         callback=null;
         clearPlaybackReport();
+        playingVod=false;
         if(browserProfile!=null){browserProfile.dispose();browserProfile=null;}
         browser=null;
         filePicker.cancel();
@@ -178,6 +186,13 @@ final class JarChannelRuntime {
         if(playbackReport==null)return;
         playbackReport=null;
         if(context instanceof MainActivity)((MainActivity)context).clearPluginPlaybackDiagnostics();
+    }
+    boolean resumeFromVod() {
+        if (!playingVod || view==null) return false;
+        playingVod=false;
+        view.setVisibility(View.VISIBLE);
+        view.requestFocus();
+        return true;
     }
     boolean goBackIfPossible(){
         if(visible()&&plugin instanceof ChannelPlugin.NativePage) {
@@ -246,10 +261,23 @@ final class JarChannelRuntime {
         close();
         if(owner!=null&&owner.current())owner.status("频道页面运行失败，请重新进入");
     }
-    private static String sha(byte[] bytes)throws Exception {
-        StringBuilder result=new StringBuilder();
-        for(byte b:java.security.MessageDigest.getInstance("SHA-256").digest(bytes))
-            result.append(String.format(java.util.Locale.US,"%02x",b&255));
-        return result.toString();
+    private File download(JarChannelSource spec) throws Exception {
+        File dir=new File(context.getFilesDir(),"channel-jars");
+        if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("无法创建插件目录");
+        File jar=new File(dir,spec.sha+".jar");
+        if(jar.exists()) {
+            try(InputStream in=new FileInputStream(jar)) {
+                if(spec.sha.equals(TvbusBundle.sha(RadioUiCatalog.read(in,InstalledPlugins.LIMIT)))) return jar;
+            }
+            if(!jar.delete())throw new IOException("无法清理损坏插件");
+        }
+        byte[] bytes=RadioUiCatalog.download(spec.url,InstalledPlugins.LIMIT,25000);
+        if(!spec.sha.equals(TvbusBundle.sha(bytes)))throw new IOException("JAR 插件校验失败");
+        File temp=File.createTempFile("install-",".tmp",dir);
+        try {
+            try(FileOutputStream out=new FileOutputStream(temp)){out.write(bytes);out.getFD().sync();}
+            if(!temp.setReadOnly()||!temp.renameTo(jar))throw new IOException("无法保存插件");
+            return jar;
+        } finally {temp.delete();}
     }
 }

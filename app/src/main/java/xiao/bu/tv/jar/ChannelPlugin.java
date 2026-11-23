@@ -35,6 +35,39 @@ public interface ChannelPlugin {
         // Pass null when the plugin leaves playback.
         void reportPlaybackDiagnostics(Object session, android.os.Bundle diagnostics);
     }
+    interface VodHost extends NativeHost {
+        void playVod(String url, JSONObject headers);
+        JSONObject python(JSONObject request) throws Exception;
+        void javascript(String source, ScriptHost host) throws Exception;
+    }
+    interface PlayerUiHost extends VodHost {
+        PlayerUi createPlayerUi(PlayerControls playback);
+    }
+    interface PlayerControls {
+        boolean playing();
+        boolean completed();
+        boolean loading();
+        String status();
+        String title();
+        long duration();
+        long position();
+        void toggle();
+        void seek(long position);
+        float speed();
+        void speed(float value);
+    }
+    interface PlayerUi {
+        View view();
+        void show();
+        void hide();
+        boolean visible();
+        boolean surfaceGesture(android.view.MotionEvent event);
+        void dispose();
+    }
+    interface ScriptHost {
+        String invoke(int operation, String[] arguments) throws Exception;
+        boolean isCancelled();
+    }
     /** Optional native navigation and foreground lifecycle, independent of Activities. */
     interface NativePage {
         boolean onBack();

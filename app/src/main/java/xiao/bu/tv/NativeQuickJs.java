@@ -14,6 +14,10 @@ final class NativeQuickJs {
     static void execute(String script, Host host) throws IOException {
         nativeExecute(script.getBytes("UTF-8"), host);
     }
+    static void executeModule(String script, Host host) throws IOException {
+        nativeExecuteModule(script.getBytes("UTF-8"), host);
+    }
 
     private static native void nativeExecute(byte[] script, Host host) throws IOException;
+    private static native void nativeExecuteModule(byte[] script, Host host) throws IOException;
 }

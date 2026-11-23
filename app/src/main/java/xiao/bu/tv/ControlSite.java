@@ -4,7 +4,7 @@ package xiao.bu.tv;
 final class ControlSite {
     private static final String[] PAGES = {
             "media", "playback", "channels", "browser", "script", "system", "groups",
-            "flymouse", "advanced", "personalization", "about", "licenses"
+            "flymouse", "advanced", "personalization", "about", "licenses", "plugins"
     };
 
     private ControlSite() { }

@@ -2094,7 +2094,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(retired);
     }
 
-    private boolean isTelevisionDevice() {
+    boolean isTelevisionDevice() {
         if (hasTelevisionUi()) {
             return true;
         }
@@ -3266,6 +3266,76 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 public String uploadTvbusPlugin(byte[] body) throws Exception {
                     String version = TvbusBundle.install(MainActivity.this, body);
                     return new JSONObject().put("ok", true).put("message", "TVBus 插件 " + version + " 已安装，下次打开频道时使用").toString();
+                }
+
+                @Override
+                public String managePlugins(String action, String type, String name, byte[] body) throws Exception {
+                    if ("status".equals(action)) return InstalledPlugins.status(MainActivity.this).toString();
+                    if ("catalog".equals(action)) {
+                        try { return PluginCatalog.list(MainActivity.this, "1".equals(name)).toString(); }
+                        catch (Exception error) {
+                            AppLog.w(TAG, "Unable to load plugin release catalog", error);
+                            throw new ControlRequestException(503, "暂时无法获取在线插件列表");
+                        }
+                    }
+                    if ("install-release".equals(action)) {
+                        try { return PluginCatalog.install(MainActivity.this, type, name).toString(); }
+                        catch (Exception | LinkageError error) { throw pluginInstallError(error); }
+                    }
+                    if ("install".equals(action)) {
+                        if (body.length == 0) throw new ControlRequestException(400, "请选择插件文件");
+                        try {
+                            if ("ku9py".equals(type)) {
+                                String url = Ku9Python.save(MainActivity.this, name, body);
+                                return new JSONObject().put("ok", true).put("url", url).toString();
+                            }
+                            String version = InstalledPlugins.install(MainActivity.this, type, body);
+                            return new JSONObject().put("ok", true).put("version", version).toString();
+                        } catch (Exception | LinkageError error) {
+                            throw pluginInstallError(error);
+                        }
+                    }
+                    if ("open".equals(action) && (InstalledPlugins.isChannel(type) || "ku9py".equals(type))) {
+                        if (receiverRenderOnly) throw new IOException("请先结束投屏接管");
+                        String url;
+                        if ("ku9py".equals(type)) {
+                            url = new String(body, "UTF-8").trim();
+                            if (!Ku9Python.matches(url)) throw new IOException("请输入 Ku9 .py 地址");
+                        } else {
+                            if (InstalledPlugins.installed(MainActivity.this, type) == null)
+                                throw new IOException("请先安装频道插件");
+                            android.net.Uri.Builder source = new android.net.Uri.Builder()
+                                    .scheme("ntv-plugin").authority("local").appendPath(type + ".jar");
+                            if ("tvbox".equals(type)) {
+                                String config = new String(body, "UTF-8").trim();
+                                if (okhttp3.HttpUrl.parse(config) == null) throw new IOException("请输入 HTTP 或 HTTPS 配置地址");
+                                source.appendQueryParameter("url", config);
+                            }
+                            url = source.build().toString();
+                        }
+                        final String target = url;
+                        String title = "tvbox".equals(type) ? "TVBox" : "bl".equals(type) ? "BL"
+                                : type.startsWith("folia") ? "Folia" : "Ku9 Python";
+                        runOnMainThreadAndWait(() -> playQuickMedia(target, title, null));
+                        return new JSONObject().put("ok", true).put("url", url).toString();
+                    }
+                    throw new ControlRequestException(400, "未知插件操作");
+                }
+
+                public File createPluginUploadFile() throws IOException {
+                    return InstalledPlugins.stagingFile(MainActivity.this);
+                }
+
+                public String installPluginFile(String type, File file) throws Exception {
+                    try {
+                        String version = InstalledPlugins.install(MainActivity.this, type, file, null);
+                        return new JSONObject().put("ok", true).put("version", version).toString();
+                    } catch (Exception | LinkageError error) { throw pluginInstallError(error); }
+                }
+
+                private ControlRequestException pluginInstallError(Throwable error) {
+                    return new ControlRequestException(400, error instanceof IOException && error.getMessage() != null
+                            ? error.getMessage() : "插件包无效或入口不兼容");
                 }
 
                 @Override
@@ -8228,8 +8298,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 || message.contains("err_name_not_resolved") || message.contains("err_internet_disconnected")) {
             abortChannelSwitchAnimation();
             hideLoading();
-            showChannelBar(currentChannel().name, "网络连接异常，请检查网络后重试");
-            Toast.makeText(this, "网络连接异常，请检查网络连接", Toast.LENGTH_LONG).show();
+            showPlaybackNotice("网络连接异常，请检查网络后重试");
             return;
         }
         switchCustomSource(1, true, label, true);
@@ -8268,8 +8337,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         releasePlayer(showStoppedRadioArtwork(channel));
         abortChannelSwitchAnimation();
         hideLoading();
-        showChannelBar(channel.name, PlaybackHttpError.FORBIDDEN_MESSAGE);
-        Toast.makeText(this, "请更新授权地址，或从原网页重新嗅探资源", Toast.LENGTH_LONG).show();
+        showPlaybackNotice(PlaybackHttpError.FORBIDDEN_MESSAGE);
     }
 
     private boolean switchCustomSource(int offset, boolean automatic, String reason) {
@@ -8285,24 +8353,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             if (automatic) {
                 abortChannelSwitchAnimation();
                 hideLoading();
-                showChannelBar(channel.name, reason + "，当前频道没有备用线路");
+                showPlaybackNotice(reason + "，当前频道没有备用线路");
             } else {
-                showChannelBar(channel.name, "当前频道只有一条线路");
+                showPlaybackNotice("当前频道只有一条线路");
             }
             return true;
         }
         if (automatic && !autoSwitchSource && !confirmedUnavailable && !neighborProbeEnabled) {
             abortChannelSwitchAnimation();
             hideLoading();
-            showChannelBar(channel.name, reason + "，请按左右方向键切换线路");
-            Toast.makeText(this, "当前线路不可用，请按左右方向键切换线路",
-                    Toast.LENGTH_LONG).show();
+            showPlaybackNotice(reason + "，请按左右方向键切换线路");
             return true;
         }
         if (automatic && triedCustomSources >= count) {
                 abortChannelSwitchAnimation();
             hideLoading();
-            showChannelBar(channel.name, "全部 " + count + " 条线路均不可用");
+            showPlaybackNotice("全部 " + count + " 条线路均不可用");
             return true;
         }
         if (!automatic) {
@@ -8947,8 +9013,37 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
                     startResolvedPlayer(channel, url, true);
                 }
+                public void playVod(String url, JSONObject headers) {
+                    if (okhttp3.HttpUrl.parse(url) == null) {
+                        jarChannelRuntime.resumeFromVod();
+                        status("插件返回的播放地址无效");
+                        return;
+                    }
+                    missingCodecSoftwareRetryRequestId = -1;
+                    missingHardwareCodecRequestId = -1;
+                    missingHardwareCodecMime = "";
+                    autoSoftwareDecode = false;
+                    loadErrorRequestId = -1;
+                    loadError = "";
+                    // A plugin channel can alternate music and video within the same URL.
+                    audioChannelTypes.remove(channel.sourceUrl(currentSourceIndex));
+                    java.util.Map<String, String> mediaHeaders = new java.util.HashMap<>();
+                    if (headers != null) for (java.util.Iterator<String> keys = headers.keys(); keys.hasNext();) {
+                        String key = keys.next(), value = headers.optString(key);
+                        if (key.matches("[A-Za-z0-9!#$%&'*+.^_|~-]+")
+                                && value.indexOf('\r') < 0 && value.indexOf('\n') < 0)
+                            mediaHeaders.put(key, value);
+                    }
+                    StringBuilder playerHeaders = new StringBuilder();
+                    for (java.util.Map.Entry<String, String> header : mediaHeaders.entrySet())
+                        appendWebHeader(playerHeaders, header.getKey(), header.getValue());
+                    webStreamHeaders = playerHeaders.length() == 0 ? null : playerHeaders.toString();
+                    if (proxy != null) proxy.setWebRequestHeaders(null, null, null, true, false,
+                            java.util.Collections.emptyMap(), mediaHeaders);
+                    startResolvedPlayer(channel, url, !HttpStreamResolver.isExplicitHlsUrl(url));
+                }
                 public void status(String message) {
-                    hideLoading(); abortChannelSwitchAnimation(); showChannelBar(channel.name, message);
+                    hideLoading(); abortChannelSwitchAnimation(); showPlaybackNotice(message);
                 }
             });
             hideLoading(); abortChannelSwitchAnimation();
@@ -9580,7 +9675,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             AppLog.w(TAG, "System codec fallback failed", error);
             recordLoadError("系统播放器无法播放此媒体，请切换线路或手动选择解码方式");
             hideLoading();
-            showChannelBar(channel.name, "系统播放器也无法播放，请切换线路或调整解码方式");
+            showPlaybackNotice("系统播放器也无法播放，请切换线路或调整解码方式");
         }
         return true;
     }
@@ -9915,8 +10010,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         abortChannelSwitchAnimation();
         releasePlayer(true);
         hideLoading();
-        showChannelBar(currentChannel().name,message);
-        Toast.makeText(this,message,Toast.LENGTH_LONG).show();
+        showPlaybackNotice(message);
         if((autoSwitchSourceSeconds>0||neighborProbeEnabled)&&currentChannel().sourceCount()>1)
             switchCustomSource(1,true,message,true);
     }
@@ -10123,6 +10217,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         player = nextPlayer;
         updateVolumeBalance();
+        missingHardwareCodecRequestId = -1;
+        missingHardwareCodecMime = "";
         activePlayerStatsRequestId = playRequestId;
         playbackDebugPending = false;
         bindSeekCompletion(nextPlayer);
@@ -10194,6 +10290,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         @Override
                         public String onMediaCodecSelect(IMediaPlayer mediaPlayer,
                                 String mimeType, int profile, int level) {
+                            if (player != nextPlayer || sourceRequestId != playRequestId) return null;
                             if ("video/dolby-vision".equalsIgnoreCase(mimeType)) {
                                 return DolbyVisionSupport.selectDecoder(profile, level);
                             }
@@ -10530,9 +10627,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         && nextPlayer.getVideoDecoder() == IjkMediaPlayer.FFP_PROPV_DECODER_AVCODEC) {
                     releasePlayer(true);
                     hideLoading();
-                    showChannelBar(channel.name, "硬件解码不可用，可在高级设置中切换系统播放器");
-                    Toast.makeText(MainActivity.this, "硬件解码不可用，可在高级设置中切换系统播放器",
-                            Toast.LENGTH_LONG).show();
+                    showPlaybackNotice("硬件解码不可用，可在高级设置中切换系统播放器");
                     return;
                 }
                 if (audioOnlyPlayback && proxy != null) proxy.disableSourceVideoProbe();
@@ -10799,7 +10894,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         abortChannelSwitchAnimation();
                         releasePlayer(true);
                         hideLoading();
-                        showChannelBar(channel.name, "设备不支持此 Dolby Vision 格式，请切换普通视频轨道或线路");
+                        showPlaybackNotice("设备不支持此 Dolby Vision 格式，请切换普通视频轨道或线路");
                         return true;
                     }
                     if (what == -20002 || extra == -20002) {
@@ -10808,7 +10903,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         abortChannelSwitchAnimation();
                         releasePlayer(true);
                         hideLoading();
-                        showChannelBar(channel.name, "设备内存不足以软解此分辨率，请切换较低分辨率线路");
+                        showPlaybackNotice("设备内存不足以软解此分辨率，请切换较低分辨率线路");
                         return true;
                     }
                     if (refreshContinuousHttpPlayback(sourceRequestId,
@@ -10899,7 +10994,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     abortChannelSwitchAnimation();
                     hideLoading();
                     recordLoadError("播放错误: " + what + "/" + extra);
-                    showChannelBar(channel.name, "播放错误: " + what + "/" + extra);
+                    showPlaybackNotice("播放错误: " + what + "/" + extra);
                 }
                 return true;
             }
@@ -10986,7 +11081,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     AppLog.w(TAG,"Unable to prepare system player after release",error);
                     lastSystemPlaybackError="系统播放器准备失败，请重试或切换解码模式";
                     releasePlayer(true);hideLoading();
-                    showChannelBar(currentChannel().name,lastSystemPlaybackError);
+                    showPlaybackNotice(lastSystemPlaybackError);
                 }
             }
         }.run();
@@ -14402,6 +14497,17 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             channelBar.postDelayed(hideChannelBar, CHANNEL_BAR_TIMEOUT_MS);
     }
 
+    private void showPlaybackNotice(final String message) {
+        runOnUiThread(() -> {
+            if (isFinishing()) return;
+            webChannelInfo.cancel();
+            channelCardDeferredForArtwork = false;
+            channelBar.removeCallbacks(hideChannelBar);
+            channelBar.setVisibility(View.GONE);
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
+    }
+
     private void showChannelBar(final String channel, final String status) {
         runOnUiThread(new Runnable() {
             @Override
@@ -17716,6 +17822,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 lastBackPressedAt = now;
                 showBackPrompt(false);
             }
+            return;
+        }
+        if (jarChannelRuntime != null && jarChannelRuntime.resumeFromVod()) {
+            cancelChannelManifest();
+            releasePlayer();
+            hideLoading();
             return;
         }
         if (jarChannelRuntime != null && jarChannelRuntime.visible()) {
