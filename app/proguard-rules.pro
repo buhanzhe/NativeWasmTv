@@ -58,6 +58,8 @@
 -keep interface xiao.bu.tv.jar.ChannelPlugin$BrowserHost { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$DirectoryHost { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$NativeHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$FullscreenHost { *; }
+-keep interface xiao.bu.tv.jar.ChannelPlugin$PlaybackHost { *; }
 -keep interface xiao.bu.tv.jar.ChannelPlugin$NativePage { *; }
 -keepclassmembers class * implements xiao.bu.tv.jar.ChannelPlugin$Host { public *; }
 

@@ -38,11 +38,13 @@ function mediaResourceDescription(url, resource) {
 
 function mediaCurrentSourceDescription(data) {
   var stats = data && data.currentSourceStats || {}, info = [], bitrate = mediaBitrateLabel(stats.bitrate, 1);
+  if (stats.plugin) info.push([stats.plugin, stats.engine, stats.pluginState].filter(Boolean).join(" "));
   if (!stats.audioOnly && Number(stats.width) > 0 && Number(stats.height) > 0)
     info.push(Math.round(Number(stats.width)) + "×" + Math.round(Number(stats.height)));
   if (bitrate) info.push(bitrate);
   var frameRate = Number(stats.frameRate), streamRate = Number(stats.videoStreamFrameRate);
-  if (!stats.audioOnly && (typeof stats.actualFrameRateAvailable === "boolean" || streamRate > 0)) {
+  if (!stats.audioOnly && (stats.actualFrameRateAvailable || streamRate > 0
+      || !stats.plugin && typeof stats.actualFrameRateAvailable === "boolean")) {
     var actual = stats.actualFrameRateAvailable ? Number(stats.actualFrameRate).toFixed(1) : "--";
     var source = streamRate > 0 ? stats.scanType === "interlaced"
       ? streamRate.toFixed(1) + "帧/" + (streamRate * 2).toFixed(1) + "场"
@@ -54,6 +56,14 @@ function mediaCurrentSourceDescription(data) {
   if (!stats.audioOnly && stats.scanType === "interlaced")
     info.push("去隔行 " + (stats.deinterlace === "bwdif_field" ? "BWDIF逐场"
       : stats.deinterlace === "system_unverified" ? "系统处理（待验证）" : "未知"));
+  if (stats.plugin) {
+    if (stats.videoCodec && stats.videoCodec !== "--") info.push(stats.videoCodec);
+    if (stats.audioCodec && stats.audioCodec !== "--") {
+      var audioRate = mediaBitrateLabel(stats.audioBitrate, 1);
+      info.push([stats.audioCodec, audioRate, stats.audioOutput].filter(Boolean).join(" "));
+    }
+    if (Number(data.networkBytesPerSecond) >= 0 && data.networkSpeedText) info.push("网速 " + data.networkSpeedText);
+  }
   if (info.length) return info.join(" · ");
   return data && data.prepared ? "正在获取播放参数…" : "正在准备播放…";
 }
@@ -543,6 +553,7 @@ function renderMediaController(data) {
     position = Number(mediaState.positionMs) || 0,
     style = mediaState.subtitleStyle || {},
     favorite = mediaState.favorite === true,
+    pluginStats = mediaState.currentSourceStats && mediaState.currentSourceStats.plugin ? mediaState.currentSourceStats : null,
     favoriteButton = document.getElementById("mediaFavorite");
   document.getElementById("mediaTitle").textContent = mediaState.name || "当前没有节目";
   document.getElementById("mediaGroup").textContent = mediaState.webMedia
@@ -550,7 +561,7 @@ function renderMediaController(data) {
     : mediaState.group || "当前频道";
   document.getElementById("mediaStatus").textContent = mediaState.loadError ? mediaState.loadError : mediaState.webPageVisible
     ? mediaState.webMediaError || (mediaState.webMedia ? (mediaState.playing ? "网页正在播放" : "网页媒体已暂停") : "正在浏览网页")
-    : !available
+    : pluginStats ? mediaCurrentSourceDescription(mediaState) : !available
     ? "等待电视开始播放"
     : !prepared
       ? "正在准备媒体信息"
@@ -565,7 +576,7 @@ function renderMediaController(data) {
   favoriteButton.disabled = mediaState.favoriteAvailable === false;
   document.getElementById("mediaLiveBadge").textContent = mediaState.loadError ? "加载失败" : mediaState.webPageVisible
     ? (mediaState.webMedia ? (mediaState.playing ? "播放中" : "已暂停") : "网页")
-    : !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
+    : pluginStats ? pluginStats.pluginState : !available ? "等待播放" : !prepared ? "加载中" : !mediaState.playing ? "已暂停" : duration > 0 ? "播放中" : "直播中";
   var screenshotAvailable = available && prepared && !mediaState.audioOnly && mediaState.screenshotAvailable === true;
   var screenshotButton = document.getElementById("mediaScreenshot");
   screenshotButton.hidden = !screenshotAvailable;

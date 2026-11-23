@@ -1430,7 +1430,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         public void run() {
             refreshVideoInfo();
             updateChannelHealth();
-            if (hasActivePlayer() || liteWebPlayback != null || webSourceView!=null&&webSourceView.isPageVisible()) {
+            if (hasActivePlayer() || liteWebPlayback != null || webSourceView!=null&&webSourceView.isPageVisible()
+                    || jarChannelRuntime!=null&&jarChannelRuntime.visible()) {
                 root.postDelayed(this, 1000L);
             }
         }
@@ -4376,6 +4377,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 .put("networkBytesPerSecond",currentNetworkBytesPerSecond)
                 .put("networkDownloadedBytes",currentNetworkDownloadedBytes)
                 .put("networkSpeedSource",currentNetworkSpeedSource)
+                .put("networkSpeedText",formatNetworkSpeed(currentNetworkBytesPerSecond))
                 .put("receiverDelayMs", receiverDelayMs)
                 .put("seekable", prepared && duration > 0L)
                 .put("speedAvailable", prepared && playbackSpeedAvailable(activePlayer))
@@ -4427,6 +4429,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 .put("decoderColor", sourceStats == null || Build.VERSION.SDK_INT < 17
                         ? "" : NativeHdrOutput.decoderColor())
                 .put("videoDecoderName", sourceStats == null ? "未知" : sourceStats.videoDecoderName);
+        JarChannelRuntime.PlaybackReport plugin = currentPluginPlayback();
+        if (plugin != null) addPluginSourceStats(currentSourceStats, plugin.values);
         result.put("currentSourceStats", currentSourceStats);
         result.put("revision", mediaTrackChangeGeneration);
         applyVisibleWebPageState(result);
@@ -5819,15 +5823,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             runOnUiThread(() -> { refreshVideoInfo(); applyDebugInfoVisibility(); updateChannelBarBottomMargin(); });
         }
         if (request.has("showDebugInfo")) {
-            showDebugInfo = request.optBoolean("showDebugInfo", false);
-            getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
-                    .putBoolean(SHOW_DEBUG_INFO, showDebugInfo).apply();
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    applyDebugInfoVisibility();
-                }
-            });
+            setPlaybackDebugEnabled(request.optBoolean("showDebugInfo", false));
         }
         if (request.has("showNetworkSpeed")) {
             showNetworkSpeed = request.optBoolean("showNetworkSpeed", false);
@@ -12246,6 +12242,14 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         return showDebugInfo || colorDebugInfoEnabled() || showLoadTiming;
     }
 
+    boolean isPlaybackDebugEnabled() { return showDebugInfo; }
+
+    void setPlaybackDebugEnabled(boolean enabled) {
+        showDebugInfo = enabled;
+        getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean(SHOW_DEBUG_INFO, enabled).apply();
+        runOnUiThread(this::applyDebugInfoVisibility);
+    }
+
     private boolean colorDebugInfoEnabled() {
         return showColorDebugInfo && !audioOnlyPlayback;
     }
@@ -15050,7 +15054,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (networkSpeedOverlay != null) networkSpeedOverlay.setText("--");
     }
 
-    private void scheduleVideoInfoRefresh() {
+    void scheduleVideoInfoRefresh() {
         root.removeCallbacks(updateVideoInfo);
         root.post(updateVideoInfo);
     }
@@ -15067,6 +15071,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (jarChannelRuntime != null) jarChannelRuntime.update(
                 prepared && player != null ? player.getCurrentPosition() : 0L,
                 prepared && player != null && player.isPlaying() && !buffering);
+        JarChannelRuntime.PlaybackReport plugin = currentPluginPlayback();
+        if (plugin != null) {
+            refreshPluginPlaybackHud(plugin.values);
+            return;
+        }
         if (playbackCompleted && completionControlsPending) showVideoControls();
         if (audioArtwork != null && audioOnlyPlayback)
             audioArtwork.setPlaying(prepared && player != null && player.isPlaying() && !buffering);
@@ -15238,10 +15247,93 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // One sample per HUD tick, independent of debug/network text visibility.
         long networkSpeed=sampleNetworkBytesPerSecond();
         logHighResolutionPlayback(stats, networkSpeed);
+        refreshNetworkSpeedText(networkSpeed);
+    }
+
+    private void refreshNetworkSpeedText(long networkSpeed) {
         if (networkSpeedOverlay != null && showNetworkSpeed) {
             String speedText = formatNetworkSpeed(networkSpeed);
             if (!TextUtils.equals(networkSpeedOverlay.getText(), speedText)) networkSpeedOverlay.setText(speedText);
         }
+    }
+
+    private JarChannelRuntime.PlaybackReport currentPluginPlayback() {
+        return jarChannelRuntime == null ? null : jarChannelRuntime.playbackReport();
+    }
+
+    private static String pluginPlaybackState(Bundle data) {
+        switch (data.getString("state", "")) {
+            case "playing": return "播放中";
+            case "paused": return "已暂停";
+            case "completed": return "播放结束";
+            case "error": return "播放失败";
+            default: return "正在准备播放";
+        }
+    }
+
+    private static String pluginCodec(Bundle data, String field) {
+        String value = data.getString(field, "");
+        if ("audio/eac3-joc".equals(value) || "ec+3".equals(value)) return "E-AC-3 JOC";
+        if ("audio/eac3".equals(value) || "ec-3".equals(value)) return "E-AC-3";
+        return readableCodec(value, null);
+    }
+
+    private static void addPluginSourceStats(JSONObject target, Bundle data) throws JSONException {
+        float outputFps = validFrameRate(data.getFloat("outputFps"));
+        float sourceFps = validFrameRate(data.getFloat("sourceFps"));
+        target.put("plugin", data.getString("plugin", ""))
+                .put("engine", data.getString("engine", ""))
+                .put("pluginState", pluginPlaybackState(data))
+                .put("width", data.getInt("width")).put("height", data.getInt("height"))
+                .put("frameRate", outputFps > 0 ? outputFps : sourceFps)
+                .put("actualFrameRate", outputFps).put("actualFrameRateAvailable", outputFps > 0)
+                .put("videoStreamFrameRate", sourceFps).put("sourceFrameRate", outputFps <= 0 && sourceFps > 0)
+                .put("bitrate", data.getLong("videoBitrate", -1))
+                .put("videoCodec", pluginCodec(data, "videoCodec"))
+                .put("audioCodec", pluginCodec(data, "audioCodec"))
+                .put("audioBitrate", data.getLong("audioBitrate", -1))
+                .put("audioOutput", data.getString("audioOutput", ""))
+                .put("audioChannels", Math.max(0, data.getInt("audioChannels")))
+                .put("audioSampleRate", Math.max(0, data.getInt("audioSampleRate")));
+    }
+
+    private void refreshPluginPlaybackHud(Bundle data) {
+        if (debugInfoOverlay != null && debugInfoEnabled()) {
+            StringBuilder text = new StringBuilder();
+            if (showDebugInfo) {
+                text.append(data.getString("plugin", "")).append(" · ")
+                        .append(data.getString("engine", "")).append(" · ").append(pluginPlaybackState(data));
+                int width = data.getInt("width"), height = data.getInt("height");
+                text.append("\n").append(width > 0 && height > 0 ? width + "x" + height : "--");
+                float fps = validFrameRate(data.getFloat("outputFps"));
+                if (fps <= 0) fps = validFrameRate(data.getFloat("sourceFps"));
+                if (fps > 0) text.append(String.format(Locale.US, " %.1ffps", fps));
+                text.append(" ").append(pluginCodec(data, "videoCodec"))
+                        .append(" ").append(formatBitrate(data.getLong("videoBitrate", -1)))
+                        .append(" ").append(pluginCodec(data, "audioCodec"));
+                long audioBitrate = data.getLong("audioBitrate", -1);
+                if (audioBitrate > 0) text.append(" ").append(formatBitrate(audioBitrate));
+                String output = data.getString("audioOutput", "");
+                if (!output.isEmpty()) text.append(" ").append(output);
+                text.append(" CPU").append(formatCpuUsage(sampleSystemCpuUsage()))
+                        .append(" · ").append(data.getFloat("speed", 1)).append("x")
+                        .append(" · 弹幕 ").append(data.getInt("danmaku"));
+            }
+            if (showLoadTiming) {
+                if (text.length() > 0) text.append("\n");
+                text.append("耗时 ").append(channelStartupTiming.display(playRequestId));
+            }
+            String display = text.toString();
+            if (!TextUtils.equals(debugInfoOverlay.getText(), display)) debugInfoOverlay.setText(display);
+        }
+        refreshNetworkSpeedText(sampleNetworkBytesPerSecond());
+    }
+
+    void clearPluginPlaybackDiagnostics() {
+        if (!"jar".equals(currentNetworkSpeedSource)) return;
+        resetNetworkSpeedSamples();
+        if (debugInfoOverlay != null) debugInfoOverlay.setText("");
+        refreshNetworkSpeedText(-1L);
     }
 
     private DisplayHdrStatus.Snapshot currentDisplayHdrStatus() {
@@ -15305,6 +15397,9 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private long sampleNetworkBytesPerSecond() {
+        JarChannelRuntime.PlaybackReport plugin = currentPluginPlayback();
+        if (plugin != null)
+            return sampleNetworkTraffic(plugin.session, plugin.values.getLong("downloadedBytes", -1), "jar");
         if (playbackDebugPending && liteWebPlayback == null) {
             resetNetworkSpeedSamples();
             return -1L;
@@ -15324,6 +15419,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             try{total=((IjkMediaPlayer)active).getTrafficStatisticByteCount();owner=active;route="iptv";}
             catch(RuntimeException ignored){}
         }
+        return sampleNetworkTraffic(owner,total,route);
+    }
+
+    private long sampleNetworkTraffic(Object owner,long total,String route) {
         currentNetworkDownloadedBytes=total;
         currentNetworkSpeedSource=route;
         currentNetworkBytesPerSecond=networkTraffic.sample(owner,total,SystemClock.elapsedRealtime());

@@ -8,7 +8,7 @@ import okhttp3.*;
 
 /** Bounded, credential-free diagnostics shared by API, media and the single-View UI. */
 final class BlDiagnostics {
-    static final int VERSION=17;
+    static final int VERSION=18;
     static class Failure extends IOException {
         final String kind,endpoint,requestId,contentType;final int http,apiCode;
         Failure(String kind,String message,Request request,int http,int apiCode,String requestId,String contentType,Throwable cause){

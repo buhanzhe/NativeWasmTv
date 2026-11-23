@@ -27,6 +27,14 @@ public interface ChannelPlugin {
         boolean isFullscreenEnabled();
         void setFullscreenEnabled(boolean enabled);
     }
+    /** Optional shared playback HUD. A new session identity resets the host's traffic samples. */
+    interface PlaybackHost extends FullscreenHost {
+        boolean isPlaybackDebugEnabled();
+        void setPlaybackDebugEnabled(boolean enabled);
+        // Main-thread snapshot. downloadedBytes counts upstream media reads for this session.
+        // Pass null when the plugin leaves playback.
+        void reportPlaybackDiagnostics(Object session, android.os.Bundle diagnostics);
+    }
     /** Optional native navigation and foreground lifecycle, independent of Activities. */
     interface NativePage {
         boolean onBack();

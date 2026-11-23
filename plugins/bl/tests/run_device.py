@@ -13,6 +13,8 @@ p.add_argument('--vod',action='store_true',help='Check video URL refresh, portra
 p.add_argument('--order',action='store_true',help='Check the repeat-one icon, looping, and sequential playback of the next video')
 p.add_argument('--hires',action='store_true',help='Exercise repeated Hi-Res track switches and verify decoded audio output')
 p.add_argument('--cache',action='store_true',help='Check disk reuse and cleanup, using a high-bitrate fixture for the DASH cache limits')
+p.add_argument('--playback-integration',action='store_true',help='Check the shared HUD, web stats, media traffic and fresh video surfaces')
+p.add_argument('--dolby-direct',action='store_true',help='Verify unchanged E-AC-3 frames and fallback on a PCM-only emulator')
 p.add_argument('--video',help='Run a focused playback check on a public BV identifier with --real')
 p.add_argument('--smoke',action='store_true',help='Initial playback, navigation and live danmaku; skip decoder-switch stress tests')
 p.add_argument('--jar-url',help='Optional published HTTPS JAR instead of the local HTTPS fixture')
@@ -34,6 +36,7 @@ if a.premium_dash and (not a.dash or a.real or a.system):p.error('--premium-dash
 if a.dash_resume and (not a.dash or a.real or a.system):p.error('--dash-resume requires local fixtures and --dash')
 if a.vod and (not a.dash or a.real or a.system):p.error('--vod requires a local portrait fixture and --dash')
 if a.cache and a.real:p.error('--cache requires local fixtures')
+if a.dolby_direct and (a.real or not a.dash):p.error('--dolby-direct requires the local premium fixture and --dash')
 if a.video and (not a.real or a.account_audit or not re.fullmatch(r'BV[A-Za-z0-9]{10}',a.video)):
     p.error('--video requires --real and a BV identifier')
 def run(*args,**kw):return subprocess.run(adb+list(args),check=True,**kw)
@@ -66,6 +69,8 @@ if a.vod:command+=' -e vod true'
 if a.order:command+=' -e order true'
 if a.hires:command+=' -e hires true'
 if a.cache:command+=' -e cache true'
+if a.playback_integration:command+=' -e playbackIntegration true'
+if a.dolby_direct:command+=' -e dolbyDirect true'
 if a.video:command+=' -e video '+shlex.quote(a.video)
 if a.smoke:command+=' -e smoke true'
 if a.errors:command+=' -e errors true'
@@ -114,7 +119,7 @@ if a.account_audit and not a.account_probe:subprocess.run(adb+['pull','/sdcard/A
 images=(['bl-account-player.png','bl-account-settings.png'] if a.account_audit else ['bl-interactions.png'] if a.interactions else ['bl-http-error.png','bl-media-error.png'] if a.errors else ['bl-home.png','bl-search.png','bl-history.png','bl-login.png','bl-settings.png','bl-live.png']+([] if a.real or a.smoke else ['bl-episodes.png','bl-danmaku-settings.png','bl-controls.png'])) if 'PASS:' in text or a.account_audit else ['bl-error.png']
 if 'browseUi=' in text:images+=['bl-search-keyboard.png','bl-browse-settings.png','bl-theme-pink.png','bl-theme-classic.png','bl-mine.png']
 if a.video:images=['bl-focused-player.png'] if 'PASS:' in text else ['bl-error.png']
-if (a.seek and not a.video or a.vod or a.order or a.hires or a.cache) and 'PASS:' in text:images=[]
+if (a.seek and not a.video or a.vod or a.order or a.hires or a.cache or a.playback_integration or a.dolby_direct) and 'PASS:' in text:images=[]
 if 'playerUi=' in text:images+=['bl-player-overlay.png','bl-player-related.png']
 if a.account_probe:images=[]
 for name in images:subprocess.run(adb+['pull','/sdcard/Android/data/'+a.package+'/files/'+name,str(out/name)])

@@ -2,11 +2,13 @@ package xiao.bu.channel.bl;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Bundle;
 import android.view.*;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import okhttp3.*;
 import org.json.JSONArray;
 import com.google.android.exoplayer2.*;
@@ -28,15 +30,18 @@ final class BlDashPlayer extends AbstractMediaPlayer {
     private final SimpleExoPlayer player;private final BlApi api;private final String audio;private String source="";private boolean notified,released;private int width,height;private Throwable lastFailure;
     private final BlAudioRenderers audioRenderers;
     private final BlDiskBuffer diskBuffer;
+    private final AtomicLong mediaBytes;
     private BlStreams.Track failureTrack=BlStreams.Track.UNKNOWN;
     private final Set<Load> loads=Collections.newSetFromMap(new ConcurrentHashMap<Load,Boolean>());
     private final AtomicBoolean cancelled=new AtomicBoolean();
     private final Map<String,String> preferred=new ConcurrentHashMap<>();
     private final List<String> videoAlternatives,audioAlternatives=new ArrayList<>();
-    BlDashPlayer(Context context,BlApi api,String audio,List<String> videoAlternatives,JSONArray audioBackups,boolean allowPassthrough,BlDiskBuffer diskBuffer){this.api=api;this.audio=audio;this.diskBuffer=diskBuffer;this.videoAlternatives=new ArrayList<>(videoAlternatives);for(int i=0;i<Math.min(8,audioBackups.length());i++){String url=audioBackups.optString(i);if(!url.isEmpty()&&!audioAlternatives.contains(url))audioAlternatives.add(url);}
+    BlDashPlayer(Context context,BlApi api,String audio,List<String> videoAlternatives,JSONArray audioBackups,boolean allowPassthrough,BlDiskBuffer diskBuffer,AtomicLong mediaBytes){this.api=api;this.audio=audio;this.diskBuffer=diskBuffer;this.mediaBytes=mediaBytes;this.videoAlternatives=new ArrayList<>(videoAlternatives);for(int i=0;i<Math.min(8,audioBackups.length());i++){String url=audioBackups.optString(i);if(!url.isEmpty()&&!audioAlternatives.contains(url))audioAlternatives.add(url);}
         DefaultLoadControl load=new DefaultLoadControl(allocator,2000,10000,500,1000,BUFFER_TARGET_BYTES,false);
         audioRenderers=new BlAudioRenderers(context,allowPassthrough);
         player=ExoPlayerFactory.newSimpleInstance(context,audioRenderers,new DefaultTrackSelector(),load);
+        player.setAudioAttributes(new com.google.android.exoplayer2.audio.AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA).setContentType(C.CONTENT_TYPE_MOVIE).build(),false);
         player.addListener(new Player.DefaultEventListener(){
             public void onPlayerStateChanged(boolean ready,int state){
                 if(released)return;
@@ -45,8 +50,9 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                     // Exo can enter READY with one renderer disabled for an unsupported track.
                     boolean video=hasTrack(C.TRACK_TYPE_VIDEO),sound=audio.isEmpty()||hasTrack(C.TRACK_TYPE_AUDIO);
                     if(!video||!sound){
-                        failureTrack=video?BlStreams.Track.AUDIO:BlStreams.Track.VIDEO;
-                        lastFailure=new IOException("设备无法解码所选 DASH 音视频轨");
+                        failureTrack=!video?BlStreams.Track.VIDEO:hasEac3()?BlStreams.Track.EAC3_PASSTHROUGH:BlStreams.Track.AUDIO;
+                        lastFailure=new IOException(failureTrack==BlStreams.Track.EAC3_PASSTHROUGH
+                                ?"当前音频输出不支持 E-AC-3 直通":"设备无法解码所选 DASH 音视频轨");
                         notifyOnError(-1004,-1010);
                         return;
                     }
@@ -64,7 +70,8 @@ final class BlDashPlayer extends AbstractMediaPlayer {
                 lastFailure=error;
                 if(error.type==ExoPlaybackException.TYPE_RENDERER&&error.rendererIndex>=0&&error.rendererIndex<player.getRendererCount()){
                     int type=player.getRendererType(error.rendererIndex);
-                    failureTrack=type==C.TRACK_TYPE_AUDIO?BlStreams.Track.AUDIO:type==C.TRACK_TYPE_VIDEO?BlStreams.Track.VIDEO:BlStreams.Track.UNKNOWN;
+                    failureTrack=type==C.TRACK_TYPE_AUDIO?(hasEac3()?BlStreams.Track.EAC3_PASSTHROUGH:BlStreams.Track.AUDIO)
+                            :type==C.TRACK_TYPE_VIDEO?BlStreams.Track.VIDEO:BlStreams.Track.UNKNOWN;
                 }else if(error.type==ExoPlaybackException.TYPE_SOURCE&&error.getSourceException() instanceof TrackReadFailure){
                     failureTrack=((TrackReadFailure)error.getSourceException()).track;
                 }
@@ -78,18 +85,47 @@ final class BlDashPlayer extends AbstractMediaPlayer {
         for(int i=0;i<tracks.length;i++)if(player.getRendererType(i)==type&&tracks.get(i)!=null)return true;
         return false;
     }
+
+    private boolean hasEac3(){
+        TrackGroupArray groups=player.getCurrentTrackGroups();
+        for(int i=0;i<groups.length;i++){
+            TrackGroup group=groups.get(i);
+            for(int j=0;j<group.length;j++)
+                if(BlDolbyPassthroughRenderer.isEac3(group.getFormat(j).sampleMimeType))return true;
+        }
+        return false;
+    }
     public void setDisplay(SurfaceHolder holder){player.setVideoSurfaceHolder(holder);}public void setSurface(Surface surface){player.setVideoSurface(surface);}
     public void setDataSource(String url){source=url;}public String getDataSource(){return source;}
     Throwable failure(){return lastFailure;}
     BlStreams.Track failureTrack(){return failureTrack;}
     boolean passthroughFailed(){return failureTrack==BlStreams.Track.AUDIO&&audioRenderers.passthroughActive;}
+    void addDiagnostics(Bundle report){
+        Format video=player.getVideoFormat(),sound=player.getAudioFormat();
+        report.putFloat("speed",player.getPlaybackParameters().speed);
+        if(video!=null){
+            report.putString("videoCodec",video.codecs==null?video.sampleMimeType:video.codecs);
+            if(video.frameRate>0)report.putFloat("sourceFps",video.frameRate);
+            if(video.bitrate>0)report.putLong("videoBitrate",video.bitrate);
+        }
+        if(sound!=null){
+            report.putString("audioCodec",sound.sampleMimeType);
+            if(sound.bitrate>0)report.putLong("audioBitrate",sound.bitrate);
+            report.putInt("audioSampleRate",sound.sampleRate);
+            report.putInt("audioChannels",sound.channelCount);
+            boolean eac3=BlDolbyPassthroughRenderer.isEac3(sound.sampleMimeType);
+            String output=eac3?(audioRenderers.eac3OutputActive()?"AudioTrack 直通":"等待直通")
+                    :audioRenderers.passthroughActive?"AudioTrack 直通":"PCM";
+            report.putString("audioOutput",output);
+        }
+    }
     boolean transportFailed(){
         if(!(lastFailure instanceof ExoPlaybackException))return false;
         ExoPlaybackException error=(ExoPlaybackException)lastFailure;
         return error.type==ExoPlaybackException.TYPE_SOURCE&&error.getSourceException() instanceof TrackReadFailure;
     }
     public void prepareAsync(){
-        DataSource.Factory transport=()->new SharedSource(api,loads,cancelled,preferred,source,audio,videoAlternatives,audioAlternatives,diskBuffer);
+        DataSource.Factory transport=()->new SharedSource(api,loads,cancelled,preferred,source,audio,videoAlternatives,audioAlternatives,diskBuffer,mediaBytes);
         ExtractorMediaSource.Factory media=new ExtractorMediaSource.Factory(transport)
                 .setContinueLoadingCheckIntervalBytes(LOADING_CHECK_BYTES);
         ExtractorMediaSource video=media.createMediaSource(Uri.parse(source));
@@ -130,12 +166,13 @@ final class BlDashPlayer extends AbstractMediaPlayer {
         private int nextCandidate;
         private long position,remaining,responseEnd;
         private final BlDiskBuffer disk;
+        private final AtomicLong mediaBytes;
         private BlDiskBuffer.Resource diskPrefix, writable;
         private byte[] pendingWrite;
         private long pendingAt;
         private int pendingBytes;
 
-        SharedSource(BlApi api,Set<Load> loads,AtomicBoolean cancelled,Map<String,String> preferred,String video,String audio,List<String> videos,List<String> audios,BlDiskBuffer disk){super(true);this.api=api;this.loads=loads;this.cancelled=cancelled;this.preferred=preferred;this.video=video;this.audio=audio;this.videos=videos;this.audios=audios;this.disk=disk;}
+        SharedSource(BlApi api,Set<Load> loads,AtomicBoolean cancelled,Map<String,String> preferred,String video,String audio,List<String> videos,List<String> audios,BlDiskBuffer disk,AtomicLong mediaBytes){super(true);this.api=api;this.loads=loads;this.cancelled=cancelled;this.preferred=preferred;this.video=video;this.audio=audio;this.videos=videos;this.audios=audios;this.disk=disk;this.mediaBytes=mediaBytes;}
         public long open(DataSpec spec)throws IOException{
             transferInitializing(spec);
             load=new Load();
@@ -194,7 +231,7 @@ final class BlDashPlayer extends AbstractMediaPlayer {
             BlDiskBuffer.Resource prefix=diskPrefix;
             diskPrefix=null;
             responseEnd=-1;
-            response=api.execute(api.dashRequest(selected,position,remaining).build(),load.calls,load.cancelled);
+            response=api.execute(api.dashRequest(selected,position,remaining).build(),load.calls,load.cancelled,mediaBytes);
             if(response.code()==416&&response.header("Content-Range","").equals("bytes */"+position)){
                 if(prefix!=null){disk.invalidate(prefix);throw new IOException("DASH 媒体长度已变化");}
                 remaining=0;

@@ -8,7 +8,7 @@ import okhttp3.HttpUrl;
 final class BlStreams {
     static final int QUALITY_1080P=80,QUALITY_HDR=125,QUALITY_8K=127;
     static final int AUDIO_192K=30280,AUDIO_ATMOS=30250,AUDIO_HI_RES=30251,AUDIO_DOLBY=30255;
-    enum Track{VIDEO,AUDIO,UNKNOWN}
+    enum Track{VIDEO,AUDIO,UNKNOWN,EAC3_PASSTHROUGH}
 
     static final class AudioTrack{
         final JSONObject data;
@@ -95,7 +95,7 @@ final class BlStreams {
         int quality=failed.optInt("bl_quality");
         String codec=videoCodec(failed.optString("bl_codec"),failed.optInt("bl_codecid"));
         boolean advanced=quality>=QUALITY_HDR||codec.equals("AV1")||codec.equals("Dolby Vision");
-        boolean replaceAudio=track==Track.AUDIO||track==Track.UNKNOWN&&failed.optBoolean("bl_premium_audio");
+        boolean replaceAudio=track==Track.AUDIO||track==Track.EAC3_PASSTHROUGH||track==Track.UNKNOWN&&failed.optBoolean("bl_premium_audio");
         if(!replaceAudio&&track==Track.UNKNOWN&&!advanced)return new JSONArray();
 
         JSONObject video;
@@ -168,9 +168,16 @@ final class BlStreams {
                 .put("length",(long)(dash.optDouble("duration",data.optDouble("timelength",0)/1000)*1000))
                 .put("bl_quality",video.optInt("id")).put("bl_codec",video.optString("codecs"))
                 .put("bl_codecid",video.optInt("codecid")).put("bl_audio_id",audio.id)
+                .put("bl_audio_codec",audio.data.optString("codecs"))
+                .put("bl_video_bitrate",video.optLong("bandwidth",-1)).put("bl_audio_bitrate",audio.data.optLong("bandwidth",-1))
                 .put("bl_audio_label",audio.label()).put("bl_premium_audio",!audio.aac());
         item.put("backup_url",backups(video)).put("bl_audio_backups",backups(audio.data));
         return new JSONArray().put(item);
+    }
+
+    static boolean eac3Codec(String value){
+        String codec=value.toLowerCase(Locale.US).split("\\.",2)[0];
+        return codec.equals("ec-3")||codec.equals("ec+3")||codec.equals("eac3");
     }
 
     private static JSONArray backups(JSONObject track){

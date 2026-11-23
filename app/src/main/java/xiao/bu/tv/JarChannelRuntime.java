@@ -2,6 +2,7 @@ package xiao.bu.tv;
 
 import android.content.Context;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
@@ -17,6 +18,11 @@ import xiao.bu.tv.jar.ChannelPlugin;
 /** Executable plugins are trusted code, pinned by the playlist's SHA-256. */
 final class JarChannelRuntime {
     interface Callback extends ChannelPlugin.Host { boolean current(); }
+    static final class PlaybackReport {
+        final Object session;
+        final Bundle values;
+        PlaybackReport(Object session,Bundle values){this.session=session;this.values=new Bundle(values);}
+    }
     private final Context context;
     private final FrameLayout root;
     private final Handler main=new Handler(Looper.getMainLooper());
@@ -26,6 +32,7 @@ final class JarChannelRuntime {
     private int generation;
     private boolean destroyed;
     private Callback callback;
+    private PlaybackReport playbackReport;
     private android.webkit.WebView browser;
     private String resolution="720p";
     private float pageScale=1;
@@ -78,12 +85,24 @@ final class JarChannelRuntime {
                     ChannelPlugin incoming=null;
                     try {
                         incoming=type.getConstructor().newInstance();
-                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.FullscreenHost(){
+                        View content=incoming.create(context,loader,spec.config,new ChannelPlugin.PlaybackHost(){
                             public okhttp3.OkHttpClient httpClient(){return NetworkClient.sharedClient();}
                             public boolean isFullscreenEnabled(){return FullscreenPolicy.isEnabled(context);}
                             public void setFullscreenEnabled(boolean enabled){
                                 if(token==generation&&callbackCurrent()&&context instanceof MainActivity)
                                     ((MainActivity)context).setFullscreenStartup(enabled);
+                            }
+                            public boolean isPlaybackDebugEnabled(){
+                                return context instanceof MainActivity&&((MainActivity)context).isPlaybackDebugEnabled();
+                            }
+                            public void setPlaybackDebugEnabled(boolean enabled){
+                                if(token==generation&&callbackCurrent()&&context instanceof MainActivity)
+                                    ((MainActivity)context).setPlaybackDebugEnabled(enabled);
+                            }
+                            public void reportPlaybackDiagnostics(Object session,Bundle diagnostics){
+                                if(token!=generation||!callbackCurrent())return;
+                                if(session==null||diagnostics==null)clearPlaybackReport();
+                                else playbackReport=new PlaybackReport(session,diagnostics);
                             }
                             public void chooseDirectory(android.webkit.ValueCallback<android.net.Uri[]> selected){
                                 if(token!=generation||!callbackCurrent()){selected.onReceiveValue(null);return;}
@@ -110,6 +129,8 @@ final class JarChannelRuntime {
                         plugin=incoming;view=content;
                         // Above media/artwork/browser, below subtitle, HUD and channel menus.
                         root.addView(content,Math.min(3,root.getChildCount()),new FrameLayout.LayoutParams(-1,-1));
+                        if(plugin instanceof ChannelPlugin.NativePage&&context instanceof MainActivity)
+                            ((MainActivity)context).scheduleVideoInfoRefresh();
                     } catch(Exception|LinkageError e) {
                         if(incoming!=null)try{incoming.dispose();}catch(Throwable ignored){}
                         callback.status("频道插件启动失败: "+e.getMessage());
@@ -127,6 +148,7 @@ final class JarChannelRuntime {
     void close() {
         generation++;
         callback=null;
+        clearPlaybackReport();
         if(browserProfile!=null){browserProfile.dispose();browserProfile=null;}
         browser=null;
         filePicker.cancel();
@@ -151,6 +173,12 @@ final class JarChannelRuntime {
         JarBrowserViewport.apply(browser,resolution,pageScale);
     }
     boolean visible(){return view!=null&&view.isShown();}
+    PlaybackReport playbackReport(){return visible()&&callback!=null&&callback.current()?playbackReport:null;}
+    private void clearPlaybackReport(){
+        if(playbackReport==null)return;
+        playbackReport=null;
+        if(context instanceof MainActivity)((MainActivity)context).clearPluginPlaybackDiagnostics();
+    }
     boolean goBackIfPossible(){
         if(visible()&&plugin instanceof ChannelPlugin.NativePage) {
             try { if(((ChannelPlugin.NativePage)plugin).onBack())return true; }

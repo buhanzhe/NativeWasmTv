@@ -22,33 +22,48 @@ import com.google.android.exoplayer2.mediacodec.MediaCodecUtil;
 import com.google.android.exoplayer2.util.Util;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 final class BlAudioRenderers extends DefaultRenderersFactory {
     private static final int[] DOLBY={C.ENCODING_AC3,C.ENCODING_E_AC3,C.ENCODING_E_AC3_JOC};
     private final AudioCapabilities capabilities;
+    private final boolean allowAc3Passthrough;
+    private BlDolbyPassthroughRenderer dolby;
     volatile boolean passthroughActive;
 
     BlAudioRenderers(Context context,boolean allowPassthrough){
         super(context);
-        capabilities=allowPassthrough?outputCapabilities(context):AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES;
+        capabilities=outputCapabilities(context);
+        allowAc3Passthrough=allowPassthrough;
     }
 
     @Override protected void buildAudioRenderers(Context context,int mode,MediaCodecSelector selector,
             DrmSessionManager<FrameworkMediaCrypto> drm,boolean playClear,boolean decoderFallback,
             AudioProcessor[] processors,Handler handler,AudioRendererEventListener listener,
             ArrayList<Renderer> renderers){
+        dolby=new BlDolbyPassthroughRenderer(handler,listener,new DefaultAudioSink(capabilities,processors));
+        renderers.add(dolby);
         renderers.add(new BlFlacAudioRenderer(handler,listener,new DefaultAudioSink(capabilities,processors,true)));
+        AudioCapabilities codecOutput=allowAc3Passthrough?capabilities:AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES;
         renderers.add(new MediaCodecAudioRenderer(context,selector,drm,playClear,true,handler,listener,
-                new DefaultAudioSink(capabilities,processors)){
+                new DefaultAudioSink(codecOutput,processors)){
+            @Override protected int supportsFormat(MediaCodecSelector codecs,
+                    DrmSessionManager<FrameworkMediaCrypto> drm,Format format)throws MediaCodecUtil.DecoderQueryException{
+                if(BlDolbyPassthroughRenderer.isEac3(format.sampleMimeType))return FORMAT_UNSUPPORTED_SUBTYPE;
+                return super.supportsFormat(codecs,drm,format);
+            }
             @Override protected List<MediaCodecInfo> getDecoderInfos(MediaCodecSelector codecs,Format format,boolean secure)
                     throws MediaCodecUtil.DecoderQueryException{
+                if(BlDolbyPassthroughRenderer.isEac3(format.sampleMimeType))return Collections.emptyList();
                 List<MediaCodecInfo> available=super.getDecoderInfos(codecs,format,secure);
                 passthroughActive=!available.isEmpty()&&available.get(0).passthrough;
                 return available;
             }
         });
     }
+
+    boolean eac3OutputActive(){return dolby!=null&&dolby.active;}
 
     private static AudioCapabilities outputCapabilities(Context context){
         AudioManager manager=(AudioManager)context.getSystemService(Context.AUDIO_SERVICE);

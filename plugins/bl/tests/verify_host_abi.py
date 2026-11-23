@@ -30,10 +30,14 @@ with zipfile.ZipFile(a.apk) as archive:
 
 loader = 'Ltv/danmaku/ijk/media/player/IjkLibLoader;'
 native = 'Lxiao/bu/tv/jar/ChannelPlugin$NativeHost;'
+playback = 'Lxiao/bu/tv/jar/ChannelPlugin$PlaybackHost;'
 assert loader in defined, 'R8 renamed/removed IjkLibLoader, breaking the downloaded JAR method descriptor'
 assert native in defined, 'Missing NativeHost contract'
 assert ('Ltv/danmaku/ijk/media/player/IjkMediaPlayer;', 'loadLibrariesOnce', '(' + loader + ')V') in methods, 'Missing stable IJK library-loader method'
 assert (native, 'httpClient', '()Ljava/lang/Object;') in methods, 'Missing shared OkHttp entry point'
+assert playback in defined, 'R8 renamed/removed the optional playback diagnostics interface'
+assert (playback, 'reportPlaybackDiagnostics', '(Ljava/lang/Object;Landroid/os/Bundle;)V') in methods, 'Missing playback diagnostics entry point'
+assert (playback, 'isPlaybackDebugEnabled', '()Z') in methods and (playback, 'setPlaybackDebugEnabled', '(Z)V') in methods
 assert not any(c.startswith('Lcom/google/android/exoplayer2/') for c in defined), 'Exo must remain in the JAR'
 assert 'Lxiao/bu/tv/BlPluginInstrumentation;' not in defined, 'Temporary device runner remains in production APK'
 print('PASS: final APK retains NativeHost/IJK loader ABI; no bundled Exo or temporary BL runner')

@@ -69,12 +69,22 @@ final class BlApi {
         return execute(request,owner,null);
     }
     Response execute(Request request,final Set<Call> owner,java.util.concurrent.atomic.AtomicBoolean cancelled)throws IOException{
+        return execute(request,owner,cancelled,null);
+    }
+    Response execute(Request request,final Set<Call> owner,java.util.concurrent.atomic.AtomicBoolean cancelled,
+                     java.util.concurrent.atomic.AtomicLong mediaBytes)throws IOException{
         if(closed)throw new IOException("频道已关闭");final Call call=client.newCall(request);pending.add(call);if(owner!=null)owner.add(call);
         try{
             if(closed||cancelled!=null&&cancelled.get()){call.cancel();throw new IOException("请求已取消");}Response response=call.execute();final ResponseBody body=response.body();
             if(!response.isSuccessful()){BlDiagnostics.Failure failure=BlDiagnostics.response(response);transportFailures.put(request.url().toString(),failure);diagnostics.record("HTTP 响应",failure,"");}else transportFailures.remove(request.url().toString());
             if(body==null){pending.remove(call);if(owner!=null)owner.remove(call);return response;}
+            boolean countMedia=mediaBytes!=null&&response.isSuccessful()&&response.cacheResponse()==null;
             final okio.BufferedSource source=okio.Okio.buffer(new okio.ForwardingSource(body.source()){
+                @Override public long read(okio.Buffer sink,long amount)throws IOException{
+                    long read=super.read(sink,amount);
+                    if(countMedia&&read>0)mediaBytes.addAndGet(read);
+                    return read;
+                }
                 public void close()throws IOException{try{super.close();}finally{pending.remove(call);if(owner!=null)owner.remove(call);}}
             });
             return response.newBuilder().body(new OwnedBody(call,body.contentType(),body.contentLength(),source)).build();

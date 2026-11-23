@@ -14,6 +14,7 @@ import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import org.json.*;
 import tv.danmaku.ijk.media.player.*;
 
@@ -21,7 +22,10 @@ import tv.danmaku.ijk.media.player.*;
 final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDanmaku.Clock {
     interface Actions {void settings();void episodes();void comments();void subtitle();void more();void diagnostics();void related();void up();void step(int delta);void order();void exit();void complete();void position(long at);void failure(String error,BlStreams.Track track,boolean transport);}
     private final BlUi ui;private final BlMediaProxy proxy;private final Actions actions;private final BlApi api;private final BlImages images;private final SharedPreferences prefs;
-    private final SurfaceView surface;private final LinearLayout controls;private final TextView time,status,subtitle,heading,subheading,clock,hint,debug;
+    private SurfaceView surface;
+    private final View videoCover;
+    private boolean surfaceUsed;
+    private final LinearLayout controls;private final TextView time,status,subtitle,heading,subheading,clock,hint,debug;
     private final ImageButton toggle,dmButton;private final TimeBar seek;
     final BlDanmaku danmaku;
     private IMediaPlayer engine;private JSONArray streams=new JSONArray(),captions=new JSONArray();
@@ -30,6 +34,8 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     private boolean decodedAudioOnly;
     private final boolean systemPlayer,live,multipleParts;private boolean prepared,closed,active=true,seeking,hardware=true,hardwareFailed,wantPlaying=true;
     private final BlDiskBuffer diskBuffer;
+    private final boolean hostDiagnostics;
+    private AtomicLong mediaBytes=new AtomicLong();
     private String source="",audio="",format="";private float playbackSpeed=1;private long clockMinute=-1;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService releases=Executors.newSingleThreadExecutor();
@@ -58,17 +64,20 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
         updatePlaybackIcon();
         updateSubtitle(at);
         actions.position(at);
-        if(prefs.getBoolean("player_debug",false)){
+        if(!hostDiagnostics&&prefs.getBoolean("player_debug",false)){
             debug.setVisibility(VISIBLE);
             setTextChanged(debug,(engine==null?"正在准备":engine.getClass().getSimpleName())
                     +"\n"+width+" × "+height+"  "+format+"\n"+playbackSpeed+"x · "+state+" · 弹幕 "+danmaku.loaded());
         }else debug.setVisibility(GONE);
         main.postDelayed(this,500);
     }};
-    BlPlayer(BlUi ui,BlMediaProxy proxy,BlApi api,BlImages images,String title,boolean live,int partCount,boolean hardware,boolean systemPlayer,Actions actions){
+    BlPlayer(BlUi ui,BlMediaProxy proxy,BlApi api,BlImages images,String title,boolean live,int partCount,boolean hardware,boolean systemPlayer,boolean hostDiagnostics,Actions actions){
         super(ui.context);this.ui=ui;this.proxy=proxy;this.api=api;this.images=images;this.prefs=api.prefs;this.actions=actions;this.live=live;this.multipleParts=partCount>1;this.hardware=hardware;this.systemPlayer=systemPlayer||Build.VERSION.SDK_INT<16;playbackSpeed=prefs.getFloat("play_speed",1);setBackgroundColor(0xff000000);setContentDescription("BL播放器");setClipChildren(true);
+        this.hostDiagnostics=hostDiagnostics;
         diskBuffer=live?null:new BlDiskBuffer(ui.context);
-        surface=new SurfaceView(ui.context);surface.setZOrderMediaOverlay(true);surface.getHolder().addCallback(this);surface.getHolder().setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);addView(surface,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+        addVideoSurface();
+        videoCover=new View(ui.context);videoCover.setBackgroundColor(Color.BLACK);
+        addView(videoCover,new FrameLayout.LayoutParams(-1,-1));
         danmaku=new BlDanmaku(ui,this,prefs);addView(danmaku,new FrameLayout.LayoutParams(-1,-1));
         clock=ui.text("",33,0xffffffff);clock.setTypeface(null,android.graphics.Typeface.BOLD);clock.setShadowLayer(ui.px(4),0,0,0xff000000);FrameLayout.LayoutParams clockBox=ui.frame(-2,54,Gravity.RIGHT|Gravity.TOP);clockBox.rightMargin=ui.px(34);clockBox.topMargin=ui.px(16);addView(clock,clockBox);
         debug=ui.text("",17,0xffffffff);debug.setPadding(ui.px(14),ui.px(12),ui.px(14),ui.px(12));debug.setBackgroundColor(0x99000000);FrameLayout.LayoutParams debugBox=ui.frame(-2,-2,Gravity.LEFT|Gravity.TOP);debugBox.leftMargin=ui.px(16);debugBox.topMargin=ui.px(16);addView(debug,debugBox);debug.setVisibility(GONE);
@@ -150,8 +159,25 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     long resumePosition(){return state.equals("completed")?0:prepared?position():-1;}
     public boolean running(){if(engine==null||!prepared||!active||closed)return false;try{return engine.isPlaying();}catch(Exception e){return false;}}
     void seekTo(long target){if(streams.length()==0||live&&segment>=0)return;long total=duration();if(total>0)target=Math.min(target,total-1);target=Math.max(0,target);int index=0;long start=0;for(int i=0;i<streams.length()-1;i++){long length=streams.optJSONObject(i).optLong("length");if(length<=0||target<start+length)break;start+=length;index++;}position=target;if(index==segment&&engine!=null&&prepared){try{engine.seekTo(target-start);danmaku.start();}catch(Exception ignored){}return;}segment=index;segmentStart=start;seekWhenReady=target-start;JSONObject item=streams.optJSONObject(index);source=item.optString("url");audio=item.optString("bl_audio");format=item.optString("bl_codec",audio.isEmpty()?"MP4/FLV":"DASH");start();}
+    private void addVideoSurface(){
+        surface=new SurfaceView(ui.context);
+        surface.setZOrderMediaOverlay(true);
+        surface.getHolder().setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+        surface.getHolder().addCallback(this);
+        addView(surface,0,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+    }
     private void start(){
-        if(closed||source.isEmpty()||!surface.getHolder().getSurface().isValid())return;releaseEngine();state="preparing";status.setText("正在加载…");status.setVisibility(VISIBLE);
+        if(closed||source.isEmpty())return;
+        releaseEngine();mediaBytes=new AtomicLong();state="preparing";status.setText("正在加载…");status.setVisibility(VISIBLE);
+        if(surfaceUsed){
+            // Detach the producer's previous buffer queue before attaching another decoder.
+            surface.getHolder().removeCallback(this);
+            removeView(surface);
+            surfaceUsed=false;
+            addVideoSurface();
+            return;
+        }
+        if(!surface.getHolder().getSurface().isValid())return;
         final int token=engineGeneration;
         // A single hardware decoder may still be held by release(). Wait off the UI thread.
         releases.execute(new Runnable(){public void run(){main.post(new Runnable(){public void run(){if(!closed&&token==engineGeneration&&surface.getHolder().getSurface().isValid())createEngine();}});}});
@@ -159,7 +185,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
     private void createEngine(){
         try{
             api.clearTransportFailure(source);
-            IMediaPlayer p;if(!audio.isEmpty()&&Build.VERSION.SDK_INT>=16)p=new BlDashPlayer(ui.context,api,audio,lines(),BlApi.array(streams.optJSONObject(segment),"bl_audio_backups"),!decodedAudioOnly,diskBuffer);
+            IMediaPlayer p;if(!audio.isEmpty()&&Build.VERSION.SDK_INT>=16)p=new BlDashPlayer(ui.context,api,audio,lines(),BlApi.array(streams.optJSONObject(segment),"bl_audio_backups"),!decodedAudioOnly,diskBuffer,mediaBytes);
             else if(!systemPlayer){
                 IjkMediaPlayer.loadLibrariesOnce(null);
                 IjkMediaPlayer ijk=new IjkMediaPlayer();
@@ -170,8 +196,16 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
                 ijk.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER,"start-on-prepared",0);
                 p=ijk;
             }else p=new BlSystemPlayer();
-            engine=p;transportSession=proxy.begin();p.setAudioStreamType(AudioManager.STREAM_MUSIC);p.setDisplay(surface.getHolder());
-            p.setOnPreparedListener(new IMediaPlayer.OnPreparedListener(){public void onPrepared(IMediaPlayer mp){if(closed||engine!=mp)return;main.removeCallbacks(prepareTimeout);prepared=true;state=wantPlaying?"playing":"paused";status.setVisibility(GONE);applySpeed();if(seekWhenReady>0)mp.seekTo(seekWhenReady);if(active&&wantPlaying)mp.start();danmaku.start();showControls();}});
+            engine=p;transportSession=proxy.begin();p.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            surfaceUsed=true;p.setDisplay(surface.getHolder());
+            p.setOnInfoListener((mp,what,extra)->{
+                if(!closed&&mp==engine&&what==IMediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START){
+                    videoCover.setVisibility(INVISIBLE);
+                    return true;
+                }
+                return false;
+            });
+            p.setOnPreparedListener(new IMediaPlayer.OnPreparedListener(){public void onPrepared(IMediaPlayer mp){if(closed||engine!=mp)return;main.removeCallbacks(prepareTimeout);prepared=true;state=wantPlaying?"playing":"paused";status.setVisibility(GONE);if(mp instanceof BlSystemPlayer)videoCover.setVisibility(INVISIBLE);applySpeed();if(seekWhenReady>0)mp.seekTo(seekWhenReady);if(active&&wantPlaying)mp.start();danmaku.start();showControls();}});
             p.setOnVideoSizeChangedListener((mp,w,h,n,d)->{
                 if(engine!=mp||w<=0||h<=0)return;
                 width=w;height=h;
@@ -181,8 +215,33 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
             p.setOnBufferingUpdateListener(new IMediaPlayer.OnBufferingUpdateListener(){public void onBufferingUpdate(IMediaPlayer mp,int percent){if(engine==mp)buffered=percent;}});
             p.setOnCompletionListener(new IMediaPlayer.OnCompletionListener(){public void onCompletion(IMediaPlayer mp){if(engine!=mp||closed)return;if(segment+1<streams.length()){segmentStart+=streams.optJSONObject(segment).optLong("length");segment++;JSONObject item=streams.optJSONObject(segment);source=item.optString("url");audio=item.optString("bl_audio");seekWhenReady=0;start();}else{state="completed";actions.complete();}}});
             p.setOnErrorListener(this::engineError);
-            p.setDataSource(p instanceof BlDashPlayer?source:proxy.url(source,transportSession,diskBuffer));p.prepareAsync();main.removeCallbacks(prepareTimeout);main.postDelayed(prepareTimeout,30000);
+            p.setDataSource(p instanceof BlDashPlayer?source:proxy.url(source,transportSession,diskBuffer,mediaBytes));p.prepareAsync();main.removeCallbacks(prepareTimeout);main.postDelayed(prepareTimeout,30000);
         }catch(Exception e){showFailure("打开播放器",e,"");}catch(LinkageError e){showFailure("播放器能力不兼容",e,"请安装匹配设备架构的宿主");}
+    }
+    void reportPlayback(BlPlaybackHost host){
+        Bundle report=new Bundle();
+        report.putString("plugin","BL");
+        report.putString("engine",engine instanceof BlDashPlayer?"DASH":engine instanceof IjkMediaPlayer?"IJK"
+                :engine instanceof BlSystemPlayer?"系统播放器":"");
+        report.putString("state",state);
+        report.putInt("width",width);
+        report.putInt("height",height);
+        report.putLong("downloadedBytes",mediaBytes.get());
+        report.putFloat("speed",playbackSpeed);
+        report.putInt("danmaku",danmaku.loaded());
+        JSONObject item=streams.optJSONObject(segment);
+        if(item!=null){
+            report.putString("videoCodec",item.optString("bl_codec"));
+            report.putString("audioCodec",item.optString("bl_audio_codec"));
+            report.putLong("videoBitrate",item.optLong("bl_video_bitrate",-1));
+            report.putLong("audioBitrate",item.optLong("bl_audio_bitrate",-1));
+        }
+        if(engine instanceof BlDashPlayer)((BlDashPlayer)engine).addDiagnostics(report);
+        else if(prepared&&engine instanceof IjkMediaPlayer){
+            try{report.putFloat("outputFps",((IjkMediaPlayer)engine).getVideoOutputFramesPerSecond());}
+            catch(RuntimeException|LinkageError ignored){}
+        }
+        host.report(mediaBytes,report);
     }
     private boolean engineError(IMediaPlayer mp,int what,int extra){
         if(engine!=mp||closed)return true;
@@ -190,6 +249,10 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
         BlDashPlayer dash=mp instanceof BlDashPlayer?(BlDashPlayer)mp:null;
         Throwable cause=dash==null?api.transportFailure(source):dash.failure();
         java.io.IOException error=new java.io.IOException("播放器错误 what="+what+", extra="+extra+"（"+mediaError(extra)+"）",cause);
+        if(dash!=null&&dash.failureTrack()==BlStreams.Track.EAC3_PASSTHROUGH){
+            showFailure("E-AC-3 直通失败",cause==null?error:cause,"请使用支持 E-AC-3 直通的音频输出或选择 AAC 音轨");
+            return true;
+        }
         if(dash!=null&&!decodedAudioOnly&&dash.passthroughFailed()){
             decodedAudioOnly=true;
             api.diagnostics.record("杜比透传失败",error,describe()+"\n恢复：尝试解码当前音轨");
@@ -266,7 +329,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
         if(old.width!=w||old.height!=h)surface.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));
     }
     protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);fit();}
-    private void releaseEngine(){engineGeneration++;main.removeCallbacks(prepareTimeout);if(engine==null)return;final IMediaPlayer old=engine;final long session=transportSession;engine=null;prepared=false;try{old.setOnPreparedListener(null);old.setOnCompletionListener(null);old.setOnErrorListener(null);old.setOnVideoSizeChangedListener(null);old.setDisplay(null);}catch(Exception ignored){}
+    private void releaseEngine(){engineGeneration++;main.removeCallbacks(prepareTimeout);videoCover.setVisibility(VISIBLE);if(engine==null)return;final IMediaPlayer old=engine;final long session=transportSession;engine=null;prepared=false;width=height=buffered=0;pixelAspectRatio=1;try{old.setOnPreparedListener(null);old.setOnCompletionListener(null);old.setOnErrorListener(null);old.setOnInfoListener(null);old.setOnVideoSizeChangedListener(null);old.setDisplay(null);}catch(Exception ignored){}
         if(old instanceof BlDashPlayer){try{old.release();}catch(Exception ignored){}proxy.retire(session);}else releases.execute(new Runnable(){public void run(){proxy.retire(session);try{old.release();}catch(Exception ignored){}}});
     }
     private void requestPlaying(boolean value){if(closed)return;if(value&&state.equals("completed"))seekTo(0);wantPlaying=value;try{if(engine!=null&&prepared){if(value){engine.start();state="playing";danmaku.start();}else{engine.pause();state="paused";}}}catch(Exception ignored){}updatePlaybackIcon();showControls();}
@@ -310,7 +373,7 @@ final class BlPlayer extends FrameLayout implements SurfaceHolder.Callback,BlDan
         if(e.getAction()==KeyEvent.ACTION_DOWN){main.removeCallbacks(hide);main.postDelayed(hide,6000);}return false;
     }
     void active(boolean value){active=value;danmaku.active(value);main.removeCallbacks(tick);if(!value){if(engine!=null&&prepared)try{engine.pause();}catch(Exception ignored){}main.removeCallbacks(hide);}else{if(engine!=null&&prepared&&wantPlaying)try{engine.start();}catch(Exception ignored){}main.post(tick);danmaku.start();}}
-    public void surfaceCreated(SurfaceHolder h){if(engine==null)start();}public void surfaceChanged(SurfaceHolder h,int f,int w,int height){}public void surfaceDestroyed(SurfaceHolder h){position=position();seekWhenReady=live?0:Math.max(0,position-segmentStart);releaseEngine();}
+    public void surfaceCreated(SurfaceHolder h){if(h==surface.getHolder()&&engine==null)start();}public void surfaceChanged(SurfaceHolder h,int f,int w,int height){}public void surfaceDestroyed(SurfaceHolder h){if(h!=surface.getHolder())return;surfaceUsed=false;position=position();seekWhenReady=live?0:Math.max(0,position-segmentStart);releaseEngine();}
     void close(){if(closed)return;closed=true;main.removeCallbacksAndMessages(null);danmaku.close();releaseEngine();if(diskBuffer!=null)releases.execute(diskBuffer::close);releases.shutdown();}
     boolean awaitRelease(long seconds)throws InterruptedException{return releases.awaitTermination(seconds,TimeUnit.SECONDS);}
     private final class TimeBar extends View {

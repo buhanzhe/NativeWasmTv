@@ -384,6 +384,126 @@ public final class BlPluginInstrumentation extends Instrumentation {
         if(!engine.getClass().getSimpleName().equals("BlDashPlayer"))diskUnavailablePlayback(file,result);
     }
 
+    private JSONObject pluginMediaState()throws Exception{
+        JSONObject[] state={null};
+        onMain(()->{
+            try{
+                invoke(activity,"refreshVideoInfo");
+                state[0]=(JSONObject)invoke(activity,"buildLocalMediaState",false);
+            }catch(Exception error){throw new RuntimeException(error);}
+        });
+        return state[0];
+    }
+
+    private void sharedPlaybackIntegration(Object player,Object engine,Bundle result)throws Exception{
+        onMain(()->{
+            activity.setPlaybackDebugEnabled(true);
+            try{invoke(activity,"handleWebSettings",new JSONObject().put("showNetworkSpeed",true));}
+            catch(Exception error){throw new RuntimeException(error);}
+        });
+        JSONObject status=pluginMediaState();
+        JSONObject stats=status.getJSONObject("currentSourceStats");
+        check("BL".equals(stats.optString("plugin"))&&stats.optInt("width")>0&&stats.optInt("height")>0,
+                "BL video metadata was missing from the web media response: "+stats);
+        check("jar".equals(status.optString("networkSpeedSource"))&&status.optLong("networkDownloadedBytes")>0,
+                "No BL upstream traffic reached the host sampler");
+        check(((android.widget.TextView)field(activity,"debugInfoOverlay")).getText().toString().contains("BL")
+                &&((View)field(activity,"networkSpeedOverlay")).getVisibility()==View.VISIBLE
+                &&((View)field(player,"debug")).getVisibility()==View.GONE,"Host HUD did not replace the plugin overlay");
+
+        View cover=(View)field(player,"videoCover");
+        Object oldSurface=field(player,"surface");
+        onMain(()->{
+            try{
+                invoke(player,"play",field(player,"streams"),0L);
+                check(cover.getVisibility()==View.VISIBLE,"Video switch exposed the previous frame");
+                check(field(player,"surface")!=oldSurface,"Video switch reused its previous buffer queue");
+                invoke(engine,"notifyOnInfo",3,0);
+                check(cover.getVisibility()==View.VISIBLE,"A retired player removed the frame cover");
+            }catch(Exception error){throw new RuntimeException(error);}
+        });
+        Object next=waitPlaying(engine);
+        long until=SystemClock.elapsedRealtime()+5000;
+        while(cover.getVisibility()==View.VISIBLE&&SystemClock.elapsedRealtime()<until)SystemClock.sleep(50);
+        check(cover.getVisibility()==View.INVISIBLE&&field(player,"engine")==next,"The current video did not unveil after startup");
+        JSONObject nextStatus=pluginMediaState();
+        check("jar".equals(nextStatus.optString("networkSpeedSource")),"New playback did not report its own traffic");
+        closePlayback();waitRoute("detail");
+        JSONObject[] afterClose={null};
+        onMain(()->{
+            try{afterClose[0]=(JSONObject)invoke(activity,"buildLocalMediaState",false);}
+            catch(Exception error){throw new RuntimeException(error);}
+        });
+        JSONObject exited=afterClose[0];
+        check(!exited.getJSONObject("currentSourceStats").has("plugin")
+                &&!"jar".equals(exited.optString("networkSpeedSource")),"Previous BL diagnostics survived leaving playback");
+        result.putString("integration",stats.optString("engine")+" shared HUD and web stats, upstream traffic, fresh surface and first frame");
+    }
+
+    private void dolbyDirectPlayback(Object player,Object engine,Bundle result)throws Exception{
+        ClassLoader loader=plugin.getClass().getClassLoader();
+        String exo="com.google.android.exoplayer2.";
+        Class<?> formatType=loader.loadClass(exo+"Format"),sinkType=loader.loadClass(exo+"audio.AudioSink");
+        Method audioFormat=formatType.getMethod("createAudioSampleFormat",String.class,String.class,String.class,
+                int.class,int.class,int.class,int.class,int.class,java.util.List.class,
+                loader.loadClass(exo+"drm.DrmInitData"),int.class,String.class);
+        Object eac3=audioFormat.invoke(null,null,"audio/eac3",null,-1,-1,6,48000,-1,null,null,0,null);
+        Object joc=audioFormat.invoke(null,null,"audio/eac3-joc",null,-1,-1,6,48000,-1,null,null,0,null);
+        Class<?> selectorType=loader.loadClass(exo+"mediacodec.MediaCodecSelector");
+        Object rejectingSelector=Proxy.newProxyInstance(loader,new Class<?>[]{selectorType},
+                (proxy,method,values)->{throw new AssertionError("E-AC-3 reached MediaCodec query "+method.getName());});
+        Object[] renderers=(Object[])field(field(engine,"player"),"renderers");
+        boolean blocked=false;
+        for(Object renderer:renderers){
+            if(!loader.loadClass(exo+"audio.MediaCodecAudioRenderer").isInstance(renderer))continue;
+            check(((Number)invoke(renderer,"supportsFormat",rejectingSelector,null,eac3)).intValue()==1,"System renderer accepted E-AC-3");
+            check(((java.util.List<?>)invoke(renderer,"getDecoderInfos",rejectingSelector,joc,false)).isEmpty(),"System renderer accepted JOC");
+            blocked=true;
+        }
+        check(blocked,"Missing platform audio renderer");
+
+        Object sink=Proxy.newProxyInstance(loader,new Class<?>[]{sinkType},
+                (proxy,method,values)->"supportsOutput".equals(method.getName())?Integer.valueOf(6).equals(values[1]):null);
+        Constructor<?> constructor=loader.loadClass("xiao.bu.channel.bl.BlDolbyPassthroughRenderer")
+                .getDeclaredConstructor(Handler.class,loader.loadClass(exo+"audio.AudioRendererEventListener"),sinkType);
+        constructor.setAccessible(true);
+        Object renderer=constructor.newInstance(null,null,sink);
+        check((((Number)invoke(renderer,"supportsFormat",joc)).intValue()&7)==4,"E-AC-3 sink rejected the compatible JOC bitstream");
+        Object packets=invoke(renderer,"createDecoder",joc,null);
+        try{
+            check(((Number)field(invoke(renderer,"getOutputFormat"),"pcmEncoding")).intValue()==6,"Renderer did not request compressed E-AC-3 output");
+            byte[] accessUnit={11,119,0,5,52,0,1,2,3,4,5,6};
+            Object input=invoke(packets,"dequeueInputBuffer");
+            invoke(input,"ensureSpaceForWrite",accessUnit.length);
+            ((java.nio.ByteBuffer)field(input,"data")).put(accessUnit);
+            invoke(input,"flip");
+            invoke(packets,"queueInputBuffer",input);
+            Object output=null;
+            long until=SystemClock.elapsedRealtime()+2000;
+            while(output==null&&SystemClock.elapsedRealtime()<until){
+                output=invoke(packets,"dequeueOutputBuffer");
+                if(output==null)SystemClock.sleep(10);
+            }
+            check(output!=null,"No compressed access unit reached the output queue");
+            java.nio.ByteBuffer buffer=(java.nio.ByteBuffer)field(output,"data");
+            byte[] forwarded=new byte[buffer.remaining()];buffer.get(forwarded);
+            check(java.util.Arrays.equals(accessUnit,forwarded),"Compressed E-AC-3 access unit was changed");
+            invoke(output,"release");
+        }finally{invoke(packets,"release");}
+
+        int aac=selectedStream().optInt("bl_audio_id");
+        Object replacement=selectPlaybackOption(player,"音轨","杜比全景声");
+        check(replacement.getClass()==engine.getClass()&&selectedStream().optInt("bl_audio_id")==aac,
+                "The PCM-only device should select AAC instead of decoding E-AC-3");
+        waitAudioOutput(player,replacement,aac);
+        Object diagnostics=field(field(plugin,"api"),"diagnostics");
+        boolean directFailure=false;
+        for(Object entry:(java.util.List<?>)invoke(diagnostics,"snapshot"))
+            if(String.valueOf(field(entry,"details")).contains("E-AC-3 直通失败"))directFailure=true;
+        check(directFailure,"Missing E-AC-3 route failure diagnosis");
+        result.putString("dolby","unchanged compressed packets, no MediaCodec queries, AAC on PCM-only output");
+    }
+
     private byte[] cacheTestRange(String url)throws Exception{
         okhttp3.Request request=new okhttp3.Request.Builder().url(url).header("Range","bytes=0-2097151")
                 .header("Cache-Control","no-store").build();
@@ -878,7 +998,8 @@ public final class BlPluginInstrumentation extends Instrumentation {
             screenshot("bl-home.png");
             if("true".equals(args.getString("errors"))){errorScenarios();result.putString("stream","PASS: HTTP 503, malformed JSON, business -352, failing CDN 403, native error-details UI/copy/BACK, recovery and credential redaction");code=-1;return;}
             boolean seekTest="true".equals(args.getString("seek")),vodTest="true".equals(args.getString("vod")),orderTest="true".equals(args.getString("order")),hiresTest="true".equals(args.getString("hires")),cacheTest="true".equals(args.getString("cache"));
-            if(!"true".equals(args.getString("real"))&&!seekTest&&!vodTest&&!orderTest&&!hiresTest&&!cacheTest){verifyBrowseIcons();browseNavigation();result.putString("icons","BBLL rail/card resources; no rail heading; measured 16:9 cover");}
+            boolean integrationTest="true".equals(args.getString("playbackIntegration")),dolbyTest="true".equals(args.getString("dolbyDirect"));
+            if(!"true".equals(args.getString("real"))&&!seekTest&&!vodTest&&!orderTest&&!hiresTest&&!cacheTest&&!integrationTest&&!dolbyTest){verifyBrowseIcons();browseNavigation();result.putString("icons","BBLL rail/card resources; no rail heading; measured 16:9 cover");}
             result.putLong("firstCardsMs",SystemClock.elapsedRealtime()-start);result.putInt("sdk",Build.VERSION.SDK_INT);result.putString("mode","true".equals(args.getString("smoke"))?"smoke":"full");
             Bundle focusStatus=new Bundle();View initialFocus=root.findFocus();focusStatus.putString("stream","BL_FOCUS "+(initialFocus==null?"null":initialFocus.getClass().getName()+":"+initialFocus.getContentDescription())+"\n");sendStatus(0,focusStatus);
             key(KeyEvent.KEYCODE_DPAD_RIGHT);key(KeyEvent.KEYCODE_DPAD_CENTER);waitRoute("detail");
@@ -892,6 +1013,8 @@ public final class BlPluginInstrumentation extends Instrumentation {
             if(orderTest){playbackOrder(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
             if(hiresTest){try{hiresPlayback(player,engine,result);}finally{publicPlaybackDiagnostics();}result.putString("stream","PASS: "+result);code=-1;return;}
             if(cacheTest){playbackCache(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(integrationTest){sharedPlaybackIntegration(player,engine,result);result.putString("stream","PASS: "+result);code=-1;return;}
+            if(dolbyTest){try{dolbyDirectPlayback(player,engine,result);}finally{publicPlaybackDiagnostics();}result.putString("stream","PASS: "+result);code=-1;return;}
             if("true".equals(args.getString("interactions"))){interactionScenarios(player,result);result.putString("stream","PASS: touch/remote player interaction, existing danmaku continuity, transient playback recovery and main-thread responsiveness; "+result.toString());code=-1;return;}
             int soak=0;try{soak=Integer.parseInt(args.getString("soakSeconds","0"));}catch(NumberFormatException ignored){}long soakEnd=SystemClock.elapsedRealtime()+Math.min(600,Math.max(0,soak))*1000L;
             while(SystemClock.elapsedRealtime()<soakEnd){SystemClock.sleep(2000);check("playing".equals(field(player,"state")),"Playback stopped during sustained test: "+field(player,"state"));long at=((Number)position.invoke(player)).longValue();check(at>p2,"Playback clock stalled during sustained test");p2=at;Bundle sample=new Bundle();sample.putString("stream","BL_SOAK positionMs="+at+" javaUsed="+(Runtime.getRuntime().totalMemory()-Runtime.getRuntime().freeMemory())+" nativeUsed="+Debug.getNativeHeapAllocatedSize()+"\n");sendStatus(0,sample);}
