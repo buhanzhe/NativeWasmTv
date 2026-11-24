@@ -12270,7 +12270,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private boolean debugInfoEnabled() {
-        return showDebugInfo || colorDebugInfoEnabled() || showLoadTiming;
+        return (showDebugInfo || colorDebugInfoEnabled() || showLoadTiming)
+                && !(jarChannelRuntime!=null&&jarChannelRuntime.showsNativePage());
     }
 
     boolean isPlaybackDebugEnabled() { return showDebugInfo; }
@@ -15142,6 +15143,8 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     @SuppressLint("SetTextI18n")
     private void refreshVideoInfo() {
+        if(debugInfoOverlay!=null){int visibility=debugInfoEnabled()?View.VISIBLE:View.GONE;
+            if(debugInfoOverlay.getVisibility()!=visibility)debugInfoOverlay.setVisibility(visibility);}
         if (jarChannelRuntime != null) jarChannelRuntime.update(
                 prepared && player != null ? player.getCurrentPosition() : 0L,
                 prepared && player != null && player.isPlaying() && !buffering);

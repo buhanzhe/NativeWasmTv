@@ -98,16 +98,23 @@ final class VideoControlsOverlay extends FrameLayout {
         loadText=label("",16);loadText.setMaxLines(3);loadText.setPadding(dp(12),0,0,0);loadPanel.addView(loadText,new LinearLayout.LayoutParams(-2,-2));
         LayoutParams loadBounds=new LayoutParams(-2,-2,Gravity.CENTER);loadBounds.leftMargin=dp(24);loadBounds.rightMargin=dp(24);addView(loadPanel,loadBounds);loadPanel.setVisibility(GONE);
         controlBar = new LinearLayout(owner) {
-            private final Paint frost = new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+            private final Paint frost = new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG|Paint.DITHER_FLAG);
+            private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
             private final RectF destination = new RectF(), bounds = new RectF();
             private final Path outline = new Path();
+            @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){
+                super.onSizeChanged(width,height,oldWidth,oldHeight);
+                bounds.set(.5f,.5f,width-.5f,height-.5f);outline.reset();outline.addRoundRect(bounds,dp(40),dp(40),Path.Direction.CW);
+                edge.setStyle(Paint.Style.STROKE);edge.setStrokeWidth(Math.max(1f,dp(1)));
+                edge.setShader(new LinearGradient(0,0,width,height,new int[]{0xbbe4eef7,0x3054697d,0x7ca8bac8},null,Shader.TileMode.CLAMP));
+            }
             @Override protected void onDraw(Canvas canvas) {
                 super.onDraw(canvas);
-                bounds.set(0,0,getWidth(),getHeight());outline.reset();outline.addRoundRect(bounds,dp(40),dp(40),Path.Direction.CW);
                 if(glassImage!=null){int save=canvas.save();canvas.clipPath(outline);
                     destination.set(-getLeft(),-getTop(),VideoControlsOverlay.this.getWidth()-getLeft(),VideoControlsOverlay.this.getHeight()-getTop());
                     canvas.drawBitmap(glassImage,null,destination,frost);canvas.restoreToCount(save);}
-                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(glassImage==null?255:190);glassTint.draw(canvas);}
+                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(glassImage==null?255:165);glassTint.draw(canvas);}
+                canvas.drawRoundRect(bounds,dp(40),dp(40),edge);
             }
         };
         controlBar.setWillNotDraw(false);
@@ -116,8 +123,8 @@ final class VideoControlsOverlay extends FrameLayout {
         controlBar.setPadding(dp(34), dp(16), dp(34), dp(16));
         controlBar.setClickable(true);
         GradientDrawable glass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xbb6d7781, 0xbc26343d, 0xd51b252e});
-        glass.setCornerRadius(dp(40)); glass.setStroke(dp(1), 0x99c3d3dc);
+                new int[]{0xa65b6b79, 0xb0253543, 0xc51b2935});
+        glass.setCornerRadius(dp(40));
         glassTint=glass;
         LayoutParams barBounds = new LayoutParams(-1, -2, Gravity.BOTTOM);
         barBounds.leftMargin=dp(28); barBounds.rightMargin=dp(28); barBounds.bottomMargin=dp(28);
@@ -125,7 +132,7 @@ final class VideoControlsOverlay extends FrameLayout {
         LinearLayout metadata = new LinearLayout(owner);
         metadata.setOrientation(LinearLayout.HORIZONTAL); metadata.setGravity(Gravity.CENTER_VERTICAL);
         title = label(playback.title(), 42);
-        title.setTypeface(MediaTypography.display(owner));title.getPaint().setFakeBoldText(true);
+        title.setTypeface(MediaTypography.display(owner));title.getPaint().setSubpixelText(true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         title.setSingleLine(true); title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         metadata.addView(title,new LinearLayout.LayoutParams(0,dp(66),1));
@@ -178,7 +185,7 @@ final class VideoControlsOverlay extends FrameLayout {
         transport.setPadding(0,dp(10),0,0);controlBar.addView(transport,new LinearLayout.LayoutParams(-1,dp(82)));
         rewind = new Icon(owner,"rewind");rewind.setContentDescription("快退 5 秒");styleControl(rewind);
         toggle = new Icon(owner,"pause");toggle.setContentDescription("暂停");
-        GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xffffffff,0xffafbac8,0xfff2f6fb});
+        GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xffffffff,0xffd4dfe8,0xfff0f5fa});
         pauseGlass.setCornerRadius(dp(34));pauseGlass.setStroke(Math.max(1,dp(2)),0xffffffff);toggle.setBackgroundDrawable(pauseGlass);
         forward = new Icon(owner,"forward");forward.setContentDescription("快进 5 秒");styleControl(forward);
         transport.addView(rewind,new LinearLayout.LayoutParams(dp(72),dp(64)));
@@ -191,8 +198,8 @@ final class VideoControlsOverlay extends FrameLayout {
         LinearLayout.LayoutParams dividerBounds=new LinearLayout.LayoutParams(Math.max(1,dp(1)),dp(40));dividerBounds.leftMargin=dp(24);dividerBounds.rightMargin=dp(24);
         transport.addView(divider,dividerBounds);
         LinearLayout options=new LinearLayout(owner);options.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable optionGlass=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0x776c7c8b,0x55394650});
-        optionGlass.setCornerRadius(dp(34));optionGlass.setStroke(Math.max(1,dp(1)),0x558f9fab);options.setBackgroundDrawable(optionGlass);
+        GradientDrawable optionGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x445c7182,0x2226323e});
+        optionGlass.setCornerRadius(dp(34));optionGlass.setStroke(Math.max(1,dp(1)),0x507c93a6);options.setBackgroundDrawable(optionGlass);
         transport.addView(options,new LinearLayout.LayoutParams(0,dp(64),1));
         episodes=label("选集",24);optionIcon(episodes,0);episodes.setContentDescription("选集");styleControl(episodes);
         options.addView(episodes,new LinearLayout.LayoutParams(0,-1,1));episodes.setOnClickListener(v->{hide();try{playback.episodes();}catch(LinkageError ignored){}});
@@ -311,7 +318,8 @@ final class VideoControlsOverlay extends FrameLayout {
         else if ("播放完成 · 重新播放".contentEquals(feedback.getText())) feedback.setText("");
         String status=completed ? "" : playback.status();boolean loading=!completed && playback.loading();
         if(!status.equals(loadStatus)){loadStatus=status;loadText.setText(status);if(!loading&&!status.isEmpty())arm();}
-        loadPanel.setVisibility(status.isEmpty()?GONE:VISIBLE);loadSpinner.setVisibility(loading?VISIBLE:GONE);loadText.setTextColor(loading?0xffffffff:0xffffd5ad);toggle.setVisibility(status.isEmpty()?VISIBLE:INVISIBLE);
+        loadPanel.setVisibility(status.isEmpty()?GONE:VISIBLE);loadSpinner.setVisibility(loading?VISIBLE:GONE);loadText.setTextColor(loading?0xffffffff:0xffffd5ad);
+        toggle.setVisibility(VISIBLE);toggle.setEnabled(status.isEmpty()||loading||completed);toggle.setAlpha(loading?.65f:status.isEmpty()?1f:.35f);
         toggle.kind = playback.playing() ? "pause" : "play"; toggle.invalidate();
         toggle.setContentDescription(completed ? "重新播放" : playback.playing() ? "暂停" : "播放");
         speed.setText("倍速 "+String.format(java.util.Locale.US,"%.1f×",playback.speed()));
@@ -343,8 +351,8 @@ final class VideoControlsOverlay extends FrameLayout {
             if(surface!=null&&surface.isAvailable()){
                 if(surface.getParent() instanceof DirectVideoView&&((DirectVideoView)surface.getParent()).isFrameCovered())return;
                 int size=Math.max(surface.getWidth(),surface.getHeight());
-                android.graphics.Bitmap sample=surface.getBitmap(Math.max(1,128*surface.getWidth()/size),Math.max(1,128*surface.getHeight()/size));
-                if(sample!=null){VideoBlurBackdrop.gaussian(sample);glassImage=sample;}
+                android.graphics.Bitmap sample=surface.getBitmap(Math.max(1,192*surface.getWidth()/size),Math.max(1,192*surface.getHeight()/size));
+                if(sample!=null){VideoBlurBackdrop.gaussian(sample);VideoBlurBackdrop.gaussian(sample);glassImage=sample;}
             }
         }catch(RuntimeException unavailable){glassImage=null;}
         controlBar.invalidate();

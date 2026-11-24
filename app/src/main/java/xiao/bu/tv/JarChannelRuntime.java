@@ -195,6 +195,7 @@ final class JarChannelRuntime {
         JarBrowserViewport.apply(browser,resolution,pageScale);
     }
     boolean visible(){return view!=null&&view.isShown();}
+    boolean showsNativePage(){return visible()&&plugin instanceof ChannelPlugin.NativePage&&!playingVod;}
     boolean blocksHostChannelClick(){return blockHostChannelClick&&plugin!=null&&callback!=null&&callback.current();}
     PlaybackReport playbackReport(){return visible()&&callback!=null&&callback.current()?playbackReport:null;}
     private void clearPlaybackReport(){
