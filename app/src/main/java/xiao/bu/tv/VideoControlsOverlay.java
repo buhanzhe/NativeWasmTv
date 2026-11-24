@@ -45,6 +45,7 @@ final class VideoControlsOverlay extends FrameLayout {
     private final boolean touchAdjustments;
     private final Icon toggle, rewind, forward;
     private final LinearLayout controlBar;
+    private final LiquidGlassTexture playerSkin,buttonSkin;
     private android.graphics.Bitmap glassImage;
     private GradientDrawable glassTint;
     private final TextView time, remaining, quality, feedback, speed, title, episodes, tracks;
@@ -89,6 +90,8 @@ final class VideoControlsOverlay extends FrameLayout {
         activity = owner;
         playback = source;
         touchAdjustments = !television;
+        int textureEdge=Math.max(900,Math.min(1800,Math.max(owner.getResources().getDisplayMetrics().widthPixels,owner.getResources().getDisplayMetrics().heightPixels)));
+        playerSkin=LiquidGlassTexture.load(owner,"player",textureEdge);buttonSkin=LiquidGlassTexture.load(owner,"capsule",textureEdge);
         setWillNotDraw(false);
         setClickable(true);
         setVisibility(GONE);
@@ -113,8 +116,9 @@ final class VideoControlsOverlay extends FrameLayout {
                 if(glassImage!=null){int save=canvas.save();canvas.clipPath(outline);
                     destination.set(-getLeft(),-getTop(),VideoControlsOverlay.this.getWidth()-getLeft(),VideoControlsOverlay.this.getHeight()-getTop());
                     canvas.drawBitmap(glassImage,null,destination,frost);canvas.restoreToCount(save);}
-                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(glassImage==null?255:165);glassTint.draw(canvas);}
+                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(glassImage==null?255:145);glassTint.draw(canvas);}
                 canvas.drawRoundRect(bounds,dp(40),dp(40),edge);
+                if(playerSkin!=null)playerSkin.draw(canvas,bounds,dp(40),195);
             }
         };
         controlBar.setWillNotDraw(false);
@@ -123,7 +127,7 @@ final class VideoControlsOverlay extends FrameLayout {
         controlBar.setPadding(dp(34), dp(16), dp(34), dp(16));
         controlBar.setClickable(true);
         GradientDrawable glass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xa65b6b79, 0xb0253543, 0xc51b2935});
+                new int[]{0x785b7185, 0x951b3043, 0xa01c2e40});
         glass.setCornerRadius(dp(40));
         glassTint=glass;
         LayoutParams barBounds = new LayoutParams(-1, -2, Gravity.BOTTOM);
@@ -186,7 +190,13 @@ final class VideoControlsOverlay extends FrameLayout {
         rewind = new Icon(owner,"rewind");rewind.setContentDescription("快退 5 秒");styleControl(rewind);
         toggle = new Icon(owner,"pause");toggle.setContentDescription("暂停");
         GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xffffffff,0xffd4dfe8,0xfff0f5fa});
-        pauseGlass.setCornerRadius(dp(34));pauseGlass.setStroke(Math.max(1,dp(2)),0xffffffff);toggle.setBackgroundDrawable(pauseGlass);
+        pauseGlass.setCornerRadius(dp(34));pauseGlass.setStroke(Math.max(1,dp(1)),0xffffffff);
+        toggle.setBackgroundDrawable(new android.graphics.drawable.Drawable(){
+            final RectF bounds=new RectF();
+            protected void onBoundsChange(android.graphics.Rect value){pauseGlass.setBounds(value);bounds.set(value);}
+            public void draw(Canvas canvas){pauseGlass.draw(canvas);if(buttonSkin!=null)buttonSkin.draw(canvas,bounds,dp(34),220);}
+            public void setAlpha(int alpha){pauseGlass.setAlpha(alpha);}public void setColorFilter(android.graphics.ColorFilter filter){pauseGlass.setColorFilter(filter);}public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+        });
         forward = new Icon(owner,"forward");forward.setContentDescription("快进 5 秒");styleControl(forward);
         transport.addView(rewind,new LinearLayout.LayoutParams(dp(72),dp(64)));
         LinearLayout.LayoutParams playBounds=new LinearLayout.LayoutParams(dp(112),dp(64));playBounds.leftMargin=dp(22);playBounds.rightMargin=dp(22);
