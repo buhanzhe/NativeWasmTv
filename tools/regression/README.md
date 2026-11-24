@@ -128,3 +128,7 @@ CMS 样本 `/config`：音乐站点的同一歌单至少两首，标题为 `BIGB
 Release 测试的 `playerField`、`engineField`、`runtimeField`、`vodTitleField` 和
 `systemPlayerClass` 参数必须来自该 APK 对应的 R8 mapping。2026-11-24 在原签名
 Bro 1.8.3 / versionCode 12 上，MI 6（7.1.1）与 SM-G3608（4.4.4）均实机通过。
+
+同一最终包还检查 TVBox 的 IJK/系统视频：启播、暂停、恢复、播放提示和进度控件
+均不显示宿主频道卡；退出插件后普通音频仍能显示自己的信息卡。MI 6 另用真实
+易听站点播放《爱如潮水》，柔光唱片页正确显示“张信哲 - 爱如潮水”。

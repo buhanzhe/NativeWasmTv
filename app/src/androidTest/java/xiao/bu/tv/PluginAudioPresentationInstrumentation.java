@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.GridView;
 import java.io.*;
@@ -61,6 +62,9 @@ public final class PluginAudioPresentationInstrumentation extends Instrumentatio
     private void title(String expected) throws Exception { waitFor("track title "+expected,()->artwork()!=null&&expected.equals(field(artwork(),"title"))); check(true,"artwork title = "+expected); }
     private void choose(String style) throws Exception { check(api("/api/radio-ui",new JSONObject().put("id",style)).optString("selected").equals(style),"selected "+style);waitFor(style+" applied",()->artwork()!=null&&((Boolean)field(artwork(),"optical"))==style.equals("optical")); }
     private void audio() throws Exception { waitFor("audio playing",()->{JSONObject s=api("/api/media?detail=0",null);return s.optBoolean("playing")&&s.optBoolean("audioOnly");}); }
+    private View hostView(String name) { return activity.findViewById(activity.getResources().getIdentifier(name,"id","xiao.bu.tv")); }
+    private void noChannelCard(String label) { waitForIdleSync();check(hostView("channel_bar")!=null&&hostView("channel_bar").getVisibility()!=View.VISIBLE,label+": channel card hidden"); }
+    private View named(View view,String description) { if(description.equals(view.getContentDescription()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View found=named(((ViewGroup)view).getChildAt(i),description);if(found!=null)return found;}return null; }
     private void screenshot(String name) throws Exception { Bitmap b=getUiAutomation().takeScreenshot();check(b!=null,"screenshot "+name);File p=new File(activity.getExternalFilesDir(null),"audio-"+name+".png");try(OutputStream out=new FileOutputStream(p)){b.compress(Bitmap.CompressFormat.PNG,100,out);}b.recycle();log("CAPTURE "+name+" "+p); }
     private void install() throws Exception {
         File source=new File(activity.getExternalFilesDir(null),"tvbox-layout.jar"),dir=new File(activity.getFilesDir(),"installed-plugins");dir.mkdirs();
@@ -81,7 +85,17 @@ public final class PluginAudioPresentationInstrumentation extends Instrumentatio
             runOnMainSync(()->oldHost.playVod(base+"/audio.mp3",new JSONObject(),"STALE TITLE"));
             Object runtime=field(activity,args.getString("runtimeField","jarChannelRuntime"));check("BIGBANG - 하루하루".equals(field(runtime,args.getString("vodTitleField","vodTitle"))),"stale plugin cannot replace active metadata");title("BIGBANG - 하루하루");
             Object system=player();choose("classic");choose("optical");title("BIGBANG - 하루하루");check(player()==system,"system player survives both artwork switches");screenshot("optical-system-track");
+            for(String mode:new String[]{"ijk","system"}){
+                engine(mode);ChannelPlugin before=plugin;open(uri,"TVBox");waitFor("new video page",()->currentPlugin()!=null&&currentPlugin()!=before);ready();grid(1);grid(0);grid(0);
+                waitFor(mode+" video frame",()->{JSONObject s=api("/api/media?detail=0",null);return s.optBoolean("playing")&&!s.optBoolean("audioOnly")&&s.optBoolean("videoFrameConfirmed");});noChannelCard(mode+" startup");
+                api("/api/media/control",new JSONObject().put("action","pause"));waitFor("video paused",()->!api("/api/media?detail=0",null).optBoolean("playing"));noChannelCard(mode+" pause");
+                api("/api/media/control",new JSONObject().put("action","play"));waitFor("video resumed",()->api("/api/media?detail=0",null).optBoolean("playing"));noChannelCard(mode+" resume");
+                ChannelPlugin.Host current=(ChannelPlugin.Host)field(plugin,"host");runOnMainSync(()->current.status("播放提示样本"));waitForIdleSync();noChannelCard(mode+" notice");
+                sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("VOD controls",()->{View episodes=named(activity.getWindow().getDecorView(),"选集");return episodes!=null&&episodes.isShown();});noChannelCard(mode+" VOD controls");screenshot("video-no-channel-card-"+mode);
+                sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);waitForIdleSync();
+            }
             open(base+"/audio.mp3","Ordinary audio");audio();title("Ordinary audio");check(currentPlugin()==null,"leaving plugin clears its metadata");
+            api("/api/media/control",new JSONObject().put("action","pause"));waitFor("ordinary channel card",()->hostView("channel_bar").getVisibility()==View.VISIBLE);check(true,"ordinary channels retain their information card");
             result=Activity.RESULT_OK;
         } catch(Throwable failure) { log("FAIL "+android.util.Log.getStackTraceString(failure)); }
         finally { if(originalEngine!=null)try{engine(originalEngine);}catch(Exception ignored){} }

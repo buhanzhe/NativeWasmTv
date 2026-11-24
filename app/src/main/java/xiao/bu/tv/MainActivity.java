@@ -14480,6 +14480,13 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void showChannelCard() {
+        if (jarChannelRuntime != null && (jarChannelRuntime.playingVod()
+                || jarChannelRuntime.blocksHostChannelClick())) {
+            channelCardDeferredForArtwork = false;
+            channelBar.removeCallbacks(hideChannelBar);
+            channelBar.setVisibility(View.GONE);
+            return;
+        }
         applyTvUiCardTheme();
         refreshTvUiCard();
         if (receivingRtspCast()) {
