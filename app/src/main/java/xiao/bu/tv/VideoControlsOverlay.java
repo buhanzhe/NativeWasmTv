@@ -146,18 +146,18 @@ final class VideoControlsOverlay extends FrameLayout {
         hint.bottomMargin=dp(260);addView(feedback,hint);
         seek = new SeekBar(owner);
         seek.setMax(1000);
-        android.graphics.drawable.Drawable track = new ThinTrack(0x66ffffff,dp(3));
-        android.graphics.drawable.Drawable fill = new ThinTrack(0xffffffff,dp(3));
+        android.graphics.drawable.Drawable track = new ThinTrack(0x66ffffff,dp(6));
+        android.graphics.drawable.Drawable fill = new ThinTrack(0xffffffff,dp(6));
         LayerDrawable progress = new LayerDrawable(new android.graphics.drawable.Drawable[] {
                 track, new ClipDrawable(fill, Gravity.LEFT, ClipDrawable.HORIZONTAL) });
         progress.setId(0, android.R.id.background); progress.setId(1, android.R.id.progress);
         seek.setProgressDrawable(progress);
         GradientDrawable thumb = new GradientDrawable(); thumb.setShape(GradientDrawable.OVAL);
-        thumb.setColor(0xffffffff); thumb.setSize(dp(10), dp(10)); seek.setThumb(thumb);
+        thumb.setColor(0xffffffff); thumb.setSize(dp(14), dp(14)); seek.setThumb(thumb);
         // Before Jelly Bean the track bounds also depend on thumb height.
-        // Leave room for the 10dp thumb, otherwise those bounds become inverted.
+        // Leave room for the 14dp thumb, otherwise those bounds become inverted.
         int seekPadding = dp(10);
-        seek.setThumbOffset(dp(5)); seek.setPadding(dp(5), seekPadding, dp(5), seekPadding);
+        seek.setThumbOffset(dp(7)); seek.setPadding(dp(7), seekPadding, dp(7), seekPadding);
         if (android.os.Build.VERSION.SDK_INT >= 21) seek.setSplitTrack(false);
         timeline.addView(seek,new LinearLayout.LayoutParams(0,dp(42),1));
         timeline.addView(remaining,new LinearLayout.LayoutParams(dp(96),dp(42)));
