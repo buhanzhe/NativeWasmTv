@@ -61,6 +61,7 @@ final class VideoControlsOverlay extends FrameLayout {
     private long startPosition, gestureDuration, seekPosition;
     private int gestureAxis;
     private boolean moved, dragging;
+    private boolean remoteNavigation, skipConfirmUp;
     private final RemoteSeekState remoteSeek = new RemoteSeekState(ViewConfiguration.getLongPressTimeout());
     private final Runnable remoteRepeat = new Runnable() {
         public void run() {
@@ -178,6 +179,7 @@ final class VideoControlsOverlay extends FrameLayout {
         speedOptions.setGravity(Gravity.RIGHT); speedOptions.setVisibility(GONE);
         for (final float rate : new float[] {0.5f, 1f, 1.25f, 1.5f, 2f, 3f}) {
             TextView choice = label(rate + "×", 15);
+            styleControl(choice);
             speedOptions.addView(choice, new LinearLayout.LayoutParams(dp(58), dp(44)));
             choice.setOnClickListener(new OnClickListener() {
                 public void onClick(View v) {
@@ -190,6 +192,7 @@ final class VideoControlsOverlay extends FrameLayout {
         transport.setPadding(0,dp(10),0,0);controlBar.addView(transport,new LinearLayout.LayoutParams(-1,dp(82)));
         rewind = new Icon(owner,"rewind");rewind.setContentDescription("快退 5 秒");styleControl(rewind);
         toggle = new Icon(owner,"pause");toggle.setContentDescription("暂停");
+        toggle.setFocusable(true);
         GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xf0f5f7fa,0xd4dce2e8});
         pauseGlass.setCornerRadius(dp(34));pauseGlass.setStroke(Math.max(1,dp(1)),0xffffffff);
         toggle.setBackgroundDrawable(pauseGlass);
@@ -211,7 +214,7 @@ final class VideoControlsOverlay extends FrameLayout {
         options.addView(episodes,new LinearLayout.LayoutParams(0,-1,1));episodes.setOnClickListener(v->{hide();try{playback.episodes();}catch(LinkageError ignored){}});
         tracks=label("音轨与字幕",24);optionIcon(tracks,1);tracks.setContentDescription("音轨与字幕");styleControl(tracks);
         options.addView(tracks,new LinearLayout.LayoutParams(0,-1,1.6f));tracks.setOnClickListener(v->showTracks());
-        speed = label("倍速 1.0×",24);optionIcon(speed,2);speed.setGravity(Gravity.CENTER);styleControl(speed);
+        speed = label("倍速 1.0×",24);speed.setContentDescription("倍速");optionIcon(speed,2);speed.setGravity(Gravity.CENTER);styleControl(speed);
         options.addView(speed,new LinearLayout.LayoutParams(0,-1,1.2f));
         speed.setOnClickListener(v->{if(!speedSupported())return;
             speedOptions.setVisibility(speedOptions.getVisibility()==VISIBLE?GONE:VISIBLE);arm();});
@@ -234,14 +237,26 @@ final class VideoControlsOverlay extends FrameLayout {
     }
     private void optionIcon(TextView label,int kind) {
         android.graphics.drawable.Drawable icon=new android.graphics.drawable.Drawable(){
-            private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final Path shape=new Path();
-            public void draw(Canvas canvas){int saved=canvas.save();android.graphics.Rect b=getBounds();canvas.translate(b.left,b.top);canvas.scale(b.width()/24f,b.height()/24f);
-                paint.setColor(0xffeef5fb);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setStrokeJoin(Paint.Join.ROUND);paint.setStrokeCap(Paint.Cap.ROUND);shape.reset();
-                if(kind==0){shape.moveTo(3,7);shape.lineTo(12,2);shape.lineTo(21,7);shape.lineTo(12,12);shape.close();canvas.drawPath(shape,paint);for(int y:new int[]{12,17}){shape.reset();shape.moveTo(3,y);shape.lineTo(12,y+5);shape.lineTo(21,y);canvas.drawPath(shape,paint);}}
-                else if(kind==1){canvas.drawRoundRect(new RectF(2,3,22,17),3,3,paint);shape.moveTo(7,17);shape.lineTo(5,22);shape.lineTo(13,17);canvas.drawPath(shape,paint);canvas.drawLine(7,8,17,8,paint);canvas.drawLine(7,12,14,12,paint);}
-                else{canvas.drawArc(new RectF(3,3,21,21),140,260,false,paint);canvas.drawLine(12,13,17,6,paint);canvas.drawCircle(12,13,1,paint);}
-                canvas.restoreToCount(saved);}
-            public void setAlpha(int alpha){paint.setAlpha(alpha);}public void setColorFilter(android.graphics.ColorFilter filter){paint.setColorFilter(filter);}public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+            private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+            private final Path shape=new Path(),pixels=new Path();
+            private final android.graphics.Matrix coordinates=new android.graphics.Matrix();
+            private final RectF gauge=new RectF();
+            private float unit,left,top;private int alpha=255;
+            @Override protected void onBoundsChange(android.graphics.Rect b){float edge=Math.min(b.width(),b.height());unit=edge/24;left=b.left+(b.width()-edge)/2;top=b.top+(b.height()-edge)/2;coordinates.setScale(unit,unit);coordinates.postTranslate(left,top);}
+            private void stroke(Canvas canvas){shape.transform(coordinates,pixels);canvas.drawPath(pixels,paint);}
+            public void draw(Canvas canvas){
+                paint.setColor(0xfff4f8ff);paint.setAlpha(alpha);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1.5f,Math.round(1.8f*unit)));paint.setStrokeJoin(Paint.Join.ROUND);paint.setStrokeCap(Paint.Cap.ROUND);shape.reset();
+                if(kind==0){shape.moveTo(3,7);shape.lineTo(12,2.5f);shape.lineTo(21,7);shape.lineTo(12,11.5f);shape.close();stroke(canvas);for(int y=12;y<=17;y+=5){shape.reset();shape.moveTo(3,y);shape.lineTo(12,y+4.5f);shape.lineTo(21,y);stroke(canvas);}}
+                else if(kind==1){
+                    shape.moveTo(6,4);shape.lineTo(18,4);shape.quadTo(21,4,21,7);shape.lineTo(21,15);shape.quadTo(21,18,18,18);
+                    shape.lineTo(10,18);shape.lineTo(5,22);shape.lineTo(6,18);shape.quadTo(3,18,3,15);shape.lineTo(3,7);shape.quadTo(3,4,6,4);shape.close();stroke(canvas);
+                    shape.reset();shape.moveTo(7,9);shape.lineTo(17,9);shape.moveTo(7,13);shape.lineTo(14,13);stroke(canvas);
+                }else{
+                    gauge.set(left+3*unit,top+3*unit,left+21*unit,top+21*unit);canvas.drawArc(gauge,140,260,false,paint);
+                    canvas.drawLine(left+12*unit,top+13*unit,left+17*unit,top+6*unit,paint);canvas.drawCircle(left+12*unit,top+13*unit,unit,paint);
+                }
+            }
+            public void setAlpha(int value){alpha=Math.max(0,Math.min(255,value));invalidateSelf();}public void setColorFilter(android.graphics.ColorFilter filter){paint.setColorFilter(filter);invalidateSelf();}public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
         };
         icon.setBounds(0,0,dp(30),dp(30));label.setCompoundDrawables(icon,null,null,null);label.setCompoundDrawablePadding(dp(8));label.setPadding(dp(14),0,dp(14),0);
     }
@@ -249,14 +264,57 @@ final class VideoControlsOverlay extends FrameLayout {
         android.graphics.drawable.StateListDrawable states=new android.graphics.drawable.StateListDrawable();
         GradientDrawable pressed=new GradientDrawable();pressed.setColor(0x55e3efff);pressed.setCornerRadius(dp(22));
         states.addState(new int[]{android.R.attr.state_pressed},pressed);
+        GradientDrawable focused=new GradientDrawable();focused.setColor(0x334c6376);focused.setCornerRadius(dp(22));focused.setStroke(Math.max(1,dp(2)),0xffe7f6ff);
+        states.addState(new int[]{android.R.attr.state_focused},focused);
         GradientDrawable normal=new GradientDrawable();normal.setColor(0x00000000);states.addState(new int[]{},normal);
-        view.setBackgroundDrawable(states);view.setFocusable(false);
+        view.setBackgroundDrawable(states);view.setFocusable(true);
     }
     private int dp(int value) { android.util.DisplayMetrics m=getResources().getDisplayMetrics();return Math.round(value*Math.max(.5f,Math.max(m.widthPixels,m.heightPixels)/1280f)); }
     void show() { captureGlassFrame();title.setText(MediaTypography.title(playback.title())); feedback.setText(""); speedOptions.setVisibility(GONE); setVisibility(VISIBLE); bringToFront(); refresh(); removeCallbacks(tick); post(tick); arm(); }
-    void hide() { glassImage=null;controlBar.invalidate();cancelRemoteSeek(); setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
+    void hide() { remoteNavigation=false;skipConfirmUp=false;clearFocus();glassImage=null;controlBar.invalidate();cancelRemoteSeek(); setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
+    void showForRemote(int openingKey) {
+        show();remoteNavigation=true;
+        skipConfirmUp=openingKey==KeyEvent.KEYCODE_DPAD_CENTER||openingKey==KeyEvent.KEYCODE_ENTER;
+        toggle.requestFocusFromTouch();
+        toggle.post(()->{if(remoteNavigation&&visible()&&findFocus()==null)toggle.requestFocusFromTouch();});
+    }
+    private boolean navigationKey(KeyEvent event,int key) {
+        boolean confirm=key==KeyEvent.KEYCODE_DPAD_CENTER||key==KeyEvent.KEYCODE_ENTER;
+        if(key==KeyEvent.KEYCODE_DPAD_UP||key==KeyEvent.KEYCODE_DPAD_DOWN){
+            if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0){
+                cancelRemoteSeek();
+                if(!visible())show();
+                if(key==KeyEvent.KEYCODE_DPAD_UP){
+                    if(speedOptions.getVisibility()==VISIBLE){remoteNavigation=true;speedOptions.getChildAt(0).requestFocusFromTouch();}
+                    else{remoteNavigation=false;seek.requestFocusFromTouch();}
+                }else{remoteNavigation=true;toggle.requestFocusFromTouch();}
+                arm();
+            }
+            return true;
+        }
+        if(confirm){
+            if(!visible()||!remoteNavigation){if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0)showForRemote(key);return true;}
+            if(event.getAction()==KeyEvent.ACTION_UP){
+                if(skipConfirmUp){skipConfirmUp=false;return true;}
+                View focused=findFocus();if(!event.isCanceled()&&focused!=null&&focused.isEnabled())focused.performClick();
+                if(visible()&&(focused==null||!focused.isShown()))speed.requestFocusFromTouch();
+                arm();
+            }
+            return true;
+        }
+        if(!remoteNavigation||!visible()||(key!=KeyEvent.KEYCODE_DPAD_LEFT&&key!=KeyEvent.KEYCODE_DPAD_RIGHT))return false;
+        if(event.getAction()==KeyEvent.ACTION_DOWN){
+            View focused=findFocus();java.util.ArrayList<View> choices=new java.util.ArrayList<>();
+            if(speedOptions.getVisibility()==VISIBLE&&focused!=null&&focused.getParent()==speedOptions){for(int i=0;i<speedOptions.getChildCount();i++)choices.add(speedOptions.getChildAt(i));}
+            else for(View candidate:new View[]{rewind,toggle,forward,episodes,tracks,speed})if(candidate.isShown()&&candidate.isEnabled())choices.add(candidate);
+            if(!choices.isEmpty()){int index=choices.indexOf(focused);int direction=key==KeyEvent.KEYCODE_DPAD_LEFT?-1:1;choices.get((Math.max(0,index)+direction+choices.size())%choices.size()).requestFocusFromTouch();}
+            arm();
+        }
+        return true;
+    }
     boolean remoteKey(KeyEvent event) { return remoteKey(event, event.getKeyCode()); }
     boolean remoteKey(KeyEvent event, int key) {
+        if(navigationKey(event,key))return true;
         int direction = key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND ? -1
                 : key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ? 1 : 0;
         if (direction == 0) return false;
@@ -386,7 +444,13 @@ final class VideoControlsOverlay extends FrameLayout {
         }
         panel.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(300),rows.length()*dp(52))));
         dialog.setContentView(panel);android.view.Window window=dialog.getWindow();if(window!=null)window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
-        dialog.setOnDismissListener(d->arm());dialog.show();if(window!=null)window.setLayout(Math.min(getWidth()-dp(48),dp(700)),-2);
+        dialog.setOnKeyListener((owner,key,event)->{
+            if(key!=KeyEvent.KEYCODE_BUTTON_SELECT&&key!=KeyEvent.KEYCODE_BUTTON_A&&key!=KeyEvent.KEYCODE_NUMPAD_ENTER)return false;
+            if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled()){View focused=dialog.getCurrentFocus();if(focused!=null&&focused.isEnabled())focused.performClick();}
+            return true;
+        });
+        dialog.setOnDismissListener(d->{if(remoteNavigation&&visible())tracks.post(()->{if(remoteNavigation&&visible())tracks.requestFocusFromTouch();});arm();});dialog.show();if(window!=null)window.setLayout(Math.min(getWidth()-dp(48),dp(700)),-2);
+        if(list.getChildCount()>0)list.getChildAt(0).post(()->list.getChildAt(0).requestFocusFromTouch());
     }
 
     private boolean catchup() { return playback instanceof Playback && ((Playback) playback).catchup(); }
@@ -419,8 +483,15 @@ final class VideoControlsOverlay extends FrameLayout {
     private static final class Icon extends View {
         String kind;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Path seekArrow = new Path();
+        final RectF seekRing = new RectF();
+        final Paint.FontMetrics digitMetrics = new Paint.FontMetrics();
         Icon(Context context, String value) { super(context); kind = value; }
         @Override protected void onDraw(Canvas canvas) {
+            if ("rewind".equals(kind) || "forward".equals(kind)) {
+                drawSeekIcon(canvas);
+                return;
+            }
             canvas.save();
             float size = Math.min(getWidth(), getHeight()) * ("pause".equals(kind) || "play".equals(kind) ? 0.66f : 0.56f);
             canvas.translate((getWidth() - size) / 2f, (getHeight() - size) / 2f);
@@ -437,14 +508,6 @@ final class VideoControlsOverlay extends FrameLayout {
             } else if ("play".equals(kind)) {
                 paint.setStyle(Paint.Style.FILL); Path path = new Path();
                 path.moveTo(7, 3); path.lineTo(21, 12); path.lineTo(7, 21); path.close(); canvas.drawPath(path, paint);
-            } else if ("rewind".equals(kind) || "forward".equals(kind)) {
-                boolean backward="rewind".equals(kind);
-                if(backward){canvas.scale(-1,1,12,12);}
-                canvas.drawArc(new RectF(4,4,20,20),-65,285,false,paint);
-                Path arrow=new Path();arrow.moveTo(17,2);arrow.lineTo(19,7);arrow.lineTo(14,7);canvas.drawPath(arrow,paint);
-                if(backward){canvas.scale(-1,1,12,12);}
-                paint.setStyle(Paint.Style.FILL);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(10);
-                canvas.drawText("5",12,15.5f,paint);
             } else if ("sun".equals(kind)) {
                 canvas.drawCircle(12, 12, 4, paint);
                 for (int i = 0; i < 8; i++) {
@@ -461,9 +524,28 @@ final class VideoControlsOverlay extends FrameLayout {
             }
             canvas.restore();
         }
+        private void drawSeekIcon(Canvas canvas) {
+            float unit=Math.min(getWidth(),getHeight())*.56f/24f;
+            float cx=getWidth()/2f,cy=getHeight()/2f;
+            boolean backward="rewind".equals(kind);
+            paint.setColor(0xfff4f8ff);paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1.5f,Math.round(1.55f*unit)));
+            paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
+            seekRing.set(cx-8.25f*unit,cy-8.25f*unit,cx+8.25f*unit,cy+8.25f*unit);
+            canvas.drawArc(seekRing,backward?185:-5,backward?-315:315,false,paint);
+            float mirror=backward?-1:1;
+            seekArrow.reset();seekArrow.moveTo(cx+mirror*2.23f*unit,cy-6.54f*unit);
+            seekArrow.lineTo(cx+mirror*5.3f*unit,cy-6.32f*unit);
+            seekArrow.lineTo(cx+mirror*4.55f*unit,cy-9.3f*unit);
+            canvas.drawPath(seekArrow,paint);
+            paint.setStyle(Paint.Style.FILL);paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(android.graphics.Typeface.create("sans-serif",android.graphics.Typeface.NORMAL));
+            paint.setTextSize(9*unit);paint.getFontMetrics(digitMetrics);
+            canvas.drawText("5",cx,cy+unit-(digitMetrics.ascent+digitMetrics.descent)/2,paint);
+        }
     }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) { cancelRemoteSeek(); removeCallbacks(dismiss); }
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) { remoteNavigation=false;skipConfirmUp=false;clearFocus();cancelRemoteSeek(); removeCallbacks(dismiss); }
         boolean handled = super.dispatchTouchEvent(event);
         if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) arm();
         return handled;

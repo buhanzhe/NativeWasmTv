@@ -17489,6 +17489,19 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return super.dispatchKeyEvent(event);
         }
         if(tvUiMenu.dispatchKeyEvent(event))return true;
+        int rawKeyCode = event.getKeyCode();
+        int keyCode = normalizeRemoteKeyCode(rawKeyCode);
+        if (jarPageOwnsInput() && (keyCode == KeyEvent.KEYCODE_DPAD_UP
+                || keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_ENTER)) {
+            if(event.getAction()==KeyEvent.ACTION_DOWN)setRemoteInputMode(true);
+            KeyEvent nativeEvent = rawKeyCode == keyCode ? event : new KeyEvent(event.getDownTime(),
+                    event.getEventTime(),event.getAction(),keyCode,event.getRepeatCount(),event.getMetaState(),
+                    event.getDeviceId(),event.getScanCode(),event.getFlags(),event.getSource());
+            jarChannelRuntime.dispatchKey(nativeEvent);
+            return true;
+        }
         if(jarChannelRuntime!=null&&jarChannelRuntime.dispatchMedia(event))return true;
         if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PREVIOUS
                 || event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_NEXT) {
@@ -17498,21 +17511,20 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             return true;
         }
 
-        int rawKeyCode = event.getKeyCode();
-        int keyCode = normalizeRemoteKeyCode(rawKeyCode);
-        if (jarChannelRuntime != null && jarChannelRuntime.visible()
-                && backPrompt.getVisibility() != View.VISIBLE
-                && managementPanel.getVisibility() != View.VISIBLE
-                && channelListPanel.getVisibility() != View.VISIBLE
-                && (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-                    || keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-                    || keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
-            jarChannelRuntime.dispatchKey(event);
-            return true;
-        }
         if(liteWebPlayback!=null&&liteWebPlayback.isRendering()
                 && backPrompt.getVisibility()!=View.VISIBLE && managementPanel.getVisibility()!=View.VISIBLE
                 && channelListPanel.getVisibility()!=View.VISIBLE && liteWebPlayback.handleKey(event))return true;
+        boolean pluginVodNavigation=jarChannelRuntime!=null&&jarChannelRuntime.playingVod()
+                &&!audioOnlyPlayback&&seekableDuration()>0L&&managementPanel.getVisibility()!=View.VISIBLE
+                &&backPrompt.getVisibility()!=View.VISIBLE&&channelListPanel.getVisibility()!=View.VISIBLE;
+        boolean confirmOrVertical=keyCode==KeyEvent.KEYCODE_DPAD_CENTER||keyCode==KeyEvent.KEYCODE_ENTER
+                ||keyCode==KeyEvent.KEYCODE_DPAD_UP||keyCode==KeyEvent.KEYCODE_DPAD_DOWN;
+        if(pluginVodNavigation&&confirmOrVertical){
+            if(videoControlsOverlay==null||!videoControlsOverlay.visible()){
+                if(event.getAction()==KeyEvent.ACTION_DOWN&&event.getRepeatCount()==0){showVideoControls();if(videoControlsOverlay!=null)videoControlsOverlay.showForRemote(keyCode);}
+            }else videoControlsOverlay.remoteKey(event,keyCode);
+            return true;
+        }
         boolean seekKey = keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
                 || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND || keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD;
         if (seekKey && managementPanel.getVisibility() != View.VISIBLE
