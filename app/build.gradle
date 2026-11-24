@@ -45,7 +45,7 @@ if (embeddedUjsChecks) {
 }
 def configuredTargetSdk = 25
 def configuredVersionCode = project.hasProperty('versionCodeOverride')
-        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 11
+        ? Integer.parseInt(project.property('versionCodeOverride').toString()) : 12
 if (releaseSigningAvailable) {
     releaseSigningInfo.withInputStream { releaseSigningProperties.load(it) }
     ['alias', 'storePassword', 'keyPassword'].each { propertyName ->
@@ -96,7 +96,7 @@ android {
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion configuredTargetSdk
         versionCode configuredVersionCode
-        versionName '1.8.3'
+        versionName '1.8.4'
         buildConfigField 'boolean', 'LITE_BROWSER_DEFAULT',
                 project.findProperty('liteBrowserDefault') == 'false' ? 'false' : 'true'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',

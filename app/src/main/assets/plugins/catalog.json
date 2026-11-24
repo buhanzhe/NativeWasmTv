@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "release": "v1.0.4",
+  "release": "v1.0.5",
   "plugins": [
     {
       "id": "file-browser",
@@ -9,7 +9,7 @@
       "artifacts": [
         {
           "file": "file-browser.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/file-browser.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/file-browser.jar",
           "sha256": "f220faea6c078edada7d33996ec87e45bb54d9ff5db447e9f7259fbbcec73ae2",
           "bytes": 371277,
           "version": "3",
@@ -25,10 +25,10 @@
       "artifacts": [
         {
           "file": "tvbox.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/tvbox.jar",
-          "sha256": "72e55453f166171bd8a32da217c084115f880844f4996f3a150766f0c2a76cfc",
-          "bytes": 1058778,
-          "version": "6",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/tvbox.jar",
+          "sha256": "239ae3bda7eb53abe6925c7f62e9833dce3cf04b83be9b027077000f541d430f",
+          "bytes": 1069176,
+          "version": "7",
           "minSdk": 14,
           "abis": []
         }
@@ -41,7 +41,7 @@
       "artifacts": [
         {
           "file": "python-arm32.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/python-arm32.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/python-arm32.jar",
           "sha256": "dc0292b8975882e2d2fdeb6e4ea9d9a3ec451117f29f7dbb8889a2a610029818",
           "bytes": 9977250,
           "version": "2",
@@ -53,7 +53,7 @@
         },
         {
           "file": "python-arm64.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/python-arm64.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/python-arm64.jar",
           "sha256": "8ea75b30123035909e149c694598c4c816b6c15c7caa5b3d4c5ead6d4c98b6c4",
           "bytes": 11173405,
           "version": "2",
@@ -72,7 +72,7 @@
       "artifacts": [
         {
           "file": "bl.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/bl.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/bl.jar",
           "sha256": "f8b4005fe683fddaf739bfb5625fdb3be724f8afc1012017d7a2f4c7784a1604",
           "bytes": 702232,
           "version": "18",
@@ -94,7 +94,7 @@
       "artifacts": [
         {
           "file": "folia-full.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/folia-full.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/folia-full.jar",
           "sha256": "e468889775459a57952ee5ce3e6e5aa690c83c1a05ec7a42627f3eff458c3d67",
           "bytes": 13088234,
           "version": "7",
@@ -111,7 +111,7 @@
       "artifacts": [
         {
           "file": "folia.jar",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/folia.jar",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/folia.jar",
           "sha256": "4b21c696b6b05d0245013a5272b017bc9397f39a4dbd5ce1016b47773f610ec5",
           "bytes": 25683,
           "version": "1",
@@ -127,7 +127,7 @@
       "artifacts": [
         {
           "file": "hnyx.js",
-          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.4/hnyx.js",
+          "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.5/hnyx.js",
           "sha256": "b5cf5bf0cd234dfdf735da3edd6cccd6e3c5c5b510333ea0c605de7a6c9fe3ad",
           "bytes": 9551,
           "version": "b5cf5bf0cd23",

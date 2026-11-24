@@ -13470,6 +13470,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
     }
 
     private void openChannelList() {
+        if (jarChannelRuntime != null && jarChannelRuntime.blocksHostChannelClick()) return;
         openChannelList(false);
     }
 

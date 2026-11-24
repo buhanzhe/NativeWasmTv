@@ -32,6 +32,7 @@ final class JarChannelRuntime {
     private ChannelPlugin plugin;
     private View view;
     private boolean playingVod;
+    private boolean blockHostChannelClick;
     private View hiddenHostVideo;
     private int hostVideoVisibility;
     private int generation;
@@ -138,6 +139,7 @@ final class JarChannelRuntime {
                         });
                         if(content==null||content.getParent()!=null)throw new IOException("插件界面无效");
                         plugin=incoming;view=content;
+                        blockHostChannelClick=info.optBoolean("blockHostChannelClick",false);
                         // Above media/artwork/browser, below subtitle, HUD and channel menus.
                         root.addView(content,Math.min(3,root.getChildCount()),new FrameLayout.LayoutParams(-1,-1));
                         if (incoming instanceof ChannelPlugin.NativePage) hideHostVideo(true);
@@ -163,6 +165,7 @@ final class JarChannelRuntime {
         callback=null;
         clearPlaybackReport();
         playingVod=false;
+        blockHostChannelClick=false;
         hideHostVideo(false);
         if(browserProfile!=null){browserProfile.dispose();browserProfile=null;}
         browser=null;
@@ -188,6 +191,7 @@ final class JarChannelRuntime {
         JarBrowserViewport.apply(browser,resolution,pageScale);
     }
     boolean visible(){return view!=null&&view.isShown();}
+    boolean blocksHostChannelClick(){return blockHostChannelClick&&plugin!=null&&callback!=null&&callback.current();}
     PlaybackReport playbackReport(){return visible()&&callback!=null&&callback.current()?playbackReport:null;}
     private void clearPlaybackReport(){
         if(playbackReport==null)return;
