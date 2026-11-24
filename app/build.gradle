@@ -96,7 +96,7 @@ android {
         // REQUEST_INSTALL_PACKAGES, while remaining installable on Android 15.
         targetSdkVersion configuredTargetSdk
         versionCode configuredVersionCode
-        versionName '1.8.4'
+        versionName '1.8.3'
         buildConfigField 'boolean', 'LITE_BROWSER_DEFAULT',
                 project.findProperty('liteBrowserDefault') == 'false' ? 'false' : 'true'
         buildConfigField 'boolean', 'CAST_LATENCY_TRACE',
