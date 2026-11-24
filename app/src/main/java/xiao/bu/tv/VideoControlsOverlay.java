@@ -45,7 +45,6 @@ final class VideoControlsOverlay extends FrameLayout {
     private final boolean touchAdjustments;
     private final Icon toggle, rewind, forward;
     private final LinearLayout controlBar;
-    private final LiquidGlassTexture playerSkin,buttonSkin;
     private android.graphics.Bitmap glassImage;
     private GradientDrawable glassTint;
     private final TextView time, remaining, quality, feedback, speed, title, episodes, tracks;
@@ -90,8 +89,6 @@ final class VideoControlsOverlay extends FrameLayout {
         activity = owner;
         playback = source;
         touchAdjustments = !television;
-        int textureEdge=Math.max(900,Math.min(1800,Math.max(owner.getResources().getDisplayMetrics().widthPixels,owner.getResources().getDisplayMetrics().heightPixels)));
-        playerSkin=LiquidGlassTexture.load(owner,"player",textureEdge);buttonSkin=LiquidGlassTexture.load(owner,"capsule",textureEdge);
         setWillNotDraw(false);
         setClickable(true);
         setVisibility(GONE);
@@ -103,22 +100,26 @@ final class VideoControlsOverlay extends FrameLayout {
         controlBar = new LinearLayout(owner) {
             private final Paint frost = new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG|Paint.DITHER_FLAG);
             private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-            private final RectF destination = new RectF(), bounds = new RectF();
-            private final Path outline = new Path();
+            private final RectF bounds = new RectF();
+            private final android.graphics.Matrix transform=new android.graphics.Matrix();
+            private android.graphics.Bitmap sampled;
+            private android.graphics.BitmapShader texture;
             @Override protected void onSizeChanged(int width,int height,int oldWidth,int oldHeight){
                 super.onSizeChanged(width,height,oldWidth,oldHeight);
-                bounds.set(.5f,.5f,width-.5f,height-.5f);outline.reset();outline.addRoundRect(bounds,dp(40),dp(40),Path.Direction.CW);
+                bounds.set(.5f,.5f,width-.5f,height-.5f);
                 edge.setStyle(Paint.Style.STROKE);edge.setStrokeWidth(Math.max(1f,dp(1)));
-                edge.setShader(new LinearGradient(0,0,width,height,new int[]{0xbbe4eef7,0x3054697d,0x7ca8bac8},null,Shader.TileMode.CLAMP));
+                edge.setShader(new LinearGradient(0,0,width,height,new int[]{0x85ffffff,0x10ffffff,0x08ffffff,0x40ffffff},new float[]{0,.35f,.7f,1},Shader.TileMode.CLAMP));
             }
             @Override protected void onDraw(Canvas canvas) {
                 super.onDraw(canvas);
-                if(glassImage!=null){int save=canvas.save();canvas.clipPath(outline);
-                    destination.set(-getLeft(),-getTop(),VideoControlsOverlay.this.getWidth()-getLeft(),VideoControlsOverlay.this.getHeight()-getTop());
-                    canvas.drawBitmap(glassImage,null,destination,frost);canvas.restoreToCount(save);}
-                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(glassImage==null?255:145);glassTint.draw(canvas);}
+                if(glassImage!=null){
+                    if(sampled!=glassImage){sampled=glassImage;texture=new android.graphics.BitmapShader(glassImage,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);}
+                    transform.setScale((float)VideoControlsOverlay.this.getWidth()/glassImage.getWidth(),(float)VideoControlsOverlay.this.getHeight()/glassImage.getHeight());
+                    transform.postTranslate(-getLeft(),-getTop());texture.setLocalMatrix(transform);
+                    frost.setShader(texture);frost.setAlpha(190);canvas.drawRoundRect(bounds,dp(40),dp(40),frost);frost.setShader(null);
+                }else{frost.setColor(0xb010151b);canvas.drawRoundRect(bounds,dp(40),dp(40),frost);}
+                if(glassTint!=null){glassTint.setBounds(0,0,getWidth(),getHeight());glassTint.setAlpha(255);glassTint.draw(canvas);}
                 canvas.drawRoundRect(bounds,dp(40),dp(40),edge);
-                if(playerSkin!=null)playerSkin.draw(canvas,bounds,dp(40),195);
             }
         };
         controlBar.setWillNotDraw(false);
@@ -127,7 +128,7 @@ final class VideoControlsOverlay extends FrameLayout {
         controlBar.setPadding(dp(34), dp(16), dp(34), dp(16));
         controlBar.setClickable(true);
         GradientDrawable glass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0x785b7185, 0x951b3043, 0xa01c2e40});
+                new int[]{0x20ffffff, 0x2511161c, 0x380c1015});
         glass.setCornerRadius(dp(40));
         glassTint=glass;
         LayoutParams barBounds = new LayoutParams(-1, -2, Gravity.BOTTOM);
@@ -189,14 +190,9 @@ final class VideoControlsOverlay extends FrameLayout {
         transport.setPadding(0,dp(10),0,0);controlBar.addView(transport,new LinearLayout.LayoutParams(-1,dp(82)));
         rewind = new Icon(owner,"rewind");rewind.setContentDescription("快退 5 秒");styleControl(rewind);
         toggle = new Icon(owner,"pause");toggle.setContentDescription("暂停");
-        GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xffffffff,0xffd4dfe8,0xfff0f5fa});
+        GradientDrawable pauseGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xf0f5f7fa,0xd4dce2e8});
         pauseGlass.setCornerRadius(dp(34));pauseGlass.setStroke(Math.max(1,dp(1)),0xffffffff);
-        toggle.setBackgroundDrawable(new android.graphics.drawable.Drawable(){
-            final RectF bounds=new RectF();
-            protected void onBoundsChange(android.graphics.Rect value){pauseGlass.setBounds(value);bounds.set(value);}
-            public void draw(Canvas canvas){pauseGlass.draw(canvas);if(buttonSkin!=null)buttonSkin.draw(canvas,bounds,dp(34),220);}
-            public void setAlpha(int alpha){pauseGlass.setAlpha(alpha);}public void setColorFilter(android.graphics.ColorFilter filter){pauseGlass.setColorFilter(filter);}public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
-        });
+        toggle.setBackgroundDrawable(pauseGlass);
         forward = new Icon(owner,"forward");forward.setContentDescription("快进 5 秒");styleControl(forward);
         transport.addView(rewind,new LinearLayout.LayoutParams(dp(72),dp(64)));
         LinearLayout.LayoutParams playBounds=new LinearLayout.LayoutParams(dp(112),dp(64));playBounds.leftMargin=dp(22);playBounds.rightMargin=dp(22);
@@ -208,8 +204,8 @@ final class VideoControlsOverlay extends FrameLayout {
         LinearLayout.LayoutParams dividerBounds=new LinearLayout.LayoutParams(Math.max(1,dp(1)),dp(40));dividerBounds.leftMargin=dp(24);dividerBounds.rightMargin=dp(24);
         transport.addView(divider,dividerBounds);
         LinearLayout options=new LinearLayout(owner);options.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable optionGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x445c7182,0x2226323e});
-        optionGlass.setCornerRadius(dp(34));optionGlass.setStroke(Math.max(1,dp(1)),0x507c93a6);options.setBackgroundDrawable(optionGlass);
+        GradientDrawable optionGlass=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x20ffffff,0x101c2228});
+        optionGlass.setCornerRadius(dp(34));optionGlass.setStroke(Math.max(1,dp(1)),0x38ffffff);options.setBackgroundDrawable(optionGlass);
         transport.addView(options,new LinearLayout.LayoutParams(0,dp(64),1));
         episodes=label("选集",24);optionIcon(episodes,0);episodes.setContentDescription("选集");styleControl(episodes);
         options.addView(episodes,new LinearLayout.LayoutParams(0,-1,1));episodes.setOnClickListener(v->{hide();try{playback.episodes();}catch(LinkageError ignored){}});
