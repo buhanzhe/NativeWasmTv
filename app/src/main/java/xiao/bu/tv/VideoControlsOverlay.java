@@ -1,6 +1,7 @@
 package xiao.bu.tv;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -12,15 +13,20 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.ClipDrawable;
 import android.media.AudioManager;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Owns the whole touch sequence while visible; no gesture reaches the player. */
 final class VideoControlsOverlay extends FrameLayout {
@@ -35,6 +41,7 @@ final class VideoControlsOverlay extends FrameLayout {
         void seek(long position);
         String title();
         boolean speedSupported();
+        boolean hasTracks();
         float speed();
         void speed(float value);
         boolean catchup();
@@ -48,6 +55,7 @@ final class VideoControlsOverlay extends FrameLayout {
     private android.graphics.Bitmap glassImage;
     private GradientDrawable glassTint;
     private final TextView time, remaining, quality, feedback, speed, title, episodes, tracks;
+    private Dialog trackDialog;
     private final TextView returnLive;
     private final LinearLayout speedOptions;
     private final SeekBar seek;
@@ -70,7 +78,7 @@ final class VideoControlsOverlay extends FrameLayout {
         }
     };
     private final Runnable dismiss = new Runnable() { public void run() {
-        if (remoteSeek.active() || dragging) return;
+        if (remoteSeek.active() || dragging || trackDialog != null) return;
         if (playback.completed() || !playback.playing() && !playback.loading()
                 || speedOptions.getVisibility() == VISIBLE) return;
         if (playback.loading()) { postDelayed(this,1000L); return; }
@@ -261,17 +269,35 @@ final class VideoControlsOverlay extends FrameLayout {
         icon.setBounds(0,0,dp(30),dp(30));label.setCompoundDrawables(icon,null,null,null);label.setCompoundDrawablePadding(dp(8));label.setPadding(dp(14),0,dp(14),0);
     }
     private void styleControl(View view) {
+        styleControl(view, 22);
+    }
+    private void styleControl(View view, int radius) {
         android.graphics.drawable.StateListDrawable states=new android.graphics.drawable.StateListDrawable();
-        GradientDrawable pressed=new GradientDrawable();pressed.setColor(0x55e3efff);pressed.setCornerRadius(dp(22));
+        GradientDrawable pressed=new GradientDrawable();pressed.setColor(0x55e3efff);pressed.setCornerRadius(dp(radius));
         states.addState(new int[]{android.R.attr.state_pressed},pressed);
-        GradientDrawable focused=new GradientDrawable();focused.setColor(0x334c6376);focused.setCornerRadius(dp(22));focused.setStroke(Math.max(1,dp(2)),0xffe7f6ff);
+        GradientDrawable focused=new GradientDrawable();focused.setColor(0x334c6376);focused.setCornerRadius(dp(radius));focused.setStroke(Math.max(1,dp(2)),0xffe7f6ff);
         states.addState(new int[]{android.R.attr.state_focused},focused);
         GradientDrawable normal=new GradientDrawable();normal.setColor(0x00000000);states.addState(new int[]{},normal);
         view.setBackgroundDrawable(states);view.setFocusable(true);
     }
     private int dp(int value) { android.util.DisplayMetrics m=getResources().getDisplayMetrics();return Math.round(value*Math.max(.5f,Math.max(m.widthPixels,m.heightPixels)/1280f)); }
-    void show() { captureGlassFrame();title.setText(MediaTypography.title(playback.title())); feedback.setText(""); speedOptions.setVisibility(GONE); setVisibility(VISIBLE); bringToFront(); refresh(); removeCallbacks(tick); post(tick); arm(); }
-    void hide() { remoteNavigation=false;skipConfirmUp=false;clearFocus();glassImage=null;controlBar.invalidate();cancelRemoteSeek(); setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
+    void show() {
+        if (!visible()) captureGlassFrame();
+        title.setText(MediaTypography.title(playback.title()));
+        feedback.setText("");
+        speedOptions.setVisibility(GONE);
+        setVisibility(VISIBLE);
+        bringToFront();
+        refresh();
+        removeCallbacks(tick);
+        post(tick);
+        arm();
+    }
+    void hide() {
+        remoteNavigation=false;skipConfirmUp=false;clearFocus();glassImage=null;controlBar.invalidate();
+        cancelRemoteSeek();setVisibility(GONE);removeCallbacks(tick);removeCallbacks(dismiss);dragging=false;gestureAxis=0;
+        if (trackDialog != null) trackDialog.dismiss();
+    }
     void showForRemote(int openingKey) {
         show();remoteNavigation=true;
         skipConfirmUp=openingKey==KeyEvent.KEYCODE_DPAD_CENTER||openingKey==KeyEvent.KEYCODE_ENTER;
@@ -387,7 +413,9 @@ final class VideoControlsOverlay extends FrameLayout {
         toggle.kind = playback.playing() ? "pause" : "play"; toggle.invalidate();
         toggle.setContentDescription(completed ? "重新播放" : playback.playing() ? "暂停" : "播放");
         speed.setText("倍速 "+String.format(java.util.Locale.US,"%.1f×",playback.speed()));
-        try{episodes.setVisibility(playback.hasEpisodes()?VISIBLE:GONE);String value=playback.quality();quality.setText(value);quality.setVisibility(value.isEmpty()?GONE:VISIBLE);tracks.setVisibility(playback.trackOptions().length()>0?VISIBLE:GONE);}
+        try{episodes.setVisibility(playback.hasEpisodes()?VISIBLE:GONE);String value=playback.quality();quality.setText(value);quality.setVisibility(value.isEmpty()?GONE:VISIBLE);
+            boolean hasTracks = playback instanceof Playback ? ((Playback) playback).hasTracks() : playback.trackOptions().length() > 0;
+            tracks.setVisibility(hasTracks ? VISIBLE : GONE);}
         catch(LinkageError olderPlugin){episodes.setVisibility(GONE);quality.setVisibility(GONE);tracks.setVisibility(GONE);}
         speed.setEnabled(speedSupported());
         speed.setAlpha(speedSupported() ? 1f : 0.4f);
@@ -427,30 +455,127 @@ final class VideoControlsOverlay extends FrameLayout {
         remaining.setText(duration>0?"−"+stamp(Math.max(0,duration-position)):"");
     }
     private void showTracks() {
-        org.json.JSONArray rows;
-        try{rows=playback.trackOptions();}catch(LinkageError oldPlugin){return;}
-        if(rows.length()==0)return;
-        android.app.Dialog dialog=new android.app.Dialog(activity);
-        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
-        LinearLayout panel=new LinearLayout(activity);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(24),dp(18),dp(24),dp(18));
-        GradientDrawable glass=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xf04c5c69,0xfa101e29});glass.setCornerRadius(dp(28));glass.setStroke(Math.max(1,dp(1)),0x99a8bdcd);panel.setBackgroundDrawable(glass);
-        TextView heading=label("音轨与字幕",28);panel.addView(heading,new LinearLayout.LayoutParams(-1,dp(52)));
-        android.widget.ScrollView scroll=new android.widget.ScrollView(activity);LinearLayout list=new LinearLayout(activity);list.setOrientation(LinearLayout.VERTICAL);scroll.addView(list);
-        for(int i=0;i<rows.length();i++) {
-            org.json.JSONObject row=rows.optJSONObject(i);if(row==null)continue;
-            TextView option=label((row.optBoolean("selected")?"✓  ":"")+row.optString("label"),22);option.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);option.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            list.addView(option,new LinearLayout.LayoutParams(-1,dp(52)));option.setFocusable(true);styleControl(option);option.setFocusable(true);
-            option.setOnClickListener(v->{try{playback.selectTrack(row.optString("id"));}catch(LinkageError ignored){}dialog.dismiss();refresh();arm();});
+        if (trackDialog != null) return;
+        JSONArray rows;
+        try { rows = playback.trackOptions(); } catch (LinkageError oldPlugin) { return; }
+        if (rows.length() == 0) return;
+
+        Dialog dialog = new Dialog(activity);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout panel = new LinearLayout(activity);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(20), dp(16), dp(20), dp(16));
+        GradientDrawable glass = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xf4384956, 0xfa101e29});
+        glass.setCornerRadius(dp(24));
+        glass.setStroke(Math.max(1, dp(1)), 0x779db5c7);
+        panel.setBackgroundDrawable(glass);
+        TextView heading = label("音轨与字幕", 24);
+        heading.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+        heading.setPadding(dp(14), 0, dp(14), 0);
+        panel.addView(heading, new LinearLayout.LayoutParams(-1, dp(46)));
+
+        int maxListHeight = Math.min(dp(400), Math.max(dp(48), getHeight() - dp(128)));
+        ScrollView scroll = new ScrollView(activity) {
+            @Override protected void onMeasure(int width, int height) {
+                int limit = MeasureSpec.getMode(height) == MeasureSpec.UNSPECIFIED
+                        ? maxListHeight : Math.min(maxListHeight, MeasureSpec.getSize(height));
+                super.onMeasure(width, MeasureSpec.makeMeasureSpec(limit, MeasureSpec.AT_MOST));
+            }
+        };
+        scroll.setFocusable(false);
+        LinearLayout list = new LinearLayout(activity);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list);
+        View initial = addTrackSection(list, rows, "a:", "音轨", dialog);
+        View subtitles = addTrackSection(list, rows, "s:", "字幕", dialog);
+        View other = addTrackSection(list, rows, "", "", dialog);
+        if (initial == null) initial = subtitles != null ? subtitles : other;
+        if (initial == null) return;
+
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
+        dialog.setContentView(panel);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
+            window.setDimAmount(0.4f);
         }
-        panel.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(300),rows.length()*dp(52))));
-        dialog.setContentView(panel);android.view.Window window=dialog.getWindow();if(window!=null)window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0));
-        dialog.setOnKeyListener((owner,key,event)->{
-            if(key!=KeyEvent.KEYCODE_BUTTON_SELECT&&key!=KeyEvent.KEYCODE_BUTTON_A&&key!=KeyEvent.KEYCODE_NUMPAD_ENTER)return false;
-            if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled()){View focused=dialog.getCurrentFocus();if(focused!=null&&focused.isEnabled())focused.performClick();}
+        dialog.setOnKeyListener((owner, key, event) -> {
+            if (key != KeyEvent.KEYCODE_BUTTON_SELECT && key != KeyEvent.KEYCODE_BUTTON_A
+                    && key != KeyEvent.KEYCODE_NUMPAD_ENTER) return false;
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+                View focused = dialog.getCurrentFocus();
+                if (focused != null && focused.isEnabled()) focused.performClick();
+            }
             return true;
         });
-        dialog.setOnDismissListener(d->{if(remoteNavigation&&visible())tracks.post(()->{if(remoteNavigation&&visible())tracks.requestFocusFromTouch();});arm();});dialog.show();if(window!=null)window.setLayout(Math.min(getWidth()-dp(48),dp(700)),-2);
-        if(list.getChildCount()>0)list.getChildAt(0).post(()->list.getChildAt(0).requestFocusFromTouch());
+        dialog.setOnDismissListener(owner -> {
+            trackDialog = null;
+            if (!visible()) return;
+            if (remoteNavigation) tracks.post(() -> {
+                if (remoteNavigation && visible() && trackDialog == null) tracks.requestFocusFromTouch();
+            });
+            arm();
+        });
+        dialog.show();
+        trackDialog = dialog;
+        if (window != null) window.setLayout(Math.min(getWidth() - dp(48), dp(540)), -2);
+        View initialOption = initial;
+        initialOption.post(initialOption::requestFocusFromTouch);
+    }
+
+    private View addTrackSection(LinearLayout list, JSONArray rows, String prefix,
+            String section, Dialog dialog) {
+        View first = null;
+        View current = null;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) continue;
+            String id = row.optString("id");
+            boolean matches = prefix.isEmpty()
+                    ? !id.startsWith("a:") && !id.startsWith("s:") : id.startsWith(prefix);
+            if (!matches) continue;
+            if (first == null && !section.isEmpty()) {
+                TextView name = label(section, 16);
+                name.setTextColor(0xffb7cad8);
+                name.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+                name.setPadding(dp(14), 0, dp(14), 0);
+                LinearLayout.LayoutParams bounds = new LinearLayout.LayoutParams(-1, dp(28));
+                if (list.getChildCount() > 0) bounds.topMargin = dp(12);
+                list.addView(name, bounds);
+            }
+
+            boolean selected = row.optBoolean("selected");
+            LinearLayout option = new LinearLayout(activity);
+            option.setGravity(Gravity.CENTER_VERTICAL);
+            styleControl(option, 12);
+            option.setPadding(dp(14), 0, dp(14), 0);
+            option.setSelected(selected);
+
+            TextView name = label(row.optString("label"), 20);
+            name.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            option.addView(name, new LinearLayout.LayoutParams(0, -1, 1f));
+            TextView marker = label("✓", 18);
+            marker.setTextColor(0xffb9e6ff);
+            marker.setVisibility(selected ? VISIBLE : INVISIBLE);
+            marker.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            LinearLayout.LayoutParams markerBounds = new LinearLayout.LayoutParams(dp(22), -1);
+            markerBounds.leftMargin = dp(10);
+            option.addView(marker, markerBounds);
+
+            LinearLayout.LayoutParams bounds = new LinearLayout.LayoutParams(-1, dp(46));
+            bounds.topMargin = dp(3);
+            list.addView(option, bounds);
+            option.setOnClickListener(v -> {
+                try { playback.selectTrack(id); } catch (LinkageError ignored) {}
+                dialog.dismiss();
+                refresh();
+            });
+            if (first == null) first = option;
+            if (selected && current == null) current = option;
+        }
+        return current != null ? current : first;
     }
 
     private boolean catchup() { return playback instanceof Playback && ((Playback) playback).catchup(); }

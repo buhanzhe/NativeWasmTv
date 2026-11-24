@@ -101,7 +101,12 @@ public final class PluginAudioPresentationInstrumentation extends Instrumentatio
         long before=api("/api/media?detail=0",null).optLong("positionMs"),down=SystemClock.uptimeMillis();sendKeySync(new KeyEvent(down,down,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_RIGHT,0));SystemClock.sleep(1400);
         check(Math.abs(api("/api/media?detail=0",null).optLong("positionMs")-before)<700,mode+" long press previews without seeking");sendKeySync(new KeyEvent(down,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,KeyEvent.KEYCODE_DPAD_RIGHT,0));waitFor("held seek commit",()->api("/api/media?detail=0",null).optLong("positionMs")>before+6000);check(true,mode+" long press commits on release");
         sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);sendKeyDownUpSync(KeyEvent.KEYCODE_NUMPAD_ENTER);waitFor("OK opens controls",()->focused("播放"));check(!api("/api/media?detail=0",null).optBoolean("playing"),mode+" opening controls does not also toggle playback");
-        sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("episodes focus",()->focused("选集"));screenshot("remote-controls-"+mode);sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);waitFor("remote returns to episodes",()->root.isShown());check(true,mode+" remote opens episode list");
+        sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("episodes focus",()->focused("选集"));screenshot("remote-controls-"+mode);
+        sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);
+        waitFor("episode popup", () -> activeText("剧集列表") && activeText("在播"));
+        check(!root.isShown(), mode + " episode popup keeps the player open");
+        closeEpisodePopup();
+        waitFor("remote returns to detail", () -> root.isShown());
     }
     private long dashPosition(Object player) throws Exception { return ((Number)player.getClass().getMethod("getCurrentPosition").invoke(player)).longValue(); }
     private boolean dashPlaying(Object player) throws Exception { return (Boolean)player.getClass().getMethod("getPlayWhenReady").invoke(player); }
@@ -111,7 +116,20 @@ public final class PluginAudioPresentationInstrumentation extends Instrumentatio
         sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN);waitFor("DASH focused pause",()->focused("暂停"));sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);waitFor("DASH paused",()->!dashPlaying(player));sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_A);waitFor("DASH resumed",()->dashPlaying(player));check(true,"DASH remote confirms pause and resume");
         sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("DASH forward focus",()->focused("快进 5 秒"));long position=dashPosition(player);sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);waitFor("DASH focused seek",()->dashPosition(player)>=position+4000);check(true,"DASH remote activates focused seek button");
         sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_UP);sendKeyDownUpSync(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);waitFor("DASH paused before hold",()->!dashPlaying(player));long at=dashPosition(player),down=SystemClock.uptimeMillis();sendKeySync(new KeyEvent(down,down,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_RIGHT,0));SystemClock.sleep(1400);check(Math.abs(dashPosition(player)-at)<700,"DASH hold previews without seeking");sendKeySync(new KeyEvent(down,SystemClock.uptimeMillis(),KeyEvent.ACTION_UP,KeyEvent.KEYCODE_DPAD_RIGHT,0));waitFor("DASH held commit",()->dashPosition(player)>at+6000);check(true,"DASH hold commits on release");
-        sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("DASH episodes focus",()->focused("选集"));noChannelCard("DASH remote");screenshot("remote-controls-dash");sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);waitFor("DASH return to episodes",()->root.isShown());check(true,"DASH remote opens episode list");
+        sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_RIGHT);waitFor("DASH episodes focus",()->focused("选集"));noChannelCard("DASH remote");screenshot("remote-controls-dash");
+        sendKeyDownUpSync(KeyEvent.KEYCODE_BUTTON_SELECT);
+        waitFor("DASH episode popup", () -> activeText("剧集列表") && activeText("在播"));
+        check(field(plugin, "dashPlayer") == dash && !root.isShown(), "DASH episode popup keeps its player");
+        closeEpisodePopup();
+        waitFor("DASH return to detail", () -> root.isShown());
+    }
+
+    private void closeEpisodePopup() throws Exception {
+        sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
+        waitFor("episode popup closes", () -> activity.hasWindowFocus() && !activeText("剧集列表"));
+        check(!root.isShown(), "Back closes the popup without leaving the player");
+        waitForIdleSync();
+        sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
     }
     @Override public void onStart() {
         int result=Activity.RESULT_CANCELED;String originalEngine=null;

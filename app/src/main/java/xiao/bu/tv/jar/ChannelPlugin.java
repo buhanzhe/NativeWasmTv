@@ -79,6 +79,7 @@ public interface ChannelPlugin {
     interface NativePage {
         boolean onBack();
         void setActive(boolean active);
+        default boolean showEpisodes() { return false; }
     }
     View create(Context context, ClassLoader resources, JSONObject config, Host host) throws Exception;
     void update(long positionMs, boolean playing);

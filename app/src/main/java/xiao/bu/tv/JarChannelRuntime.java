@@ -205,6 +205,14 @@ final class JarChannelRuntime {
     }
     boolean playingVod() { return playingVod && view != null; }
     String vodTitle() { return playingVod ? vodTitle : ""; }
+    boolean showVodEpisodes() {
+        if (!playingVod() || !(plugin instanceof ChannelPlugin.NativePage)) return false;
+        try {
+            return ((ChannelPlugin.NativePage) plugin).showEpisodes();
+        } catch (LinkageError oldPlugin) {
+            return false;
+        }
+    }
     boolean resumeFromVod() {
         if (!playingVod || view==null) return false;
         playingVod=false;
