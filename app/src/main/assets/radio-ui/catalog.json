@@ -5,14 +5,14 @@
       "id": "classic",
       "name": "经典唱片",
       "style": "classic",
-      "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.0/radio-classic.jar",
+      "url": "https://raw.githubusercontent.com/buhanzhe/ntv-plugin/7e8d353c8aedd55148fc4b0f9e12d1fa431202fc/plugins/radio-ui2/dist/radio-classic.jar",
       "sha256": "0c2f6249d1ea81d58671c6612fdcdac4237e3bdcfc54a55e162ca958e988ad0b"
     },
     {
       "id": "optical",
       "name": "柔光唱片",
       "style": "optical",
-      "url": "https://github.com/buhanzhe/ntv-plugin/releases/download/v1.0.0/radio-ui2.jar",
+      "url": "https://raw.githubusercontent.com/buhanzhe/ntv-plugin/7e8d353c8aedd55148fc4b0f9e12d1fa431202fc/plugins/radio-ui2/dist/radio-ui2.jar",
       "sha256": "106b37aa63ad7344d4d6bd881160aec64a4eeed87f0af16fb4a4b5b21fd22ced"
     }
   ]

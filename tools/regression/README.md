@@ -119,3 +119,12 @@ COMPLETE 汇总及 instrumentation 结果必须一起通过；诊断写入 valid
 `RemoteMediaRouting` 引用两版都已删除的接收字段；旧 `AudioSwitch` 在当前版
 引用已由唱片 UI 插件替代的内部 View。它们的首次失败记录保留，但不列入有效
 功能断言。唱片 UI 插件改用 `RadioUiInstrumentation` 的 DEX 热替换与离线恢复测试。
+
+`PluginAudioPresentationInstrumentation` 验证 TVBox 音乐列表传到宿主唱片页的实际标题。
+将最终 TVBox JAR 推到应用外部 files 下的 `tvbox-layout.jar`，通过 `base` 参数提供
+CMS 样本 `/config`：音乐站点的同一歌单至少两首，标题为 `BIGBANG - IF YOU` 和
+`BIGBANG - 하루하루`，播放地址为自有 MP3。验证 IJK 与系统播放器、下一首曲名、
+经典/柔光互切保持播放器实例与进度、旧插件回调隔离，以及退出插件后普通音频标题。
+Release 测试的 `playerField`、`engineField`、`runtimeField`、`vodTitleField` 和
+`systemPlayerClass` 参数必须来自该 APK 对应的 R8 mapping。2026-11-24 在原签名
+Bro 1.8.3 / versionCode 12 上，MI 6（7.1.1）与 SM-G3608（4.4.4）均实机通过。

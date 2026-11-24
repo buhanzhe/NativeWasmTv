@@ -9741,7 +9741,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
             mediaTrackManifest = proxy == null ? null : proxy.mediaTracks(streamUrl);
             scheduleVideoInfoRefresh();
             if (audioOnlyPlayback) {
-                audioArtwork.show(channelCardTitle(channel.name), mediaPlayer.getDuration() <= 0,
+                audioArtwork.show(playbackArtworkTitle(channel), mediaPlayer.getDuration() <= 0,
                         initialArtwork[0]);
                 audioArtwork.setPlaying(true);
                 playbackReadyRequestId = sourceRequestId;
@@ -10139,7 +10139,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 && mediaPath.toLowerCase(Locale.US).endsWith(".mp4"))
             nextPlayer.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "enable-accurate-seek", 1);
         final boolean sniffedPresentation = playingDiscoveredWebStream && playingSniffedResource != null;
-        final String artworkTitle = channelCardTitle(channel.name);
+        final String artworkTitle = playbackArtworkTitle(channel);
         final String artworkLogo = sniffedPresentation ? "" : channel.logoUrl;
         final boolean receivingCast=channel==multimediaReceiverChannel && isRtspSource(streamUrl);
         final boolean radioChannel = !receivingCast && !sniffedPresentation
@@ -14392,6 +14392,11 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 || !visible && activePlayerChannel != null && displayedChannel.equals(activePlayerChannel.name);
     }
 
+    private String playbackArtworkTitle(Channel channel) {
+        String title = jarChannelRuntime == null ? "" : jarChannelRuntime.vodTitle();
+        return title.isEmpty() ? channelCardTitle(channel.name) : title;
+    }
+
     private String channelCardTitle(String requestedTitle) {
         // Playback callbacks retain the catalog entry for navigation/persistence.
         // Present the captured page instead, even after its WebView is drained.
@@ -17048,7 +17053,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 || !(audioOnlyPlayback || isAudioArtworkChannel(channel, currentSourceIndex))) return false;
         audioArtwork.setPlaying(false);
         audioArtwork.setCover(null);
-        audioArtwork.show(channelCardTitle(channel.name), true, null);
+        audioArtwork.show(playbackArtworkTitle(channel), true, null);
         return true;
     }
 
