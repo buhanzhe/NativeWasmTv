@@ -43,6 +43,7 @@ public final class DirectVideoView extends FrameLayout implements SurfaceHolder.
 
     public DirectVideoView(Context context, AttributeSet attrs) {
         super(context, attrs);
+        setBackgroundColor(android.graphics.Color.BLACK);
         setWillNotDraw(false);
         boolean texture = "texture".equals(context.getSharedPreferences("tv_player", Context.MODE_PRIVATE)
                 .getString(RENDER_KEY, "surface")) && isHardwareAcceleratedWindow(context);

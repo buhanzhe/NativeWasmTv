@@ -17470,12 +17470,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         boolean seekKey = keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
                 || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND || keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD;
         if (seekKey && managementPanel.getVisibility() != View.VISIBLE
+                && backPrompt.getVisibility() != View.VISIBLE
                 && channelListPanel.getVisibility() != View.VISIBLE && seekableDuration() > 0L) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (videoControlsOverlay == null && event.getAction() == KeyEvent.ACTION_DOWN) {
                 showPlaybackProgress(player.getCurrentPosition());
-                if (videoControlsOverlay != null) videoControlsOverlay.step(keyCode == KeyEvent.KEYCODE_DPAD_LEFT
-                        || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND ? -10000L : 10000L);
             }
+            if (videoControlsOverlay != null) videoControlsOverlay.remoteKey(event, keyCode);
             return true;
         }
 

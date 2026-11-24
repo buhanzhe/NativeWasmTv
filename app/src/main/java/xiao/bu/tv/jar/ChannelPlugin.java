@@ -62,6 +62,7 @@ public interface ChannelPlugin {
         void hide();
         boolean visible();
         boolean surfaceGesture(android.view.MotionEvent event);
+        default boolean remoteKey(android.view.KeyEvent event) { return false; }
         void dispose();
     }
     interface ScriptHost {

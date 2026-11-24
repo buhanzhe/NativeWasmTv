@@ -351,3 +351,5 @@ tools/
 !/tests/userscript-request-policy.test.py
 
 !/tests/runtime-abi.test.py
+
+!/tests/remote-seek.test.py

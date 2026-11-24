@@ -76,6 +76,7 @@ final class JarChannelRuntime {
                                     public void hide() { controls.hide(); }
                                     public boolean visible() { return controls.visible(); }
                                     public boolean surfaceGesture(android.view.MotionEvent event) { return controls.handleSurfaceGesture(event); }
+                                    public boolean remoteKey(android.view.KeyEvent event) { return controls.remoteKey(event); }
                                     public void dispose() { controls.hide(); }
                                 };
                             }

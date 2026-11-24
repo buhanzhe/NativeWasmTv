@@ -13,6 +13,7 @@ import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.ClipDrawable;
 import android.media.AudioManager;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -57,7 +58,15 @@ final class VideoControlsOverlay extends FrameLayout {
     private long startPosition, gestureDuration, seekPosition;
     private int gestureAxis;
     private boolean moved, dragging;
+    private final RemoteSeekState remoteSeek = new RemoteSeekState(ViewConfiguration.getLongPressTimeout());
+    private final Runnable remoteRepeat = new Runnable() {
+        public void run() {
+            if (!remoteSeek.active()) return;
+            previewRemoteSeek(); postDelayed(this, 120L);
+        }
+    };
     private final Runnable dismiss = new Runnable() { public void run() {
+        if (remoteSeek.active() || dragging) return;
         if (playback.completed() || !playback.playing() && !playback.loading()
                 || speedOptions.getVisibility() == VISIBLE) return;
         if (playback.loading()) { postDelayed(this,1000L); return; }
@@ -166,7 +175,7 @@ final class VideoControlsOverlay extends FrameLayout {
         });
         addView(bottom, new LayoutParams(-1, -2, Gravity.BOTTOM));
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onStartTrackingTouch(SeekBar bar) { dragging = true; removeCallbacks(dismiss); }
+            public void onStartTrackingTouch(SeekBar bar) { cancelRemoteSeek(); dragging = true; removeCallbacks(dismiss); }
             public void onProgressChanged(SeekBar bar, int value, boolean user) {
                 if (user) time.setText(stamp(playback.duration() * value / 1000L) + " / " + stamp(playback.duration()));
             }
@@ -183,16 +192,64 @@ final class VideoControlsOverlay extends FrameLayout {
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     void show() { LayoutParams heading=(LayoutParams)title.getLayoutParams();heading.rightMargin=dp(catchup()?132:32);title.setLayoutParams(heading);title.setText(playback.title()); feedback.setText(""); speedOptions.setVisibility(GONE); setVisibility(VISIBLE); bringToFront(); refresh(); removeCallbacks(tick); post(tick); arm(); }
-    void hide() { setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
+    void hide() { cancelRemoteSeek(); setVisibility(GONE); removeCallbacks(tick); removeCallbacks(dismiss); dragging = false; gestureAxis = 0; }
+    boolean remoteKey(KeyEvent event) { return remoteKey(event, event.getKeyCode()); }
+    boolean remoteKey(KeyEvent event, int key) {
+        int direction = key == KeyEvent.KEYCODE_DPAD_LEFT || key == KeyEvent.KEYCODE_MEDIA_REWIND ? -1
+                : key == KeyEvent.KEYCODE_DPAD_RIGHT || key == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ? 1 : 0;
+        if (direction == 0) return false;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (playback.duration() <= 0) return false;
+            if (!remoteSeek.active() || remoteSeek.direction() != direction) {
+                cancelRemoteSeek();
+                remoteSeek.begin(direction, playback.position(), playback.duration(), now);
+                show(); removeCallbacks(dismiss);
+                postDelayed(remoteRepeat, ViewConfiguration.getLongPressTimeout());
+            } else previewRemoteSeek();
+            return true;
+        }
+        if (event.getAction() == KeyEvent.ACTION_UP) {
+            if (remoteSeek.active() && remoteSeek.direction() == direction) {
+                remoteSeek.preview(now);
+                boolean held = remoteSeek.holding();
+                long target = remoteSeek.finish(now, playback.position(), event.isCanceled());
+                removeCallbacks(remoteRepeat); dragging = false;
+                if (target >= 0) playback.seek(target);
+                refresh();
+                feedback.setText(target < 0 ? "" : held ? "已定位 " + stamp(target)
+                        : direction < 0 ? "快退 5 秒" : "快进 5 秒");
+                arm();
+            }
+            return true;
+        }
+        return false;
+    }
+    private void previewRemoteSeek() {
+        long target = remoteSeek.preview(android.os.SystemClock.uptimeMillis());
+        if (target < 0) return;
+        dragging = true; seekPosition = target;
+        long duration = playback.duration();
+        if (duration <= 0) { cancelRemoteSeek(); return; }
+        seek.setProgress((int) (target * 1000L / duration));
+        time.setText(stamp(target) + " / " + stamp(duration));
+        feedback.setText((remoteSeek.direction() < 0 ? "快退 " : "快进 ") + stamp(target));
+    }
+    private void cancelRemoteSeek() { remoteSeek.cancel(); removeCallbacks(remoteRepeat); dragging = false; }
     void step(long delta) {
         long duration = playback.duration();
         if (duration <= 0L) return;
         playback.seek(Math.max(0L, Math.min(duration - 1L, playback.position() + delta)));
         refresh(); arm();
     }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) cancelRemoteSeek();
+    }
     boolean visible() { return getVisibility() == VISIBLE; }
     private void arm() {
         removeCallbacks(dismiss);
+        if (remoteSeek.active()) return;
         if (!playback.completed()) {
             postDelayed(dismiss, 5000L);
             removeCallbacks(tick); if (visible()) postDelayed(tick, 500L);
@@ -276,7 +333,7 @@ final class VideoControlsOverlay extends FrameLayout {
         }
     }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) removeCallbacks(dismiss);
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) { cancelRemoteSeek(); removeCallbacks(dismiss); }
         boolean handled = super.dispatchTouchEvent(event);
         if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) arm();
         return handled;
