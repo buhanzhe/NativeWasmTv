@@ -1,0 +1,5 @@
+AR PL SungtiL GB / 文鼎PL简报宋, version 2.11, (c) Copyright 1994-1999 Arphic Technology Co., Ltd.
+Unmodified font distributed under the 1999 Arphic Public License. See license/ for the original license texts.
+Source: https://deb.debian.org/debian/pool/main/f/fonts-arphic-gbsn00lp/fonts-arphic-gbsn00lp_2.11.orig.tar.xz
+Vendor notice: https://www.arphic.com.cn/2022/01/21/plfont/
+Font SHA-256: 705ec2dba81eaee1208e4ed5d3ff23ab259292e8e0e163ea3de297ef1317007a

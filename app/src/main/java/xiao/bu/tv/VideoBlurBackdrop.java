@@ -113,7 +113,7 @@ final class VideoBlurBackdrop {
         schedule();
     }
 
-    private static void gaussian(Bitmap b) {
+    static void gaussian(Bitmap b) {
         int w=b.getWidth(),h=b.getHeight();int[] a=new int[w*h],out=new int[w*h];
         int[] kernel={1,4,6,4,1};b.getPixels(a,0,w,0,0,w,h);
         for(int pass=0;pass<6;pass++){

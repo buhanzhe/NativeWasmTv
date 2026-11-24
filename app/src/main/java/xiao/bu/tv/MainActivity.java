@@ -15035,7 +15035,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 public String status(){long position=player==null?0:player.getCurrentPosition();seekFeedback.observe(position,buffering,prepared&&player!=null&&player.isPlaying(),SystemClock.elapsedRealtime());return seekFeedback.status(SystemClock.elapsedRealtime(),buffering);}
                 public boolean loading(){return seekFeedback.loading(SystemClock.elapsedRealtime(),buffering);}
                 public boolean playing() { return prepared && player != null && player.isPlaying(); }
-                public String title() { return catchupProgram==null?currentChannel().name:"回看 · "+currentChannel().name+" · "+catchupProgram.title; }
+                public String title() { if(jarChannelRuntime!=null&&!jarChannelRuntime.vodTitle().isEmpty())return jarChannelRuntime.vodTitle();return catchupProgram==null?currentChannel().name:"回看 · "+currentChannel().name+" · "+catchupProgram.title; }
+                public boolean hasEpisodes(){return jarChannelRuntime!=null&&jarChannelRuntime.playingVod();}
+                public void episodes(){if(jarChannelRuntime!=null&&jarChannelRuntime.resumeFromVod()){videoControlsOverlay.hide();cancelChannelManifest();releasePlayer();hideLoading();}}
+                public String quality(){return prepared&&player!=null&&player.getVideoHeight()>0?player.getVideoWidth()+"×"+player.getVideoHeight():"";}
+                public JSONArray trackOptions(){return playbackTrackOptions();}
+                public void selectTrack(String id){selectPlaybackTrack(id);}
                 public boolean catchup(){return catchupProgram!=null;}
                 public void live(){returnToLive();}
                 public boolean speedSupported() { return prepared && playbackSpeedAvailable(player); }
@@ -15058,6 +15063,32 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         videoControlsOverlay.show();
         completionControlsPending = false;
+    }
+
+    private JSONArray playbackTrackOptions() {
+        JSONArray options=new JSONArray();
+        if(!prepared||!(player instanceof IjkMediaPlayer))return options;
+        IjkMediaPlayer ijk=(IjkMediaPlayer)player;
+        try {
+            ITrackInfo[] info=ijk.getTrackInfo();
+            if(info!=null)for(int i=0;i<info.length;i++) {
+                if(info[i]==null)continue;
+                int type=info[i].getTrackType();
+                boolean audio=type==ITrackInfo.MEDIA_TRACK_TYPE_AUDIO;
+                if(!audio&&type!=ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE&&type!=ITrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT)continue;
+                options.put(new JSONObject().put("id",(audio?"a:":"s:")+i)
+                        .put("label",(audio?"音轨 · ":"字幕 · ")+info[i].getInfoInline())
+                        .put("selected",ijk.getSelectedTrack(type)==i));
+            }
+            options.put(new JSONObject().put("id","s:-1").put("label","关闭内嵌字幕")
+                    .put("selected",ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_SUBTITLE)<0&&ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT)<0));
+        } catch(Exception error){AppLog.w(TAG,"Unable to read playback track options",error);}
+        return options;
+    }
+    private void selectPlaybackTrack(String id) {
+        if(!prepared||!(player instanceof IjkMediaPlayer)||!id.matches("[as]:-?[0-9]+"))return;
+        try {selectMediaTrack((IjkMediaPlayer)player,Integer.parseInt(id.substring(2)),id.charAt(0)=='a');}
+        catch(Exception error){android.widget.Toast.makeText(this,"切换失败 · "+error.getClass().getSimpleName(),android.widget.Toast.LENGTH_SHORT).show();}
     }
 
     private boolean playbackSpeedAvailable(IMediaPlayer target) {

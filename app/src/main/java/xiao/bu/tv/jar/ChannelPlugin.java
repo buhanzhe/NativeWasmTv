@@ -37,6 +37,7 @@ public interface ChannelPlugin {
     }
     interface VodHost extends NativeHost {
         void playVod(String url, JSONObject headers);
+        default void playVod(String url, JSONObject headers, String title) { playVod(url, headers); }
         JSONObject python(JSONObject request) throws Exception;
         void javascript(String source, ScriptHost host) throws Exception;
     }
@@ -55,6 +56,11 @@ public interface ChannelPlugin {
         void seek(long position);
         float speed();
         void speed(float value);
+        default boolean hasEpisodes() { return false; }
+        default void episodes() { }
+        default String quality() { return ""; }
+        default org.json.JSONArray trackOptions() { return new org.json.JSONArray(); }
+        default void selectTrack(String id) { }
     }
     interface PlayerUi {
         View view();

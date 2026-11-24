@@ -32,6 +32,7 @@ final class JarChannelRuntime {
     private ChannelPlugin plugin;
     private View view;
     private boolean playingVod;
+    private String vodTitle="";
     private boolean blockHostChannelClick;
     private View hiddenHostVideo;
     private int hostVideoVisibility;
@@ -110,7 +111,9 @@ final class JarChannelRuntime {
                                     public boolean isCancelled() { return host.isCancelled(); }
                                 });
                             }
-                            public void playVod(String url, JSONObject headers) {
+                            public void playVod(String url, JSONObject headers) { playVod(url,headers,""); }
+                            public void playVod(String url, JSONObject headers, String title) {
+                                vodTitle=title==null?"":title;
                                 if(token!=generation||!callback.current()||view==null) return;
                                 playingVod=true;
                                 view.setVisibility(View.GONE);
@@ -199,6 +202,8 @@ final class JarChannelRuntime {
         playbackReport=null;
         if(context instanceof MainActivity)((MainActivity)context).clearPluginPlaybackDiagnostics();
     }
+    boolean playingVod() { return playingVod && view != null; }
+    String vodTitle() { return playingVod ? vodTitle : ""; }
     boolean resumeFromVod() {
         if (!playingVod || view==null) return false;
         playingVod=false;
