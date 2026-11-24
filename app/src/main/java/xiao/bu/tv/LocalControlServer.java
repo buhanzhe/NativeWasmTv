@@ -62,11 +62,6 @@ final class LocalControlServer implements Closeable {
         default String bingWallpapers() throws Exception {throw new IOException("不支持 Bing 壁纸图库");}
         default String quickMedia(String name, byte[] body) throws Exception { throw new IOException("不支持临时媒体"); }
         default String uploadTvbusPlugin(byte[] body) throws Exception { throw new IOException("不支持 TVBus 插件"); }
-        default String managePlugins(String action, String type, String name, byte[] body) throws Exception {
-            throw new IOException("不支持插件管理");
-        }
-        default File createPluginUploadFile() throws IOException { throw new IOException("不支持插件上传"); }
-        default String installPluginFile(String type, File file) throws Exception { throw new IOException("不支持插件上传"); }
         String uploadPlaylist(String sourceId, String fileName, byte[] body) throws Exception;
         String uploadKu9Script(String fileName, byte[] body) throws Exception;
         String radioUi(byte[] body) throws Exception;
@@ -303,15 +298,12 @@ final class LocalControlServer implements Closeable {
             boolean invalidContentLength = false;
             boolean chunkedBody = false;
             String downloadRange = null, downloadIfRange = null;
-            boolean pluginControl = false;
             String line;
             while ((line = readLine(input)) != null && line.length() > 0) {
                 int colon = line.indexOf(':');
                 String headerName = colon > 0 ? line.substring(0, colon).trim() : "";
                 String headerValue = colon > 0 ? line.substring(colon + 1).trim() : "";
-                if ("x-ntv-plugin-control".equalsIgnoreCase(headerName)) {
-                    pluginControl = "1".equals(headerValue);
-                } else if ("range".equalsIgnoreCase(headerName)) {
+                if ("range".equalsIgnoreCase(headerName)) {
                     downloadRange = headerValue;
                 } else if ("if-range".equalsIgnoreCase(headerName)) {
                     downloadIfRange = headerValue;
@@ -336,10 +328,6 @@ final class LocalControlServer implements Closeable {
                         jsonError("请求长度无效"));
                 return;
             }
-            if ("POST".equals(method) && "/api/plugins".equals(path.split("\\?", 2)[0]) && !pluginControl) {
-                send(socket, 403, "application/json; charset=utf-8", jsonError("请在电视管理网页操作插件"));
-                return;
-            }
             if ("GET".equals(method) && "/api/media/download".equals(path.split("\\?", 2)[0])) {
                 MediaFileDownload download = listener.mediaDownload(queryParameter(path, "sourceKey"),
                         downloadRange, downloadIfRange);
@@ -349,14 +337,6 @@ final class LocalControlServer implements Closeable {
             if ("POST".equals(method) && ("/api/background/upload".equals(path) || path.startsWith("/api/background/upload?"))) {
                 receiveBackgroundUpload(socket,input,chunkedBody,contentLength);
                 return;
-            }
-            if ("POST".equals(method) && "/api/plugins".equals(path.split("\\?", 2)[0])
-                    && "install".equals(queryParameter(path, "action"))) {
-                String type = queryParameter(path, "type");
-                if (InstalledPlugins.isChannel(type) || "python".equals(type)) {
-                    receivePluginUpload(socket, input, chunkedBody, contentLength, type);
-                    return;
-                }
             }
             int bodyLimit = path.startsWith("/api/ku9/script/upload") || path.equals("/api/radio-ui") || path.equals("/api/tv-ui")
                     ? MAX_KU9_SCRIPT_BYTES : requestBodyLimit();
@@ -597,11 +577,6 @@ final class LocalControlServer implements Closeable {
                     listener.checkUpdate().getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/tvbus/plugin".equals(path)) {
             send(socket, 200, "application/json; charset=utf-8", listener.uploadTvbusPlugin(body).getBytes("UTF-8"));
-        } else if ("/api/plugins".equals(path) && ("GET".equals(method) || "POST".equals(method))) {
-            String action = queryParameter(requestTarget, "action");
-            if ("GET".equals(method)) action = "catalog".equals(action) ? "catalog" : "status";
-            send(socket, 200, "application/json; charset=utf-8", listener.managePlugins(action,
-                    queryParameter(requestTarget, "type"), queryParameter(requestTarget, "name"), body).getBytes("UTF-8"));
         } else if ("POST".equals(method) && "/api/background/upload".equals(path)) {
             send(socket,200,"application/json; charset=utf-8",listener.uploadBackground(body).getBytes("UTF-8"));
         } else if ("GET".equals(method) && "/api/background/image".equals(path)) {
@@ -728,18 +703,6 @@ final class LocalControlServer implements Closeable {
             }
             send(socket,200,"application/json; charset=utf-8",listener.uploadBackgroundFile(temporary).getBytes("UTF-8"));
         } finally {temporary.delete();}
-    }
-    private void receivePluginUpload(Socket socket, InputStream input, boolean chunked, long length, String type)
-            throws Exception {
-        if (length > InstalledPlugins.LIMIT) throw new ControlRequestException(413, "插件文件超过 32 MB");
-        File file = listener.createPluginUploadFile();
-        try {
-            try (OutputStream output = new BufferedOutputStream(new FileOutputStream(file))) {
-                if (chunked) copyChunkedUpload(input, output, InstalledPlugins.LIMIT);
-                else copyFixedUpload(input, output, length);
-            }
-            send(socket, 200, "application/json; charset=utf-8", listener.installPluginFile(type, file).getBytes("UTF-8"));
-        } finally { file.delete(); }
     }
     // File uploads use bounded buffers; compressed file size does not determine heap allocation.
     private static void copyFixedUpload(InputStream input,OutputStream output,long remaining) throws IOException {

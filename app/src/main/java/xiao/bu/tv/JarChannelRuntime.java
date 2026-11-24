@@ -52,7 +52,7 @@ final class JarChannelRuntime {
             try {
                 JarChannelSource spec=new JarChannelSource(source);
                 File jar=spec.installed.isEmpty() ? download(spec) : InstalledPlugins.installed(context,spec.installed);
-                if (jar==null) throw new IOException("请先在管理网页安装频道插件");
+                if (jar==null) throw new IOException("本机未找到该频道插件，请重新导入插件订阅");
                 JSONObject info=InstalledPlugins.metadata(jar,spec.installed);
                 ClassLoader loader=InstalledPlugins.loader(context,jar);
                 Class<? extends ChannelPlugin> type=loader.loadClass(info.getString("entry")).asSubclass(ChannelPlugin.class);

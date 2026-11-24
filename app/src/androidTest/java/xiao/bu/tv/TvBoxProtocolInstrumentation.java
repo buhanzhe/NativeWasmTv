@@ -25,7 +25,7 @@ public final class TvBoxProtocolInstrumentation extends Instrumentation {
     private String origin;
     private String pythonVersion, tlsUrl, tlsCa;
     private int rounds, pauseSeconds;
-    private boolean repairCache, checkDownload, stayOnTvBox;
+    private boolean repairCache, stayOnTvBox;
     private String auditUrl;
     private int auditIndex;
     private String auditTitle;
@@ -40,7 +40,6 @@ public final class TvBoxProtocolInstrumentation extends Instrumentation {
         rounds = Math.max(1, Math.min(120, Integer.parseInt(args.getString("loops", "1"))));
         pauseSeconds = Math.max(0, Math.min(60, Integer.parseInt(args.getString("pause", "0"))));
         repairCache = "1".equals(args.getString("repairCache"));
-        checkDownload = "1".equals(args.getString("checkDownload"));
         stayOnTvBox = "1".equals(args.getString("stayOnTvBox"));
         auditUrl = args.getString("auditUrl", "");
         auditIndex = Integer.parseInt(args.getString("auditIndex", "0"));
@@ -85,10 +84,6 @@ public final class TvBoxProtocolInstrumentation extends Instrumentation {
                 auditSite(context, output);
                 finish(Activity.RESULT_OK, output);
                 return;
-            }
-            if (checkDownload) {
-                verifyDownloads(context);
-                verifyStoredCatalog(context);
             }
             File runtimeFile = sampleRuntimeFile(context);
             if (repairCache && !runtimeFile.delete()) throw new AssertionError("Expected an installed runtime file");
@@ -316,51 +311,6 @@ public final class TvBoxProtocolInstrumentation extends Instrumentation {
                 break;
             }
             return result;
-        }
-    }
-
-    private void verifyDownloads(Context context) throws Exception {
-        File target = InstalledPlugins.stagingFile(context);
-        String url = origin + "/marker.js";
-        byte[] body = "export const marker=42;".getBytes("UTF-8");
-        String sha = TvbusBundle.sha(body);
-        try {
-            RadioUiCatalog.downloadVerifiedRelease(url, target, body.length, sha, 5000);
-            if (!sha.equals(InstalledPlugins.sha256(target))) throw new AssertionError("Download hash mismatch");
-            try {
-                RadioUiCatalog.downloadVerifiedRelease(url, target, body.length + 1, sha, 5000);
-                throw new AssertionError("Accepted a short download");
-            } catch (IOException expected) { }
-            try {
-                RadioUiCatalog.downloadVerifiedRelease(url, target, body.length, TvbusBundle.sha(new byte[]{0}), 5000);
-                throw new AssertionError("Accepted a download with the wrong hash");
-            } catch (IOException expected) { }
-        } finally {
-            target.delete();
-        }
-    }
-
-    private void verifyStoredCatalog(Context context) throws Exception {
-        String bundled;
-        try (InputStream input = context.getAssets().open("plugins/catalog.json")) {
-            bundled = new String(RadioUiCatalog.read(input, 128 * 1024), "UTF-8");
-        }
-        String originalTag = new JSONObject(bundled).getString("release");
-        String newerTag = "v9999.0.0";
-        SharedPreferences preferences = PluginCatalog.preferences(context);
-        String previous = preferences.getString("json", null);
-        try {
-            if (!preferences.edit().putString("json", bundled.replace(originalTag, newerTag)).commit())
-                throw new AssertionError("Could not prepare saved plugin catalog");
-            PluginCatalog.Snapshot saved = PluginCatalog.loadStored(context);
-            if (!saved.saved || !newerTag.equals(saved.release)) throw new AssertionError("Saved catalog was ignored");
-            if (!preferences.edit().putString("json", "{").commit()) throw new AssertionError("Could not prepare corrupted catalog");
-            PluginCatalog.Snapshot fallback = PluginCatalog.loadStored(context);
-            if (!fallback.saved || !originalTag.equals(fallback.release)) throw new AssertionError("Bundled catalog was ignored");
-        } finally {
-            SharedPreferences.Editor editor = preferences.edit();
-            if (previous == null) editor.remove("json"); else editor.putString("json", previous);
-            editor.commit();
         }
     }
 

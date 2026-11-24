@@ -5,12 +5,8 @@ import android.content.SharedPreferences;
 import org.json.*;
 import java.io.*;
 import java.net.*;
-import java.security.DigestInputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.Executors;
-import okio.ByteString;
 
 /** Only choice metadata is bundled; every renderer is downloaded and cached separately. */
 final class RadioUiCatalog {
@@ -79,56 +75,22 @@ final class RadioUiCatalog {
         });
     }
     static byte[] download(String url,int limit,int timeoutMs) throws IOException {
-        return download(GithubProxy.candidates(url),limit,timeoutMs,timeoutMs>8000?15000:4000,false,input->read(input,limit));
-    }
-    static byte[] downloadDirect(String url,int limit,int timeoutMs) throws IOException {
-        return download(new String[]{url, url}, limit, timeoutMs, Math.max(1, timeoutMs / 2), true,
-                input -> read(input, limit));
-    }
-    static void downloadVerifiedRelease(String url, File target, int bytes, String sha, int timeoutMs) throws IOException {
-        Set<String> routes = new LinkedHashSet<>();
-        Collections.addAll(routes, GithubProxy.candidates(url));
-        routes.add(url);
-        int attemptMs = routes.size() == 1 ? timeoutMs : bytes >= 1024 * 1024 ? 30000 : 12000;
-        download(routes.toArray(new String[0]), bytes, timeoutMs, attemptMs, true, input -> {
-            MessageDigest digest;
-            try { digest = MessageDigest.getInstance("SHA-256"); }
-            catch (NoSuchAlgorithmException error) { throw new IOException("无法校验插件 SHA-256", error); }
-            try (FileOutputStream output = new FileOutputStream(target)) {
-                if (copy(new DigestInputStream(input, digest), output, bytes) != bytes)
-                    throw new IOException("插件文件大小与发布清单不一致");
-                if (!sha.equals(ByteString.of(digest.digest()).hex())) throw new IOException("插件 SHA-256 校验失败");
-                output.getFD().sync();
-            }
-            return null;
-        });
-    }
-    private interface Transfer<T> { T receive(InputStream input) throws IOException; }
-    private static <T> T download(String[] routes,int limit,int timeoutMs,int attemptMs,boolean http1,
-                                  Transfer<T> transfer) throws IOException {
+        String[] routes=GithubProxy.candidates(url);
+        int attemptMs=timeoutMs>8000?15000:4000;
         long deadline=android.os.SystemClock.elapsedRealtime()+timeoutMs;IOException last=null;
         for(String route:routes){
             int remaining=(int)(deadline-android.os.SystemClock.elapsedRealtime());if(remaining<=0)break;
             HttpURLConnection connection=null;
-            URL address=new URL(route);
-            long started=android.os.SystemClock.elapsedRealtime();
             try {
-                connection=NetworkClient.openBounded(address,Math.min(remaining,attemptMs),http1);
+                connection=NetworkClient.openBounded(new URL(route),Math.min(remaining,attemptMs),false);
                 connection.setConnectTimeout(Math.min(4000,remaining));connection.setReadTimeout(Math.min(8000,remaining));
                 int code=connection.getResponseCode();if(code<200||code>=300)throw new IOException("下载 HTTP "+code);
                 if(connection.getContentLength()>limit)throw new IOException("下载文件过大");
                 try(InputStream in=connection.getInputStream()){
-                    T data=transfer.receive(in);
-                    GithubProxy.succeeded(route);
-                    if(http1) AppLog.i("PluginRelease", "Received host="+address.getHost()+" length="
-                            +connection.getContentLength()+" ms="+(android.os.SystemClock.elapsedRealtime()-started));
-                    return data;
+                    byte[] data=read(in,limit);GithubProxy.succeeded(route);return data;
                 }
-            }catch(IOException e){
-                last=e;GithubProxy.failed(route);
-                if(http1) AppLog.w("PluginRelease", "Failed host="+address.getHost()+" ms="
-                        +(android.os.SystemClock.elapsedRealtime()-started)+" "+e.getClass().getSimpleName());
-            }finally{if(connection!=null)connection.disconnect();}
+            }catch(IOException e){last=e;GithubProxy.failed(route);}
+            finally{if(connection!=null)connection.disconnect();}
         }
         throw last==null?new IOException("下载超时"):last;
     }
