@@ -559,7 +559,9 @@ final class VideoControlsOverlay extends FrameLayout {
             TextView marker = label("✓", 18);
             marker.setTextColor(0xffb9e6ff);
             marker.setVisibility(selected ? VISIBLE : INVISIBLE);
-            marker.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            if (android.os.Build.VERSION.SDK_INT >= 16) {
+                marker.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            }
             LinearLayout.LayoutParams markerBounds = new LinearLayout.LayoutParams(dp(22), -1);
             markerBounds.leftMargin = dp(10);
             option.addView(marker, markerBounds);
