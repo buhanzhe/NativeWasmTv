@@ -15,7 +15,6 @@ import java.util.regex.Pattern;
 /** Locates local scripts and maintains the short-lived online script cache. */
 final class Ku9ScriptLoader {
     private static final String TAG = "Ku9ScriptLoader";
-    private static final String HNYX_SCRIPT = "hnyx.js";
     private static final String SCRIPT_DIRECTORY = "js";
     private static final int MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
     private static final long ONLINE_CACHE_MS = 30L * 60L * 1000L;
@@ -34,9 +33,6 @@ final class Ku9ScriptLoader {
         String safeName = fileName == null ? "" : fileName.trim();
         if (!isSafeScriptName(safeName)) {
             throw new IOException("只支持名称安全的 .js 文件");
-        }
-        if (HNYX_SCRIPT.equalsIgnoreCase(safeName)) {
-            safeName = HNYX_SCRIPT;
         }
         if (body == null || body.length == 0) {
             throw new IOException("JS 文件内容为空");
@@ -120,10 +116,6 @@ final class Ku9ScriptLoader {
     }
 
     String load(String sourceUrl) throws IOException {
-        return load(sourceUrl, true);
-    }
-
-    String load(String sourceUrl, boolean legacySyntax) throws IOException {
         URI uri;
         try {
             uri = URI.create(sourceUrl);
@@ -139,19 +131,15 @@ final class Ku9ScriptLoader {
             throw new IOException("酷9脚本文件名不安全");
         }
 
-        String script;
         // Placeholder hosts (usually "A") use local scripts; real hosts load online
         // scripts regardless of their directory.
         String host = uri.getHost();
         boolean localPlaceholder = host != null && host.indexOf('.') < 0
                 && host.indexOf(':') < 0;
         if (localPlaceholder) {
-            script = readLocal(fileName);
-        } else {
-            String scriptUrl = GithubProxy.apply(activity, withoutQuery(uri));
-            script = loadOnlineCache(scriptUrl);
+            return readLocal(fileName);
         }
-        return legacySyntax && HNYX_SCRIPT.equalsIgnoreCase(fileName) ? toLegacySyntax(script) : script;
+        return loadOnlineCache(GithubProxy.apply(activity, withoutQuery(uri)));
     }
 
     static boolean isSafeScriptName(String fileName) {
@@ -310,12 +298,6 @@ final class Ku9ScriptLoader {
         } catch (Exception error) {
             throw new IOException("酷9脚本地址格式错误", error);
         }
-    }
-
-    private static String toLegacySyntax(String script) {
-        return script
-                .replaceAll("\\bconst\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=", "var $1 =")
-                .replaceAll("\\blet\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=", "var $1 =");
     }
 
     private static String md5(String value) {

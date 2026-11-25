@@ -122,7 +122,7 @@ final class Ku9ScriptResolver {
                 try {
                     boolean python = Ku9Python.matches(sourceUrl);
                     if (python && speculative) throw new IOException("切台时运行 Python 脚本");
-                    final String script = python ? Ku9Python.load(activity, sourceUrl) : scriptLoader.load(sourceUrl, false);
+                    final String script = python ? Ku9Python.load(activity, sourceUrl) : scriptLoader.load(sourceUrl);
                     final Pending work = new Pending(requestId, requestGeneration,
                             channelName, sourceUrl, script, callback);
                     if (!python) work.javascript = contract.build(work.script, item(work));

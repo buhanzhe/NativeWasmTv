@@ -55,12 +55,9 @@ final class Ku9SourceSmokeTest {
     static String run(Context context) throws Exception {
         NetworkClient.initialize(context);
         String[][] cases = {
-            {"hnyx.js", "id=zjws4K&dur=10.0105&offset=175728140"},
-            {"hnyx.js", "id=CCTV_4K&dur=10.001&offset=162424040"},
             {"fenghuang.js", "id=1016529"},
             {"cbg.js", "id=https%3A%2F%2Fsj.cbg.cn%2Fwap%2Flist%2F4918%2F1.html"},
-            {"jlntv.js", "id=jlws"}, {"jlntv.js", "id=ds"}, {"jlntv.js", "id=zy"},
-            {"hnyx.js", "id=zjws4K&dur=bad&offset=175728140"}
+            {"jlntv.js", "id=jlws"}, {"jlntv.js", "id=ds"}, {"jlntv.js", "id=zy"}
         };
         HashMap<String,String> scripts = new HashMap<String,String>();
         JSONArray rows = new JSONArray();

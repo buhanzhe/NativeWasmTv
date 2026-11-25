@@ -29,13 +29,13 @@ final class Ku9StartupChecks {
         File cached=new File(new File(activity.getCacheDir(),"ku9-scripts"),key+".js");
         try {
             Ku9ScriptLoader loader=new Ku9ScriptLoader(activity);
-            check(script.equals(loader.load(url+"?id=first",false)),"initial code");
-            check(script.equals(loader.load(url+"?id=second",false))&&requests.get()==1,"different channels must share code download");
+            check(script.equals(loader.load(url+"?id=first")),"initial code");
+            check(script.equals(loader.load(url+"?id=second"))&&requests.get()==1,"different channels must share code download");
             check(cached.setLastModified(System.currentTimeMillis()-31*60*1000L),"expire code cache");
-            check(script.equals(loader.load(url,false))&&requests.get()==2,"expired code must refresh");
+            check(script.equals(loader.load(url))&&requests.get()==2,"expired code must refresh");
             unavailable.set(true);
             check(cached.setLastModified(System.currentTimeMillis()-31*60*1000L),"expire again");
-            check(script.equals(loader.load(url,false))&&requests.get()==3,"offline fallback must retain code");
+            check(script.equals(loader.load(url))&&requests.get()==3,"offline fallback must retain code");
             return "PASS script cache: shared across channel IDs, expiry refresh, offline fallback\n";
         }finally{server.close();responder.join(2000);cached.delete();}
     }
