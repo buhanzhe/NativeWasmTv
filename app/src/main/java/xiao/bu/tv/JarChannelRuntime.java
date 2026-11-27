@@ -18,6 +18,7 @@ final class JarChannelRuntime {
         boolean current();
         default void ready() { }
         default void playVod(String url, JSONObject headers) { play(url); }
+        default void stopVod() { }
     }
     static final class PlaybackReport {
         final Object session;
@@ -110,6 +111,12 @@ final class JarChannelRuntime {
                                     }
                                     public boolean isCancelled() { return host.isCancelled(); }
                                 });
+                            }
+                            public boolean reportsVodPlaybackFailures() { return true; }
+                            public boolean stopVod() {
+                                if (token != generation || !callback.current() || !resumeFromVod()) return false;
+                                callback.stopVod();
+                                return true;
                             }
                             public void playVod(String url, JSONObject headers) { playVod(url,headers,""); }
                             public void playVod(String url, JSONObject headers, String title) {
@@ -210,6 +217,27 @@ final class JarChannelRuntime {
         try {
             return ((ChannelPlugin.NativePage) plugin).showEpisodes();
         } catch (LinkageError oldPlugin) {
+            return false;
+        }
+    }
+    boolean hasVodRoutes() {
+        if (!playingVod() || !(plugin instanceof ChannelPlugin.NativePage)) return false;
+        try { return ((ChannelPlugin.NativePage) plugin).hasPlaybackRoutes(); }
+        catch (LinkageError oldPlugin) { return false; }
+    }
+    void showVodRoutes() {
+        if (!playingVod() || !(plugin instanceof ChannelPlugin.NativePage)) return;
+        try { ((ChannelPlugin.NativePage) plugin).showPlaybackRoutes(); }
+        catch (LinkageError oldPlugin) { }
+    }
+    boolean returnFromFailedVod(String reason) {
+        if (!playingVod || view == null || callback == null || !callback.current() || !(plugin instanceof ChannelPlugin.NativePage)) {
+            return false;
+        }
+        try {
+            return ((ChannelPlugin.NativePage) plugin).onVodPlaybackFailed(reason) && resumeFromVod();
+        } catch (RuntimeException | LinkageError error) {
+            xiao.bu.tv.AppLog.w("JarChannel", "Plugin playback failure callback", error);
             return false;
         }
     }

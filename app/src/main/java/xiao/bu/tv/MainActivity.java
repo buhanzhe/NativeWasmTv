@@ -8204,9 +8204,22 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         if (content != null) content.setTextIsSelectable(true);
     }
 
+    private boolean returnFromFailedJarPlayback(String reason) {
+        if (jarChannelRuntime == null || !jarChannelRuntime.returnFromFailedVod(reason)) return false;
+        cancelChannelManifest();
+        cancelCustomSourceTimeout();
+        clearPendingPlayer();
+        releasePlayer();
+        abortChannelSwitchAnimation();
+        hideLoading();
+        if (channelBar != null) channelBar.setVisibility(View.GONE);
+        return true;
+    }
+
     private void handleUnavailableSource(String label, String detail) {
         recordLoadError(label);
         if (refreshContinuousHttpPlayback(playRequestId, label)) return;
+        if (returnFromFailedJarPlayback(label)) return;
         if (PlaybackHttpError.isForbidden(detail)) {
             showPlaybackForbidden(currentChannel());
             return;
@@ -8257,6 +8270,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         recordLoadError(PlaybackHttpError.FORBIDDEN_MESSAGE);
         if (refreshYangshipinPlayback(playRequestId, "HTTP 403")) return;
         if (refreshContinuousHttpPlayback(playRequestId, "HTTP 403")) return;
+        if (returnFromFailedJarPlayback(PlaybackHttpError.FORBIDDEN_MESSAGE)) return;
         if (channel.sourceCount() > 1 && triedCustomSources < channel.sourceCount()) {
             switchCustomSource(1, true, PlaybackHttpError.FORBIDDEN_MESSAGE, true);
             return;
@@ -8276,6 +8290,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
 
     private boolean switchCustomSource(int offset, boolean automatic, String reason,
             boolean confirmedUnavailable) {
+        if (automatic && returnFromFailedJarPlayback(reason)) return true;
         cancelPendingRelativeSwitch();
         Channel channel = currentChannel();
         int count = channel.sourceCount();
@@ -8951,6 +8966,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 }
                 public void playVod(String url, JSONObject headers) {
                     if (okhttp3.HttpUrl.parse(url) == null) {
+                        if (returnFromFailedJarPlayback("插件返回的播放地址无效")) return;
                         jarChannelRuntime.resumeFromVod();
                         status("插件返回的播放地址无效");
                         return;
@@ -8978,6 +8994,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                             java.util.Collections.emptyMap(), mediaHeaders);
                     startResolvedPlayer(channel, url, !HttpStreamResolver.isExplicitHlsUrl(url));
                 }
+                public void stopVod() { stopPluginVod(); }
                 public void status(String message) {
                     hideLoading(); abortChannelSwitchAnimation(); showPlaybackNotice(message);
                 }
@@ -10826,6 +10843,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                     }
 
                     if (what == -20001 || extra == -20001) {
+                        if (returnFromFailedJarPlayback("设备不支持当前 Dolby Vision 格式")) return true;
                         if (returnFromFailedSniffedPlayback("设备不支持此 Dolby Vision 格式")) return true;
                         abortChannelSwitchAnimation();
                         releasePlayer(true);
@@ -10834,6 +10852,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                         return true;
                     }
                     if (what == -20002 || extra == -20002) {
+                        if (returnFromFailedJarPlayback("设备内存不足以解码当前分辨率")) return true;
                         recordLoadError("无法解码此分辨率：设备内存不足，请切换较低清晰度线路");
                         if (returnFromFailedSniffedPlayback("设备内存不足以软解此分辨率")) return true;
                         abortChannelSwitchAnimation();
@@ -12425,6 +12444,7 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         // Keep it on the decoder recovery path, including its bounded retries.
         if (!decoderFailure && refreshYangshipinPlayback(requestId, reason)) return;
         if (!decoderFailure && refreshContinuousHttpPlayback(requestId, reason)) return;
+        if (returnFromFailedJarPlayback("当前线路播放中断或无法解码")) return;
         if (isNtVCastSource(activePlayerStreamUrl)) {
             final int castRequest = requestId;
             final IMediaPlayer castPlayer = watchedPlayer;
@@ -15052,12 +15072,10 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
                 public boolean hasEpisodes(){return jarChannelRuntime!=null&&jarChannelRuntime.playingVod();}
                 public void episodes() {
                     if (jarChannelRuntime == null || jarChannelRuntime.showVodEpisodes()) return;
-                    if (jarChannelRuntime.resumeFromVod()) {
-                        cancelChannelManifest();
-                        releasePlayer();
-                        hideLoading();
-                    }
+                    if (jarChannelRuntime.resumeFromVod()) stopPluginVod();
                 }
+                public boolean hasRoutes() { return jarChannelRuntime != null && jarChannelRuntime.hasVodRoutes(); }
+                public void routes() { if (jarChannelRuntime != null) jarChannelRuntime.showVodRoutes(); }
                 public String quality(){return prepared&&player!=null&&player.getVideoHeight()>0?player.getVideoWidth()+"×"+player.getVideoHeight():"";}
                 public JSONArray trackOptions(){return playbackTrackOptions();}
                 public boolean hasTracks(){return prepared && player instanceof IjkMediaPlayer;}
@@ -15084,6 +15102,12 @@ public final class MainActivity extends Activity implements TvUiPlugin.Listener,
         }
         videoControlsOverlay.show();
         completionControlsPending = false;
+    }
+
+    private void stopPluginVod() {
+        cancelChannelManifest();
+        releasePlayer();
+        hideLoading();
     }
 
     private JSONArray playbackTrackOptions() {

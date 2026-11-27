@@ -37,6 +37,8 @@ public interface ChannelPlugin {
     }
     interface VodHost extends NativeHost {
         void playVod(String url, JSONObject headers);
+        default boolean reportsVodPlaybackFailures() { return false; }
+        default boolean stopVod() { return false; }
         default void playVod(String url, JSONObject headers, String title) { playVod(url, headers); }
         JSONObject python(JSONObject request) throws Exception;
         void javascript(String source, ScriptHost host) throws Exception;
@@ -58,6 +60,8 @@ public interface ChannelPlugin {
         void speed(float value);
         default boolean hasEpisodes() { return false; }
         default void episodes() { }
+        default boolean hasRoutes() { return false; }
+        default void routes() { }
         default String quality() { return ""; }
         default org.json.JSONArray trackOptions() { return new org.json.JSONArray(); }
         default void selectTrack(String id) { }
@@ -79,7 +83,11 @@ public interface ChannelPlugin {
     interface NativePage {
         boolean onBack();
         void setActive(boolean active);
+        /** Return true to handle the error after the host restores this page. */
+        default boolean onVodPlaybackFailed(String reason) { return false; }
         default boolean showEpisodes() { return false; }
+        default boolean hasPlaybackRoutes() { return false; }
+        default void showPlaybackRoutes() { }
     }
     View create(Context context, ClassLoader resources, JSONObject config, Host host) throws Exception;
     void update(long positionMs, boolean playing);

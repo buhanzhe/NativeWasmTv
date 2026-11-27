@@ -54,7 +54,7 @@ final class VideoControlsOverlay extends FrameLayout {
     private final LinearLayout controlBar;
     private android.graphics.Bitmap glassImage;
     private GradientDrawable glassTint;
-    private final TextView time, remaining, quality, feedback, speed, title, episodes, tracks;
+    private final TextView time, remaining, quality, feedback, speed, title, episodes, routes, tracks;
     private Dialog trackDialog;
     private final TextView returnLive;
     private final LinearLayout speedOptions;
@@ -146,7 +146,7 @@ final class VideoControlsOverlay extends FrameLayout {
         LinearLayout metadata = new LinearLayout(owner);
         metadata.setOrientation(LinearLayout.HORIZONTAL); metadata.setGravity(Gravity.CENTER_VERTICAL);
         title = label(playback.title(), 42);
-        title.setTypeface(MediaTypography.display(owner));title.getPaint().setSubpixelText(true);
+        title.getPaint().setSubpixelText(true);
         title.setGravity(Gravity.LEFT | Gravity.CENTER_VERTICAL);
         title.setSingleLine(true); title.setEllipsize(android.text.TextUtils.TruncateAt.END);
         metadata.addView(title,new LinearLayout.LayoutParams(0,dp(66),1));
@@ -220,6 +220,16 @@ final class VideoControlsOverlay extends FrameLayout {
         transport.addView(options,new LinearLayout.LayoutParams(0,dp(64),1));
         episodes=label("选集",24);optionIcon(episodes,0);episodes.setContentDescription("选集");styleControl(episodes);
         options.addView(episodes,new LinearLayout.LayoutParams(0,-1,1));episodes.setOnClickListener(v->{hide();try{playback.episodes();}catch(LinkageError ignored){}});
+        routes = label("线路", 24);
+        routes.setContentDescription("切换线路");
+        optionIcon(routes, 3);
+        styleControl(routes);
+        routes.setVisibility(GONE);
+        options.addView(routes, new LinearLayout.LayoutParams(0, -1, 1));
+        routes.setOnClickListener(v -> {
+            hide();
+            try { playback.routes(); } catch (LinkageError olderPlugin) { }
+        });
         tracks=label("音轨与字幕",24);optionIcon(tracks,1);tracks.setContentDescription("音轨与字幕");styleControl(tracks);
         options.addView(tracks,new LinearLayout.LayoutParams(0,-1,1.6f));tracks.setOnClickListener(v->showTracks());
         speed = label("倍速 1.0×",24);speed.setContentDescription("倍速");optionIcon(speed,2);speed.setGravity(Gravity.CENTER);styleControl(speed);
@@ -259,7 +269,13 @@ final class VideoControlsOverlay extends FrameLayout {
                     shape.moveTo(6,4);shape.lineTo(18,4);shape.quadTo(21,4,21,7);shape.lineTo(21,15);shape.quadTo(21,18,18,18);
                     shape.lineTo(10,18);shape.lineTo(5,22);shape.lineTo(6,18);shape.quadTo(3,18,3,15);shape.lineTo(3,7);shape.quadTo(3,4,6,4);shape.close();stroke(canvas);
                     shape.reset();shape.moveTo(7,9);shape.lineTo(17,9);shape.moveTo(7,13);shape.lineTo(14,13);stroke(canvas);
-                }else{
+                } else if (kind == 3) {
+                    shape.moveTo(3, 8); shape.lineTo(20, 8);
+                    shape.moveTo(16, 4); shape.lineTo(20, 8); shape.lineTo(16, 12);
+                    shape.moveTo(21, 16); shape.lineTo(4, 16);
+                    shape.moveTo(8, 12); shape.lineTo(4, 16); shape.lineTo(8, 20);
+                    stroke(canvas);
+                } else {
                     gauge.set(left+3*unit,top+3*unit,left+21*unit,top+21*unit);canvas.drawArc(gauge,140,260,false,paint);
                     canvas.drawLine(left+12*unit,top+13*unit,left+17*unit,top+6*unit,paint);canvas.drawCircle(left+12*unit,top+13*unit,unit,paint);
                 }
@@ -332,7 +348,7 @@ final class VideoControlsOverlay extends FrameLayout {
         if(event.getAction()==KeyEvent.ACTION_DOWN){
             View focused=findFocus();java.util.ArrayList<View> choices=new java.util.ArrayList<>();
             if(speedOptions.getVisibility()==VISIBLE&&focused!=null&&focused.getParent()==speedOptions){for(int i=0;i<speedOptions.getChildCount();i++)choices.add(speedOptions.getChildAt(i));}
-            else for(View candidate:new View[]{rewind,toggle,forward,episodes,tracks,speed})if(candidate.isShown()&&candidate.isEnabled())choices.add(candidate);
+            else for(View candidate:new View[]{rewind,toggle,forward,episodes,routes,tracks,speed})if(candidate.isShown()&&candidate.isEnabled())choices.add(candidate);
             if(!choices.isEmpty()){int index=choices.indexOf(focused);int direction=key==KeyEvent.KEYCODE_DPAD_LEFT?-1:1;choices.get((Math.max(0,index)+direction+choices.size())%choices.size()).requestFocusFromTouch();}
             arm();
         }
@@ -417,6 +433,8 @@ final class VideoControlsOverlay extends FrameLayout {
             boolean hasTracks = playback instanceof Playback ? ((Playback) playback).hasTracks() : playback.trackOptions().length() > 0;
             tracks.setVisibility(hasTracks ? VISIBLE : GONE);}
         catch(LinkageError olderPlugin){episodes.setVisibility(GONE);quality.setVisibility(GONE);tracks.setVisibility(GONE);}
+        try { routes.setVisibility(playback.hasRoutes() ? VISIBLE : GONE); }
+        catch (LinkageError olderPlugin) { routes.setVisibility(GONE); }
         speed.setEnabled(speedSupported());
         speed.setAlpha(speedSupported() ? 1f : 0.4f);
         if (dragging) return;
